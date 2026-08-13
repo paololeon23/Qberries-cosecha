@@ -774,6 +774,12 @@
   function isHostedOnNetlify() {
     const h = String(location.hostname || "").toLowerCase();
     if (!h || h === "localhost" || h === "127.0.0.1" || h === "[::1]") {
+      // Pruebas locales con local-server.ps1
+      try {
+        if (localStorage.getItem("qb-local-cloud") === "1") return true;
+      } catch {
+        /* ignore */
+      }
       return false;
     }
     return true;

@@ -111,6 +111,15 @@ function doPost(e) {
     var action = String(body.action || 'registrarVinculo').trim();
     var data = body.data || body.payload || body;
 
+    // Si viene data de vínculo sin action clara, registrar igual
+    if (
+      (!action || action === 'undefined' || action === 'null') &&
+      data &&
+      (data.dni || data.celular)
+    ) {
+      action = 'registrarVinculo';
+    }
+
     if (action === 'ping') {
       var ss = SpreadsheetApp.getActiveSpreadsheet();
       return jsonOut_({
@@ -125,7 +134,9 @@ function doPost(e) {
       action === 'registrarVinculo' ||
       action === 'guardarVinculo' ||
       action === 'vincular' ||
-      action === 'sync'
+      action === 'sync' ||
+      action === 'registrar' ||
+      action === 'guardar'
     ) {
       var saved = registrarVinculo_(data);
       return jsonOut_({

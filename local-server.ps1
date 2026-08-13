@@ -161,7 +161,6 @@ function Handle-Trabajadores($Request, $Response) {
 function Handle-Sync($Request, $Response) {
   $scriptUrl = (Get-EnvVal "APPS_SCRIPT_URL").Trim()
   $apiToken = (Get-EnvVal "API_TOKEN").Trim()
-  $loginPin = (Get-EnvVal "LOGIN_PIN").Trim()
 
   if (-not $scriptUrl -or -not $apiToken) {
     Send-Json $Response 500 @{
@@ -177,10 +176,7 @@ function Handle-Sync($Request, $Response) {
     return
   }
 
-  if ($loginPin -and $body.pin -and ([string]$body.pin -ne $loginPin)) {
-    Send-Json $Response 401 @{ ok = $false; error = "Sesión / PIN inválido" }
-    return
-  }
+  # Seguridad = API_TOKEN (igual que Netlify sync.js); no exigir PIN del cliente
 
   $action = if ($body.action) { [string]$body.action } else { "registrarVinculo" }
   $rawData = $body.data
@@ -205,35 +201,64 @@ function Handle-Sync($Request, $Response) {
     $data = $rawData
   }
 
-  $outbound = @{
+  $outboundObj = @{
     source = "supervisores"
     action = $action
     token = $apiToken
     data = $data
     payload = $data
     at = (Get-Date).ToUniversalTime().ToString("o")
-  } | ConvertTo-Json -Depth 10 -Compress
+  }
+  $outbound = $outboundObj | ConvertTo-Json -Depth 10 -Compress
 
   try {
-    $resp = Invoke-WebRequest -Uri $scriptUrl -Method POST -Body $outbound -ContentType "application/json; charset=utf-8" -Headers @{
-      Authorization = "Bearer $apiToken"
-      "X-Api-Token" = $apiToken
-    } -UseBasicParsing
+    # Apps Script suele redirigir; HttpClient sigue el POST mejor
+    Add-Type -AssemblyName System.Net.Http
+    $handler = New-Object System.Net.Http.HttpClientHandler
+    $handler.AllowAutoRedirect = $true
+    $client = New-Object System.Net.Http.HttpClient($handler)
+    $client.Timeout = [TimeSpan]::FromSeconds(60)
+    $content = New-Object System.Net.Http.StringContent($outbound, [Text.Encoding]::UTF8, "application/json")
+    $reqMsg = New-Object System.Net.Http.HttpRequestMessage([System.Net.Http.HttpMethod]::Post, $scriptUrl)
+    $reqMsg.Content = $content
+    $reqMsg.Headers.TryAddWithoutValidation("Authorization", "Bearer $apiToken") | Out-Null
+    $reqMsg.Headers.TryAddWithoutValidation("X-Api-Token", $apiToken) | Out-Null
+    $httpResp = $client.SendAsync($reqMsg).Result
+    $respText = $httpResp.Content.ReadAsStringAsync().Result
+    $statusCode = [int]$httpResp.StatusCode
+    $client.Dispose()
+
     $parsed = $null
-    try { $parsed = $resp.Content | ConvertFrom-Json } catch { $parsed = @{ raw = $resp.Content } }
-    $ok = ($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 300) -and ($parsed.ok -ne $false)
-    Send-Json $Response $(if ($ok) { 200 } else { 502 }) @{
+    try { $parsed = $respText | ConvertFrom-Json } catch {
+      $parsed = @{
+        raw = if ($respText.Length -gt 300) { $respText.Substring(0, 300) } else { $respText }
+        parseError = $true
+      }
+    }
+    $ok = ($statusCode -ge 200 -and $statusCode -lt 300) -and ($null -eq $parsed.ok -or $parsed.ok -ne $false) -and (-not $parsed.parseError)
+    $out = @{
       ok = [bool]$ok
-      status = [int]$resp.StatusCode
+      status = $statusCode
       data = $parsed
       local = $true
     }
+    try {
+      ($out | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath (Join-Path $Root "data\local-sync-last.json") -Encoding UTF8
+    } catch {}
+    Send-Json $Response $(if ($ok) { 200 } else { 502 }) $out
   } catch {
-    Send-Json $Response 502 @{
+    $msg = $_.Exception.Message
+    if ($_.Exception.InnerException) { $msg = $_.Exception.InnerException.Message }
+    $out = @{
       ok = $false
-      error = $_.Exception.Message
+      error = $msg
       local = $true
     }
+    try {
+      ($out | ConvertTo-Json -Depth 5) | Set-Content -LiteralPath (Join-Path $Root "data\local-sync-last.json") -Encoding UTF8
+    } catch {}
+    Write-Host "[sync] ERROR: $msg"
+    Send-Json $Response 502 $out
   }
 }
 
