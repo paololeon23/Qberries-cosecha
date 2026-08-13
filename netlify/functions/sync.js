@@ -2,6 +2,7 @@
  * Proxy seguro a Google Apps Script · Supervisores (vínculos).
  * Env Netlify: APPS_SCRIPT_URL + API_TOKEN (+ LOGIN_PIN opcional).
  * POST { action, data|payload, pin }
+ * Envía solo campos precisos al Sheet.
  */
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -9,6 +10,36 @@ const cors = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Content-Type": "application/json",
 };
+
+function digits(v) {
+  return String(v || "").replace(/\D/g, "");
+}
+
+function cleanText(v) {
+  return String(v || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toUpperCase();
+}
+
+/** Solo lo que va al Sheet DATA-SUPERVISORES */
+function sanitizeVinculo(raw) {
+  const src = raw && typeof raw === "object" ? raw : {};
+  const dni = digits(src.dni);
+  const celular = digits(src.celular || src.telefono);
+  const dniSesion = digits(src.dniSesion || src.dniInicioSesion || dni) || dni;
+  return {
+    dni,
+    nombre: cleanText(src.nombre || src.name),
+    celular,
+    supervisorGlobal: cleanText(
+      src.supervisorGlobal || src.nombreSupervisorGlobal || src.encargado
+    ),
+    dniSesion,
+    horaRegistro: String(src.horaRegistro || src.hora || "").trim(),
+    hora: String(src.hora || src.horaRegistro || "").trim(),
+  };
+}
 
 exports.handler = async (event) => {
   if (event.httpMethod === "OPTIONS") {
@@ -57,7 +88,39 @@ exports.handler = async (event) => {
   }
 
   const action = String(body.action || "registrarVinculo").trim();
-  const data = body.data ?? body.payload ?? body;
+  const rawData = body.data ?? body.payload ?? body;
+  const data =
+    action === "registrarVinculo" ? sanitizeVinculo(rawData) : rawData;
+
+  if (action === "registrarVinculo") {
+    if (!data.dni || data.dni.length < 8) {
+      return {
+        statusCode: 400,
+        headers: cors,
+        body: JSON.stringify({ ok: false, error: "DNI inválido" }),
+      };
+    }
+    if (!/^9\d{8}$/.test(data.celular)) {
+      return {
+        statusCode: 400,
+        headers: cors,
+        body: JSON.stringify({
+          ok: false,
+          error: "Celular inválido: 9 dígitos comenzando con 9",
+        }),
+      };
+    }
+    if (!data.supervisorGlobal || data.supervisorGlobal.length < 3) {
+      return {
+        statusCode: 400,
+        headers: cors,
+        body: JSON.stringify({
+          ok: false,
+          error: "Falta nombre del supervisor global",
+        }),
+      };
+    }
+  }
 
   const outbound = {
     source: "supervisores",

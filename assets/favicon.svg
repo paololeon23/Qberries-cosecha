@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <rect width="64" height="64" rx="12" fill="#ffffff"/>
+  <!-- Petalos QBerries · marca cuadrada (no estira el wordmark) -->
+  <g transform="translate(32 34)">
+    <ellipse cx="-8" cy="-2" rx="12" ry="14" fill="#E00B29" opacity="0.92" transform="rotate(-28)"/>
+    <ellipse cx="2" cy="-4" rx="11" ry="13" fill="#EE9724" opacity="0.88" transform="rotate(8)"/>
+    <ellipse cx="10" cy="0" rx="11" ry="13" fill="#B4C739" opacity="0.9" transform="rotate(32)"/>
+  </g>
+</svg>

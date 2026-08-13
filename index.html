@@ -9,15 +9,16 @@
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="description" content="QBerries Supervisores — Guía interna de cosecha" />
   <link rel="manifest" href="manifest.json" />
-  <link rel="icon" href="assets/logo-qberries.png" />
-  <link rel="apple-touch-icon" href="assets/logo-qberries.png" />
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
+  <link rel="icon" href="assets/favicon.png" type="image/png" sizes="64x64" />
+  <link rel="apple-touch-icon" href="assets/icon-192.png" />
   <title>QBerries · Supervisores</title>
-  <link rel="stylesheet" href="styles.css?v=35" />
-  <script src="vendor/xlsx.full.min.js?v=35" defer></script>
-  <script src="vendor/jspdf.umd.min.js?v=35" defer></script>
-  <script src="vendor/jsQR.min.js?v=35" defer></script>
-  <script src="icons.js?v=35" defer></script>
-  <script src="app.js?v=35" defer></script>
+  <link rel="stylesheet" href="styles.css?v=44" />
+  <script src="vendor/xlsx.full.min.js?v=44" defer></script>
+  <script src="vendor/jspdf.umd.min.js?v=44" defer></script>
+  <script src="vendor/jsQR.min.js?v=44" defer></script>
+  <script src="icons.js?v=44" defer></script>
+  <script src="app.js?v=44" defer></script>
 </head>
 <body>
   <div class="stage">
@@ -148,7 +149,7 @@
           </div>
 
           <button type="submit" class="btn btn-primary btn-block btn-lg">
-            <span data-icon="check"></span> Guardar y continuar
+            <span data-icon="check"></span> Guardar
           </button>
 
           <aside class="trust-note" aria-label="Aviso de privacidad">
@@ -159,6 +160,20 @@
             </div>
           </aside>
         </form>
+
+        <div class="thanks-card" id="vinculoThanks" hidden>
+          <span class="thanks-ico" data-icon="check"></span>
+          <h2>¡Gracias!</h2>
+          <p class="thanks-lead">Su registro fue guardado de forma rápida y confiable.</p>
+          <p class="thanks-sub">La información queda asegurada para uso interno de la empresa.</p>
+          <div class="thanks-meta">
+            <span id="thanksDni">—</span>
+            <span id="thanksNombre">—</span>
+          </div>
+          <button type="button" class="btn btn-primary btn-block" id="btnThanksOk">
+            <span data-icon="check"></span> Listo
+          </button>
+        </div>
       </div>
 
       <div class="session-screen" id="sessionScreen" hidden>

@@ -1,0 +1,10 @@
+{
+  "name": "qberries-supervisores",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node local-server.mjs",
+    "start": "node local-server.mjs",
+    "dev:ps": "powershell -NoProfile -ExecutionPolicy Bypass -File ./local-server.ps1"
+  }
+}

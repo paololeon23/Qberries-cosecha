@@ -64,6 +64,7 @@
 
   const emptySession = () => ({
     ready: false,
+    ownerDni: "",
     fundo: "",
     supervisorDni: "",
     supervisorNombre: "",
@@ -94,6 +95,8 @@
     pendingConfirm: /** @type {null | (() => void)} */ (null),
     picker: /** @type {null | { kind: "grupo"|"lote", guiaId: string }} */ (null),
     netlifyReady: false,
+    /** false = Live Server / sin functions; solo datos locales + cola */
+    cloudApi: false,
     unlocking: false,
     online: typeof navigator !== "undefined" ? navigator.onLine : true,
     camStream: /** @type {MediaStream|null} */ (null),
@@ -500,16 +503,33 @@
     const id = state.identity || getIdentity();
     if (!id?.dni) return false;
     const persona = lookupSupervisor(id.dni);
-    if (!persona) return false;
+    if (!persona) {
+      setIdentity(null);
+      return false;
+    }
+    const done = vinculoDoneMap()[id.dni] || {};
     state.identity = {
       dni: id.dni,
       nombre: persona.nombre || id.nombre || "",
       cargo: persona.cargo || id.cargo || "SUPERVISOR DE COSECHA",
-      celular: persona.celular || id.celular || "",
-      supervisorGlobal:
-        persona.supervisorGlobal || id.supervisorGlobal || "",
+      celular: done.celular || persona.celular || id.celular || "",
+      supervisorGlobal: done.supervisorGlobal || "",
     };
+    setIdentity(state.identity);
     return true;
+  }
+
+  /** Evita mezclar datos de otro DNI al refrescar el mismo dispositivo */
+  function bindSessionToIdentity(dni) {
+    const owner = String(dni || "").replace(/\D/g, "");
+    if (!owner) return;
+    const prev = String(state.session?.ownerDni || "").replace(/\D/g, "");
+    if (prev && prev !== owner) {
+      state.session = emptySession();
+      state.guias = [];
+    }
+    state.session.ownerDni = owner;
+    saveStore();
   }
 
   function setIdentity(identity) {
@@ -553,6 +573,8 @@
 
   /** Contraseña desactivada por ahora: acceso solo con QR */
   const PASSWORD_REQUIRED = false;
+  /** Por ahora: tras vincular NO pasar a Datos de campo */
+  const SESSION_FORM_ENABLED = false;
 
   function ensureSessionGate() {
     sessionStorage.setItem(SESSION_KEY, "1");
@@ -604,11 +626,21 @@
       showSecurityLogin("Escanee su carnet QR para continuar");
       return;
     }
+    const id = state.identity || getIdentity();
+    bindSessionToIdentity(id.dni);
+    if (needsVinculo(id)) {
+      showVinculoScreen(id);
+      return;
+    }
+    // Por ahora no entrar a Datos de campo / guías
+    if (!SESSION_FORM_ENABLED) {
+      showVinculoThanks(id);
+      return;
+    }
     if (!state.session.ready) {
       hideAllScreens();
       $("#sessionScreen").hidden = false;
       fillSessionForm();
-      const id = state.identity || getIdentity();
       if (id && !$("#sesSupDni").value) {
         $("#sesSupDni").value = id.dni;
         $("#sesSupNombre").value = id.nombre;
@@ -626,6 +658,7 @@
     renderSessionBanner();
     renderCards();
     updateKpis();
+    updateNetworkUI();
   }
 
   function previewSecurityDni() {
@@ -700,29 +733,87 @@
     localStorage.setItem(VINCULO_QUEUE_KEY, JSON.stringify(q || []));
   }
 
+  function buildVinculoPayload(raw) {
+    const dni = String(raw?.dni || "").replace(/\D/g, "");
+    const dniSesion = String(raw?.dniSesion || dni).replace(/\D/g, "") || dni;
+    const celular = String(raw?.celular || "").replace(/\D/g, "");
+    const nombre = String(raw?.nombre || "")
+      .trim()
+      .replace(/\s+/g, " ")
+      .toUpperCase();
+    const supervisorGlobal = String(raw?.supervisorGlobal || "")
+      .trim()
+      .replace(/\s+/g, " ")
+      .toUpperCase();
+    const hora =
+      String(raw?.horaRegistro || raw?.hora || "").trim() ||
+      new Date().toLocaleString("es-PE", { hour12: true });
+    return {
+      dni,
+      nombre,
+      celular,
+      supervisorGlobal,
+      dniSesion,
+      horaRegistro: hora,
+      hora,
+    };
+  }
+
   function enqueueVinculo(payload) {
+    const clean = buildVinculoPayload(payload);
+    if (!clean.dni || clean.dni.length < 8) return;
+    if (!/^9\d{8}$/.test(clean.celular)) return;
+    if (!clean.supervisorGlobal || clean.supervisorGlobal.length < 3) return;
     const q = loadVinculoQueue();
-    const dni = String(payload.dni || "").replace(/\D/g, "");
-    const next = q.filter((x) => String(x.dni) !== dni);
-    next.push({ ...payload, dni, queuedAt: new Date().toISOString() });
+    const next = q.filter((x) => String(x.dni) !== clean.dni);
+    next.push({ ...clean, queuedAt: new Date().toISOString() });
     saveVinculoQueue(next);
     updateNetworkUI();
   }
 
+  function isHostedOnNetlify() {
+    const h = String(location.hostname || "").toLowerCase();
+    if (!h || h === "localhost" || h === "127.0.0.1" || h === "[::1]") {
+      return false;
+    }
+    return true;
+  }
+
+  function canUseCloudApi() {
+    return !!state.cloudApi && navigator.onLine;
+  }
+
   async function flushVinculoQueue() {
+    state.online = navigator.onLine;
     if (!state.online) {
       updateNetworkUI();
-      return;
+      return { sent: 0, remain: loadVinculoQueue().length };
     }
+    if (!canUseCloudApi()) {
+      // Live Server / sin Netlify: no llamar POST (evita 405)
+      updateNetworkUI();
+      return { sent: 0, remain: loadVinculoQueue().length };
+    }
+    ensureSessionGate();
     const q = loadVinculoQueue();
     if (!q.length) {
       updateNetworkUI();
-      return;
+      return { sent: 0, remain: 0 };
     }
     updateNetworkUI();
-    const pin = sessionPin();
+    const pin = sessionPin() || getPin();
     const remain = [];
-    for (const item of q) {
+    let sent = 0;
+    for (let i = 0; i < q.length; i++) {
+      const item = q[i];
+      const data = buildVinculoPayload(item);
+      if (
+        !data.dni ||
+        !/^9\d{8}$/.test(data.celular) ||
+        !data.supervisorGlobal
+      ) {
+        continue;
+      }
       try {
         const res = await fetch(API.sync, {
           method: "POST",
@@ -730,31 +821,86 @@
           body: JSON.stringify({
             action: "registrarVinculo",
             pin,
-            data: item,
+            data,
           }),
         });
+        if (res.status === 405) {
+          state.cloudApi = false;
+          state.netlifyReady = false;
+          for (let j = i; j < q.length; j++) {
+            remain.push(buildVinculoPayload(q[j]));
+          }
+          break;
+        }
         const json = await res.json().catch(() => ({}));
-        if (res.ok && json.ok) {
-          markVinculoDone(item.dni, item.celular, item.supervisorGlobal);
+        const ok =
+          res.ok && (json.ok === true || json?.data?.ok === true);
+        if (ok) {
+          markVinculoDone(data.dni, data.celular, data.supervisorGlobal);
+          sent += 1;
         } else {
-          remain.push(item);
+          remain.push({
+            ...data,
+            queuedAt: item.queuedAt || new Date().toISOString(),
+          });
         }
       } catch {
-        remain.push(item);
+        remain.push({
+          ...data,
+          queuedAt: item.queuedAt || new Date().toISOString(),
+        });
       }
     }
     saveVinculoQueue(remain);
     updateNetworkUI();
-    if (q.length && remain.length < q.length) {
-      toast(remain.length ? "Vínculo parcial · reintentará solo" : "Vínculo guardado");
+    if (sent > 0 && remain.length === 0) {
+      toast("Enviado al servidor");
+    } else if (sent > 0 && remain.length) {
+      toast(`Enviado parcial · ${remain.length} pendiente(s)`);
     }
+    return { sent, remain: remain.length };
+  }
+
+  function showVinculoThanks(identity) {
+    stopCamera();
+    hideAllScreens();
+    const screen = $("#vinculoScreen");
+    if (screen) {
+      screen.hidden = false;
+      screen.classList.add("is-thanks");
+    }
+    const form = $("#vinculoForm");
+    const thanks = $("#vinculoThanks");
+    if (form) form.hidden = true;
+    if (thanks) thanks.hidden = false;
+    const dni = identity?.dni || state.identity?.dni || "";
+    const nombre = identity?.nombre || state.identity?.nombre || "";
+    if ($("#thanksDni")) $("#thanksDni").textContent = dni ? `DNI ${dni}` : "—";
+    if ($("#thanksNombre")) $("#thanksNombre").textContent = nombre || "—";
+    if ($("#vinHeroDni")) $("#vinHeroDni").textContent = dni ? `DNI ${dni}` : "";
+    hydrateIcons(screen);
+    updateNetworkUI();
   }
 
   function showVinculoScreen(identity) {
     stopCamera();
     hideAllScreens();
     const screen = $("#vinculoScreen");
-    if (screen) screen.hidden = false;
+    if (screen) {
+      screen.hidden = false;
+      screen.classList.remove("is-thanks");
+    }
+    const form = $("#vinculoForm");
+    const thanks = $("#vinculoThanks");
+    if (form) form.hidden = false;
+    if (thanks) thanks.hidden = true;
+    const copy = screen?.querySelector(".hero-head-copy");
+    if (copy) {
+      const h1 = copy.querySelector("h1");
+      const p = copy.querySelector("p");
+      if (h1) h1.textContent = "Vincular datos";
+      if (p) p.textContent = "Complete celular y supervisor";
+    }
     hydrateIcons(screen);
     const dni = identity.dni || "";
     const nombre = identity.nombre || "";
@@ -773,6 +919,7 @@
 
   function afterQrLogin(identity) {
     setIdentity(identity);
+    bindSessionToIdentity(identity.dni);
     toast(`Sesión · ${identity.nombre}`);
     if (needsVinculo(identity)) {
       showVinculoScreen(identity);
@@ -790,6 +937,10 @@
       hora: new Date().toLocaleString("es-PE", { hour12: true }),
     });
     flushVinculoQueue().catch(() => {});
+    if (!SESSION_FORM_ENABLED) {
+      showVinculoThanks(identity);
+      return;
+    }
     showMainFlow();
   }
 
@@ -1001,7 +1152,11 @@
       /* ignore */
     }
 
-    // 3) Red (Netlify → Apps Script) — 1ª vez o refresh; guarda caché
+    // 3) Solo en Netlify (no en Live Server → evita 405)
+    if (!canUseCloudApi()) {
+      setCount(Object.keys(state.personas).length ? " · local" : "");
+      return;
+    }
     try {
       const meta = JSON.parse(localStorage.getItem(PERSONAS_META_KEY) || "{}");
       const age = Date.now() - Number(meta.at || 0);
@@ -1015,6 +1170,11 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pin: sessionPin() || undefined }),
       });
+      if (res.status === 405) {
+        state.cloudApi = false;
+        state.netlifyReady = false;
+        throw new Error("no-api");
+      }
       if (!res.ok) throw new Error("api");
       const json = await res.json();
       if (json?.ok && json.byDni) {
@@ -1245,7 +1405,9 @@
       label = pending ? "Sin internet · pendiente" : "Sin internet";
       mode = "is-offline";
     } else if (pending) {
-      label = `Pendiente · ${pending}`;
+      label = canUseCloudApi()
+        ? `Pendiente · ${pending}`
+        : `Pendiente · ${pending}`;
       mode = "is-pending";
     }
 
@@ -1575,8 +1737,8 @@
       return;
     }
     const identity = state.identity || getIdentity();
-    if (!state.netlifyReady) {
-      toast("Solo disponible en Netlify");
+    if (!state.netlifyReady || !state.cloudApi) {
+      toast("Subida solo en Netlify · despliegue el sitio");
       return;
     }
     const pin = sessionPin();
@@ -1636,6 +1798,13 @@
   async function detectNetlify() {
     if (!navigator.onLine) {
       state.netlifyReady = false;
+      state.cloudApi = false;
+      return;
+    }
+    // Live Server / local: no llamar functions (solo Netlify en producción)
+    if (!isHostedOnNetlify()) {
+      state.netlifyReady = false;
+      state.cloudApi = false;
       return;
     }
     try {
@@ -1644,10 +1813,17 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pin: "__probe__" }),
       });
+      if (res.status === 405) {
+        state.netlifyReady = false;
+        state.cloudApi = false;
+        return;
+      }
       state.netlifyReady =
         res.status === 401 || res.status === 500 || res.status === 200;
+      state.cloudApi = state.netlifyReady;
     } catch {
       state.netlifyReady = false;
+      state.cloudApi = false;
     }
     if (state.netlifyReady) {
       const hint = $("#pinHint");
@@ -1787,6 +1963,10 @@
     on("#btnStartCam", "click", () => startCamera());
     on("#btnStopCam", "click", stopCamera);
 
+    on("#btnThanksOk", "click", () => {
+      toast("Registro confirmado · puede cerrar esta pestaña");
+    });
+
     on("#vinculoForm", "submit", (e) => {
       e.preventDefault();
       if (!requireQrLogin()) return;
@@ -1810,7 +1990,7 @@
         return;
       }
       const hora = new Date().toLocaleString("es-PE", { hour12: true });
-      const payload = {
+      const payload = buildVinculoPayload({
         dni: id.dni,
         nombre: id.nombre || "",
         celular,
@@ -1818,16 +1998,25 @@
         dniSesion: id.dni,
         horaRegistro: hora,
         hora,
-      };
+      });
       markVinculoDone(id.dni, celular, supervisorGlobal);
       if (state.personas[id.dni]) {
         state.personas[id.dni].celular = celular;
         savePersonas();
       }
       enqueueVinculo(payload);
+      if (!canUseCloudApi()) {
+        toast("Guardado en el celular · se sube al publicar en Netlify");
+      } else if (!navigator.onLine) {
+        toast("Guardado en el celular · se subirá al tener internet");
+      } else {
+        toast("Guardado");
+      }
       flushVinculoQueue().catch(() => {});
-      toast("Datos guardados · puede trabajar sin internet");
-      showMainFlow();
+      showVinculoThanks({
+        dni: id.dni,
+        nombre: id.nombre || "",
+      });
     });
 
     on("#sessionForm", "submit", (e) => {
@@ -1981,6 +2170,10 @@
         jabas: g.jabas ?? "",
       }));
 
+      await detectNetlify().catch(() => {
+        state.netlifyReady = false;
+        state.cloudApi = false;
+      });
       await loadSupervisores();
       await loadPersonas();
       await loadCatalogs();
@@ -1989,17 +2182,17 @@
       setInterval(updateClock, 30000);
 
       window.addEventListener("online", () => {
+        state.online = true;
         updateNetworkUI();
-        toast("Internet recuperado");
-        flushVinculoQueue().catch(() => {});
+        if (canUseCloudApi()) {
+          toast("Internet recuperado · subiendo…");
+          flushVinculoQueue().catch(() => {});
+        }
       });
       window.addEventListener("offline", () => {
+        state.online = false;
         updateNetworkUI();
-        toast("Modo sin internet");
-      });
-
-      detectNetlify().catch(() => {
-        state.netlifyReady = false;
+        toast("Sin internet · se guarda en el celular");
       });
 
       // Primero siempre QR (contraseña desactivada)
@@ -2010,12 +2203,17 @@
       } else if (!hasQrLogin()) {
         showSecurityLogin("Escanee su carnet QR");
       } else {
-        showMainFlow();
+        showMainFlow(); // respeta vínculo / datos de campo / guías
+      }
+
+      // Subir pendientes solo si hay API Netlify
+      if (canUseCloudApi()) {
+        flushVinculoQueue().catch(() => {});
       }
 
       if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
         try {
-          await navigator.serviceWorker.register("./sw.js?v=35");
+          await navigator.serviceWorker.register("./sw.js?v=44");
         } catch {
           /* ignore */
         }
