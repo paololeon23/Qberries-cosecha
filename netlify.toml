@@ -1,7 +1,7 @@
 [build]
   publish = "."
   functions = "netlify/functions"
-  // Sitio estático; Functions: LOGIN_PIN, API_TOKEN, APPS_SCRIPT_URL, TRABAJADORES_SCRIPT_URL
+  # Sitio estático; Functions: LOGIN_PIN, API_TOKEN, APPS_SCRIPT_URL, TRABAJADORES_SCRIPT_URL
 
 [build.environment]
   NODE_VERSION = "20"
