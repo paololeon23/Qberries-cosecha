@@ -8,8 +8,8 @@ En **Site configuration → Environment variables** configure:
 
 | Variable | Uso |
 |----------|-----|
-| `LOGIN_PIN` | Contraseña de acceso (`Qberrie$2026`) |
-| `API_TOKEN` | Token secreto hacia Apps Script (Function `sync`) |
+| `LOGIN_PIN` | Contraseña de acceso (definir solo en Netlify) |
+| `API_TOKEN` | Token secreto hacia Apps Script (solo en Netlify) |
 | `APPS_SCRIPT_URL` | URL del Web App de Google Apps Script |
 
 En Netlify, ponga `LOGIN_PIN` = la contraseña de la empresa. El cliente no lee el env: valida vía `/.netlify/functions/login`.
@@ -20,7 +20,7 @@ Plantilla: `.env.example`
 
 1. Suba este repo a GitHub (o arrastre la carpeta a Netlify).
 2. Build settings: publish `.` · functions `netlify/functions` (ya en `netlify.toml`).
-3. Configure las 3 variables (como en **qpack**), con `LOGIN_PIN=Qberrie$2026`.
+3. Configure las variables en Netlify (nunca en el código).
 4. Deploy.
 
 ## Local

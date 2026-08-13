@@ -15,4 +15,4 @@ Upsert por DNI (sin duplicados). Cada guardado actualiza celular y hora.
 
 ## Netlify
 - `APPS_SCRIPT_URL` = URL `/exec`
-- `API_TOKEN` = `QB_pase_9kR2mP7xW4nQ8vL3`
+- `API_TOKEN` = el mismo token que en Propiedades del script (solo en Netlify env, no en el código)

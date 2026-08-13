@@ -5,6 +5,8 @@
 
 [build.environment]
   NODE_VERSION = "20"
+  # No escanear plantillas de ejemplo (sin secretos reales)
+  SECRETS_SCAN_OMIT_PATHS = ".env.example"
 
 [[redirects]]
   from = "/api/*"

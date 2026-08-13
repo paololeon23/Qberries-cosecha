@@ -7,7 +7,7 @@
  * SETUP
  * 1) Abre el Google Sheet «DATA-SUPERVISORES»
  * 2) Extensiones → Apps Script → pega ESTE archivo completo
- * 3) Propiedades del script → API_TOKEN = QB_pase_9kR2mP7xW4nQ8vL3
+ * 3) Propiedades del script → API_TOKEN = (mismo valor que en Netlify)
  * 4) Guardar → Implementar → Nueva versión → Aplicación web
  *    - Ejecutar como: Yo
  *    - Quién tiene acceso: Cualquier persona

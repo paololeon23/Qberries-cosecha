@@ -55,7 +55,8 @@ exports.handler = async (event) => {
 
   const scriptUrl = String(process.env.APPS_SCRIPT_URL || "").trim();
   const apiToken = String(process.env.API_TOKEN || "").trim();
-  const loginPin = String(process.env.LOGIN_PIN || "").trim();
+  // loginPin no se usa aquí: seguridad = API_TOKEN
+  void process.env.LOGIN_PIN;
 
   if (!scriptUrl || !apiToken) {
     return {
@@ -79,14 +80,8 @@ exports.handler = async (event) => {
     };
   }
 
-  if (loginPin && String(body.pin || "") !== loginPin) {
-    return {
-      statusCode: 401,
-      headers: cors,
-      body: JSON.stringify({ ok: false, error: "Sesión / PIN inválido" }),
-    };
-  }
-
+  // Seguridad = API_TOKEN hacia Apps Script.
+  // LOGIN_PIN solo aplica al login (si lo activan); no bloquear sync por PIN del cliente.
   const action = String(body.action || "registrarVinculo").trim();
   const rawData = body.data ?? body.payload ?? body;
   const data =

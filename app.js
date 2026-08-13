@@ -12,7 +12,7 @@
   const SESSION_KEY = "qb-supervisores-unlocked";
   const SESSION_PIN_KEY = "qb-supervisores-session-pin";
   const IDENTITY_KEY = "qb-supervisores-identity";
-  const DEFAULT_PIN = "Qberrie$2026";
+  const DEFAULT_PIN = "";
   const API = {
     login: "/.netlify/functions/login",
     sync: "/.netlify/functions/sync",
