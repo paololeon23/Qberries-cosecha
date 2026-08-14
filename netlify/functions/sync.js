@@ -29,27 +29,31 @@ function padGrupo_(n) {
 }
 
 function isNoTengo(v) {
-  return /NO\s*TENGO/i.test(String(v || "").trim());
+  const s = String(v || "")
+    .trim()
+    .toUpperCase()
+    .replace(/_/g, " ");
+  return /NO\s*TENGO/.test(s);
 }
 
 function normGrupoLic(v) {
-  if (isNoTengo(v)) return "NO TENGO";
+  if (isNoTengo(v)) return "NO_TENGO";
   const n = padGrupo_(v);
   return n ? `GRUPO LIC ${n}` : "";
 }
 
 function normGrupoNum(v) {
-  if (isNoTengo(v)) return "NO TENGO";
+  if (isNoTengo(v)) return "NO_TENGO";
   const n = padGrupo_(v);
   return n ? `GRUPO ${n}` : "";
 }
 
 function isValidGrupoLic(v) {
-  return v === "NO TENGO" || /^GRUPO LIC ([0-5][0-9]|60)$/.test(v);
+  return isNoTengo(v) || /^GRUPO LIC ([0-5][0-9]|60)$/.test(v);
 }
 
 function isValidGrupoNum(v) {
-  return v === "NO TENGO" || /^GRUPO ([0-5][0-9]|60)$/.test(v);
+  return isNoTengo(v) || /^GRUPO ([0-5][0-9]|60)$/.test(v);
 }
 
 /** Solo lo que va al Sheet DATA-SUPERVISORES */
@@ -84,7 +88,7 @@ function json(statusCode, payload) {
 async function callAppsScript(scriptUrl, params) {
   const u = new URL(String(scriptUrl).split("?")[0]);
   Object.entries(params || {}).forEach(([k, v]) => {
-    if (v == null || v === "") return;
+    if (v == null) return;
     u.searchParams.set(k, String(v));
   });
   const res = await fetch(u.toString(), {

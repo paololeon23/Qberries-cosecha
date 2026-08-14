@@ -252,7 +252,7 @@
 
       var nombre = clean_(d.nombre || d.name).toUpperCase();
 
-      var rawLic = clean_(d.grupoLic || '').toUpperCase();
+      var rawLic = clean_(d.grupoLic || '').toUpperCase().replace(/_/g, ' ');
       var grupoLic = '';
       if (/NO\s*TENGO/.test(rawLic)) {
         grupoLic = 'NO TENGO';
@@ -264,7 +264,7 @@
       }
       if (!grupoLic) throw new Error('Falta Grupo LIC (01 al 60 o No tengo)');
 
-      var rawGrupo = clean_(d.grupo || '').toUpperCase();
+      var rawGrupo = clean_(d.grupo || '').toUpperCase().replace(/_/g, ' ');
       var grupo = '';
       if (/NO\s*TENGO/.test(rawGrupo)) {
         grupo = 'NO TENGO';

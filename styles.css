@@ -34,8 +34,6 @@ html, body {
   margin: 0;
   overflow: hidden;
   overscroll-behavior: none;
-  position: fixed;
-  inset: 0;
   touch-action: manipulation;
 }
 html { resize: none; }
@@ -1295,10 +1293,12 @@ img {
   background: #f3f7fb;
   overflow-x: hidden;
   overflow-y: auto;
-  overscroll-behavior: none;
-  padding: 14px 12px 20px;
+  overscroll-behavior: contain;
+  padding: 14px 12px 28px;
   padding-top: max(14px, env(safe-area-inset-top, 0px));
+  padding-bottom: max(28px, calc(20px + var(--safe-b)));
   max-width: 100%;
+  -webkit-overflow-scrolling: touch;
 }
 .security-screen { z-index: 92; }
 #vinculoScreen { z-index: 93; }
@@ -1596,11 +1596,11 @@ img {
   color: #8a97a3;
 }
 .field-hint {
-  margin: 0;
-  font-size: 0.68rem;
+  margin: 4px 0 0;
+  font-size: 0.72rem;
   font-weight: 600;
-  color: #8a97a3;
-  line-height: 1.3;
+  color: #5c6b76;
+  line-height: 1.35;
 }
 .vinculo-form input:not([type="hidden"]) {
   background: #fff;
@@ -1756,7 +1756,12 @@ img {
   max-width: 30ch;
 }
 .thanks-sub {
-  display: none;
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #6b7c8c;
+  line-height: 1.4;
+  max-width: 36ch;
 }
 .thanks-meta {
   margin: 2px 0 0;

@@ -350,7 +350,7 @@
 
   function grupoLicList_() {
     const out = [
-      { key: "NO TENGO", primary: "No tengo", secondary: "LIC" },
+      { key: "NO_TENGO", primary: "No tengo", secondary: "LIC" },
     ];
     for (let n = 1; n <= 60; n++) {
       const num = String(n).padStart(2, "0");
@@ -365,7 +365,7 @@
 
   function grupoNumList_() {
     const out = [
-      { key: "NO TENGO", primary: "No tengo", secondary: "" },
+      { key: "NO_TENGO", primary: "No tengo", secondary: "" },
     ];
     for (let n = 1; n <= 60; n++) {
       const num = String(n).padStart(2, "0");
@@ -379,24 +379,28 @@
   }
 
   function isNoTengo_(raw) {
-    return /NO\s*TENGO/i.test(String(raw || "").trim());
+    const s = String(raw || "")
+      .trim()
+      .toUpperCase()
+      .replace(/_/g, " ");
+    return /NO\s*TENGO/.test(s);
   }
 
   function isValidGrupoLic_(v) {
-    return v === "NO TENGO" || /^GRUPO LIC ([0-5][0-9]|60)$/.test(v);
+    return isNoTengo_(v) || /^GRUPO LIC ([0-5][0-9]|60)$/.test(v);
   }
 
   function isValidGrupoNum_(v) {
-    return v === "NO TENGO" || /^GRUPO ([0-5][0-9]|60)$/.test(v);
+    return isNoTengo_(v) || /^GRUPO ([0-5][0-9]|60)$/.test(v);
   }
 
   function displayGrupo_(v) {
-    if (v === "NO TENGO") return "No tengo";
+    if (isNoTengo_(v)) return "No tengo";
     return String(v || "").replace(/^GRUPO\s+/i, "Grupo ");
   }
 
   function normGrupoLic_(raw) {
-    if (isNoTengo_(raw)) return "NO TENGO";
+    if (isNoTengo_(raw)) return "NO_TENGO";
     const gNum = String(raw || "").replace(/\D/g, "");
     if (gNum && Number(gNum) >= 1 && Number(gNum) <= 60) {
       return `GRUPO LIC ${String(Number(gNum)).padStart(2, "0")}`;
@@ -405,7 +409,7 @@
   }
 
   function normGrupoNum_(raw) {
-    if (isNoTengo_(raw)) return "NO TENGO";
+    if (isNoTengo_(raw)) return "NO_TENGO";
     const gNum = String(raw || "").replace(/\D/g, "");
     if (gNum && Number(gNum) >= 1 && Number(gNum) <= 60) {
       return `GRUPO ${String(Number(gNum)).padStart(2, "0")}`;
@@ -510,7 +514,7 @@
     if (ctx.kind === "grupoLic") {
       return grupoLicList_().filter((g) => {
         if (!q) return true;
-        if (g.key === "NO TENGO") return "no tengo".includes(q) || q.includes("no");
+        if (isNoTengo_(g.key)) return "no tengo".includes(q) || q.includes("no");
         const n = String(parseInt(g.key.replace(/\D/g, ""), 10));
         return (
           g.primary.toLowerCase().includes(q) ||
@@ -523,7 +527,7 @@
     if (ctx.kind === "grupoNum") {
       return grupoNumList_().filter((g) => {
         if (!q) return true;
-        if (g.key === "NO TENGO") return "no tengo".includes(q) || q.includes("no");
+        if (isNoTengo_(g.key)) return "no tengo".includes(q) || q.includes("no");
         const n = String(parseInt(g.key.replace(/\D/g, ""), 10));
         return (
           g.primary.toLowerCase().includes(q) ||
@@ -2643,7 +2647,7 @@
 
       if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
         try {
-          await navigator.serviceWorker.register("./sw.js?v=70");
+          await navigator.serviceWorker.register("./sw.js?v=71");
         } catch {
           /* ignore */
         }

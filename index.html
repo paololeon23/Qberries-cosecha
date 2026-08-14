@@ -13,12 +13,12 @@
   <link rel="icon" href="assets/favicon.png" type="image/png" sizes="64x64" />
   <link rel="apple-touch-icon" href="assets/icon-192.png" />
   <title>QBerries · Supervisores</title>
-  <link rel="stylesheet" href="styles.css?v=70" />
-  <script src="vendor/xlsx.full.min.js?v=70" defer></script>
-  <script src="vendor/jspdf.umd.min.js?v=70" defer></script>
-  <script src="vendor/jsQR.min.js?v=70" defer></script>
-  <script src="icons.js?v=70" defer></script>
-  <script src="app.js?v=70" defer></script>
+  <link rel="stylesheet" href="styles.css?v=71" />
+  <script src="vendor/xlsx.full.min.js?v=71" defer></script>
+  <script src="vendor/jspdf.umd.min.js?v=71" defer></script>
+  <script src="vendor/jsQR.min.js?v=71" defer></script>
+  <script src="icons.js?v=71" defer></script>
+  <script src="app.js?v=71" defer></script>
 </head>
 <body>
   <div class="stage">
@@ -150,6 +150,7 @@
                   <span id="vinGrupoLicLabel" class="ph">Elegir</span>
                   <span class="chev" data-icon="search"></span>
                 </button>
+                <p class="field-hint">01–60 o No tengo</p>
               </div>
               <div class="vin-grupo-col">
                 <span class="field-label">Grupo</span>
@@ -158,15 +159,16 @@
                   <span id="vinGrupoLabel" class="ph">Elegir</span>
                   <span class="chev" data-icon="search"></span>
                 </button>
+                <p class="field-hint">01–60 o No tengo</p>
               </div>
             </div>
-            <p class="field-hint">Si no tiene, elija No tengo en uno o en los dos</p>
           </div>
 
           <div class="form-block">
             <label for="vinEncargado">Supervisor global
               <input id="vinEncargado" type="text" placeholder="Nombre completo" required autocomplete="off" maxlength="80" />
             </label>
+            <p class="field-hint">Nombre del supervisor de ese grupo</p>
           </div>
 
           <button type="submit" class="btn btn-primary btn-block btn-lg">
@@ -186,6 +188,7 @@
           <span class="thanks-ico" data-icon="check"></span>
           <h2>¡Gracias!</h2>
           <p class="thanks-lead">Su registro quedó en el celular y se envía a la base de datos.</p>
+          <p class="thanks-sub">La información queda asegurada para uso interno de la empresa.</p>
           <div class="thanks-meta">
             <span id="thanksDni">—</span>
             <span id="thanksNombre">—</span>
