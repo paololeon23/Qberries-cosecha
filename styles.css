@@ -1745,7 +1745,7 @@ img {
 .thanks-retry {
   appearance: none;
   -webkit-appearance: none;
-  margin: 6px 0 0;
+  margin: 4px 0 0;
   padding: 4px 8px;
   border: 0;
   background: transparent;
@@ -1759,14 +1759,6 @@ img {
   text-decoration: underline;
   text-underline-offset: 2px;
   cursor: pointer;
-}
-.thanks-retry span {
-  display: block;
-  margin-top: 2px;
-  font-size: 0.68rem;
-  font-weight: 500;
-  color: #9aa8b5;
-  text-decoration: none;
 }
 @keyframes thanks-sheet-up {
   from {

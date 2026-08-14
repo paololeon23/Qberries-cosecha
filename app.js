@@ -1289,6 +1289,10 @@
     if ($("#thanksDni")) $("#thanksDni").textContent = dni ? `DNI ${dni}` : "—";
     if ($("#thanksNombre")) $("#thanksNombre").textContent = nombre || "—";
     if ($("#vinHeroDni")) $("#vinHeroDni").textContent = dni ? `DNI ${dni}` : "";
+    // Si el DNI ya estaba vinculado, mostrar aviso de una vez
+    if (dni && vinculoDoneMap()[dni] && !needsVinculo({ dni, nombre })) {
+      setThanksSyncStatus("Ya se tiene este DNI registrado", "is-ok");
+    }
     hydrateIcons(screen);
     updateNetworkUI();
   }
@@ -2830,7 +2834,7 @@
 
       if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
         try {
-          const reg = await navigator.serviceWorker.register("./sw.js?v=82");
+          const reg = await navigator.serviceWorker.register("./sw.js?v=83");
           reg.update?.().catch(() => {});
         } catch {
           /* ignore */
