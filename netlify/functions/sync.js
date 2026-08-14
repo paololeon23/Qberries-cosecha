@@ -1,8 +1,8 @@
 /**
  * Proxy seguro a Google Apps Script · Supervisores (vínculos).
- * Env Netlify: APPS_SCRIPT_URL + API_TOKEN (+ LOGIN_PIN opcional).
+ * Env Netlify: APPS_SCRIPT_URL + API_TOKEN
  * POST { action, data|payload, pin }
- * Envía solo campos precisos al Sheet.
+ * El celular hace POST a esta function; esta function hace GET a Apps Script (más rápido).
  */
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -51,47 +51,68 @@ function sanitizeVinculo(raw) {
   };
 }
 
-exports.handler = async (event) => {
+function json(statusCode, payload) {
+  return {
+    statusCode,
+    headers: cors,
+    body: JSON.stringify(payload),
+  };
+}
+
+async function callAppsScript(scriptUrl, params) {
+  const u = new URL(String(scriptUrl).split("?")[0]);
+  Object.entries(params || {}).forEach(([k, v]) => {
+    if (v == null || v === "") return;
+    u.searchParams.set(k, String(v));
+  });
+  const res = await fetch(u.toString(), {
+    method: "GET",
+    redirect: "follow",
+    headers: { Accept: "application/json, text/javascript, */*" },
+  });
+  const text = await res.text();
+  let parsed = null;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    const m = String(text || "").match(/\{[\s\S]*\}/);
+    if (m) {
+      try {
+        parsed = JSON.parse(m[0]);
+      } catch {
+        parsed = null;
+      }
+    }
+  }
+  return { res, text, parsed };
+}
+
+export async function handler(event) {
   if (event.httpMethod === "OPTIONS") {
     return { statusCode: 204, headers: cors, body: "" };
   }
   if (event.httpMethod !== "POST") {
-    return {
-      statusCode: 405,
-      headers: cors,
-      body: JSON.stringify({ ok: false, error: "Method not allowed" }),
-    };
+    return json(405, { ok: false, error: "Method not allowed" });
   }
 
   const scriptUrl = String(process.env.APPS_SCRIPT_URL || "").trim();
   const apiToken = String(process.env.API_TOKEN || "").trim();
-  // loginPin no se usa aquí: seguridad = API_TOKEN
   void process.env.LOGIN_PIN;
 
   if (!scriptUrl || !apiToken) {
-    return {
-      statusCode: 500,
-      headers: cors,
-      body: JSON.stringify({
-        ok: false,
-        error: "APPS_SCRIPT_URL o API_TOKEN no configurados en Netlify",
-      }),
-    };
+    return json(500, {
+      ok: false,
+      error: "APPS_SCRIPT_URL o API_TOKEN no configurados en Netlify",
+    });
   }
 
   let body;
   try {
     body = JSON.parse(event.body || "{}");
   } catch {
-    return {
-      statusCode: 400,
-      headers: cors,
-      body: JSON.stringify({ ok: false, error: "JSON inválido" }),
-    };
+    return json(400, { ok: false, error: "JSON inválido" });
   }
 
-  // Seguridad = API_TOKEN hacia Apps Script.
-  // LOGIN_PIN solo aplica al login (si lo activan); no bloquear sync por PIN del cliente.
   const action = String(body.action || "registrarVinculo").trim();
   const rawData = body.data ?? body.payload ?? body;
   const data =
@@ -99,100 +120,66 @@ exports.handler = async (event) => {
 
   if (action === "registrarVinculo") {
     if (!data.dni || data.dni.length < 8) {
-      return {
-        statusCode: 400,
-        headers: cors,
-        body: JSON.stringify({ ok: false, error: "DNI inválido" }),
-      };
+      return json(400, { ok: false, error: "DNI inválido" });
     }
     if (!/^9\d{8}$/.test(data.celular)) {
-      return {
-        statusCode: 400,
-        headers: cors,
-        body: JSON.stringify({
-          ok: false,
-          error: "Celular inválido: 9 dígitos comenzando con 9",
-        }),
-      };
+      return json(400, {
+        ok: false,
+        error: "Celular inválido: 9 dígitos comenzando con 9",
+      });
     }
     if (!data.supervisorGlobal || data.supervisorGlobal.length < 3) {
-      return {
-        statusCode: 400,
-        headers: cors,
-        body: JSON.stringify({
-          ok: false,
-          error: "Falta nombre del supervisor global",
-        }),
-      };
+      return json(400, {
+        ok: false,
+        error: "Falta nombre del supervisor global",
+      });
     }
     if (!/^GRUPO LIC ([0-5][0-9]|60)$/.test(String(data.grupoLic || ""))) {
-      return {
-        statusCode: 400,
-        headers: cors,
-        body: JSON.stringify({
-          ok: false,
-          error: "Grupo LIC inválido (01 al 60)",
-        }),
-      };
+      return json(400, { ok: false, error: "Grupo LIC inválido (01 al 60)" });
     }
     if (!/^GRUPO ([0-5][0-9]|60)$/.test(String(data.grupo || ""))) {
-      return {
-        statusCode: 400,
-        headers: cors,
-        body: JSON.stringify({
-          ok: false,
-          error: "Grupo inválido (01 al 60)",
-        }),
-      };
+      return json(400, { ok: false, error: "Grupo inválido (01 al 60)" });
     }
   }
 
-  const outbound = {
-    source: "supervisores",
-    action,
-    token: apiToken,
-    data,
-    payload: data,
-    at: new Date().toISOString(),
-  };
+  const params =
+    action === "registrarVinculo"
+      ? {
+          action: "registrarVinculo",
+          token: apiToken,
+          dni: data.dni,
+          nombre: data.nombre,
+          celular: data.celular,
+          grupo: data.grupo,
+          grupoLic: data.grupoLic,
+          supervisorGlobal: data.supervisorGlobal,
+          dniSesion: data.dniSesion,
+          horaRegistro: data.horaRegistro || data.hora,
+          hora: data.hora || data.horaRegistro,
+        }
+      : { action, token: apiToken };
 
   try {
-    const res = await fetch(scriptUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiToken}`,
-        "X-Api-Token": apiToken,
-      },
-      body: JSON.stringify(outbound),
-    });
-
-    const text = await res.text();
-    let parsed;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      parsed = { raw: text };
-    }
-
-    const ok = res.ok && parsed && parsed.ok !== false;
-    return {
-      statusCode: ok ? 200 : 502,
-      headers: cors,
-      body: JSON.stringify({
-        ok,
-        status: res.status,
-        data: parsed,
-      }),
-    };
-  } catch (err) {
-    return {
-      statusCode: 502,
-      headers: cors,
-      body: JSON.stringify({
+    const { res, text, parsed } = await callAppsScript(scriptUrl, params);
+    const ok = !!(parsed && parsed.ok === true);
+    if (!ok) {
+      return json(502, {
         ok: false,
-        error: err.message || "Error al llamar Apps Script",
-      }),
-    };
+        status: res.status,
+        error:
+          parsed?.message ||
+          parsed?.error ||
+          (String(text || "").includes("<html")
+            ? "Apps Script no respondió JSON. Implemente como aplicación web (Cualquier persona)."
+            : "Error al guardar"),
+        data: parsed || { raw: String(text || "").slice(0, 180) },
+      });
+    }
+    return json(200, { ok: true, status: res.status, data: parsed });
+  } catch (err) {
+    return json(502, {
+      ok: false,
+      error: err.message || "Error al llamar Apps Script",
+    });
   }
-};
+}

@@ -107,7 +107,7 @@ async function callScript(url, token, action) {
   throw new Error(lastErr || "No se pudo leer trabajadores");
 }
 
-exports.handler = async (event) => {
+export async function handler(event) {
   if (event.httpMethod === "OPTIONS") {
     return { statusCode: 204, headers: cors, body: "" };
   }

@@ -9,7 +9,7 @@ const cors = {
   "Content-Type": "application/json",
 };
 
-exports.handler = async (event) => {
+export async function handler(event) {
   if (event.httpMethod === "OPTIONS") {
     return { statusCode: 204, headers: cors, body: "" };
   }

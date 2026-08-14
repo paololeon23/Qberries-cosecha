@@ -1076,11 +1076,10 @@
           break;
         }
         const json = await res.json().catch(() => ({}));
+        const nested = json && typeof json.data === "object" ? json.data : null;
         const ok =
           res.ok &&
-          (json.ok === true ||
-            json?.data?.ok === true ||
-            (json.api === "supervisores" && json.data && json.ok !== false));
+          (json.ok === true || nested?.ok === true);
         if (ok) {
           markVinculoDone(
             data.dni,
@@ -1092,12 +1091,15 @@
           sent += 1;
         } else {
           lastError =
-            json?.message ||
-            json?.data?.message ||
             json?.error ||
-            json?.data?.error ||
+            nested?.message ||
+            nested?.error ||
+            json?.message ||
             "Error al guardar";
-          if (json?.code === "UNAUTHORIZED") {
+          if (
+            json?.code === "UNAUTHORIZED" ||
+            nested?.code === "UNAUTHORIZED"
+          ) {
             lastError = "UNAUTHORIZED · revise API_TOKEN en Netlify";
           }
           remain.push({
@@ -1133,8 +1135,7 @@
     }
     const form = $("#vinculoForm");
     const thanks = $("#vinculoThanks");
-    // Formulario queda detrás (difuminado); la card sube encima
-    if (form) form.hidden = false;
+    if (form) form.hidden = true;
     if (thanks) thanks.hidden = false;
     const dni = identity?.dni || state.identity?.dni || "";
     const nombre = identity?.nombre || state.identity?.nombre || "";
@@ -2229,6 +2230,41 @@
   }
 
   function bind() {
+    const lockOverscroll = (e) => {
+      const thanks = $("#vinculoScreen")?.classList.contains("is-thanks");
+      if (thanks) {
+        e.preventDefault();
+        return;
+      }
+      const scroller = e.target?.closest?.(
+        "#vinculoScreen, .session-screen, .security-screen, .app-scroll, .picker-body"
+      );
+      if (!scroller) {
+        e.preventDefault();
+        return;
+      }
+      const atTop = scroller.scrollTop <= 0;
+      const atBottom =
+        scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 1;
+      const dy =
+        e.type === "wheel"
+          ? e.deltaY
+          : e.touches && e.touches[0]
+            ? -(e.touches[0].clientY - (scroller._touchY || e.touches[0].clientY))
+            : 0;
+      if ((atTop && dy < 0) || (atBottom && dy > 0)) e.preventDefault();
+    };
+    document.addEventListener("wheel", lockOverscroll, { passive: false });
+    document.addEventListener(
+      "touchmove",
+      (e) => {
+        if ($("#vinculoScreen")?.classList.contains("is-thanks")) {
+          e.preventDefault();
+        }
+      },
+      { passive: false }
+    );
+
     on("#cards", "click", onCardsClick);
     on("#cards", "input", onCardsInput);
     on("#cards", "change", onCardsInput);
@@ -2582,7 +2618,7 @@
 
       if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
         try {
-          await navigator.serviceWorker.register("./sw.js?v=66");
+          await navigator.serviceWorker.register("./sw.js?v=69");
         } catch {
           /* ignore */
         }
