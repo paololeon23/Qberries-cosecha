@@ -1,4 +1,4 @@
-const CACHE = "qb-supervisores-v79";
+const CACHE = "qb-supervisores-v80";
 const ASSETS = [
   "./",
   "./index.html",
@@ -23,9 +23,7 @@ const ASSETS = [
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE).then(async (cache) => {
-      await Promise.all(
-        ASSETS.map((url) => cache.add(url).catch(() => null))
-      );
+      await Promise.all(ASSETS.map((url) => cache.add(url).catch(() => null)));
       await self.skipWaiting();
     })
   );
@@ -51,6 +49,18 @@ function isApi(url) {
   );
 }
 
+function isAppShell(url) {
+  const p = url.pathname;
+  return (
+    p.endsWith("/") ||
+    p.endsWith("/index.html") ||
+    p.endsWith("/app.js") ||
+    p.endsWith("/styles.css") ||
+    p.endsWith("/icons.js") ||
+    p.endsWith("/sw.js")
+  );
+}
+
 self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
@@ -70,7 +80,23 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // App shell: caché primero (funciona sin internet)
+  // HTML / JS / CSS: red primero (evita pantalla en blanco con versión vieja)
+  if (req.mode === "navigate" || isAppShell(url)) {
+    event.respondWith(
+      fetch(req)
+        .then((res) => {
+          if (res && res.ok && url.origin === self.location.origin) {
+            const copy = res.clone();
+            caches.open(CACHE).then((cache) => cache.put(req, copy));
+          }
+          return res;
+        })
+        .catch(() => caches.match(req, { ignoreSearch: true }))
+    );
+    return;
+  }
+
+  // Resto: caché primero (offline)
   event.respondWith(
     caches.match(req, { ignoreSearch: true }).then((cached) => {
       const fetching = fetch(req)
@@ -82,7 +108,6 @@ self.addEventListener("fetch", (event) => {
           return res;
         })
         .catch(() => cached);
-
       return cached || fetching;
     })
   );

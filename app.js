@@ -2707,9 +2707,7 @@
 
   async function init() {
     try {
-      hideAllScreens();
       ensureSessionGate();
-
       hydrateIcons();
       closePicker();
       closeModal();
@@ -2723,9 +2721,25 @@
         jabas: g.jabas ?? "",
       }));
 
-      // No bloquear arranque por la nube (funciona sin internet)
+      // Pantalla YA (no dejar blanco mientras carga datos)
+      restoreIdentityFromVinculo_();
+      ensureSessionGate();
+      updateNetworkUI();
+      if (PASSWORD_REQUIRED && !isUnlocked()) {
+        hideAllScreens();
+        $("#lockScreen").hidden = false;
+      } else if (hasQrLogin()) {
+        showMainFlow();
+      } else {
+        showSecurityLogin("");
+      }
+
+      bind();
+      setInterval(updateClock, 30000);
+
+      // Datos en segundo plano (no bloquean UI)
       if (navigator.onLine) {
-        detectNetlify().catch(() => {
+        detectNetlify(2500).catch(() => {
           state.netlifyReady = false;
           state.cloudApi = false;
         });
@@ -2733,17 +2747,21 @@
         state.netlifyReady = false;
         state.cloudApi = false;
       }
-      await loadSupervisores();
+
+      loadSupervisores()
+        .then(() => {
+          const el = $("#trabCount");
+          if (el && !SESSION_FORM_ENABLED) {
+            el.textContent = "Listo para escanear · solo Supervisores de Cosecha";
+          }
+          updateNetworkUI();
+        })
+        .catch(() => {});
+
       if (SESSION_FORM_ENABLED) {
-        await loadPersonas();
-        await loadCatalogs();
-      } else {
-        const el = $("#trabCount");
-        if (el) el.textContent = "Listo para escanear · solo Supervisores de Cosecha";
+        loadPersonas().catch(() => {});
+        loadCatalogs().catch(() => {});
       }
-      bind();
-      updateNetworkUI();
-      setInterval(updateClock, 30000);
 
       window.addEventListener("online", () => {
         state.online = true;
@@ -2776,7 +2794,6 @@
         toast("Sin internet · se guarda en el celular");
       });
 
-      // Reintento rápido de pendientes
       setInterval(() => {
         if (!navigator.onLine) return;
         if (!loadVinculoQueue().length) return;
@@ -2785,36 +2802,42 @@
           .catch(() => {});
       }, 8000);
 
-      // Refresh: no saltar a seguridad si ya hay sesión / vínculo
-      restoreIdentityFromVinculo_();
-      ensureSessionGate();
-
-      if (PASSWORD_REQUIRED && !isUnlocked()) {
-        hideAllScreens();
-        $("#lockScreen").hidden = false;
-        setTimeout(() => $("#loginPass")?.focus(), 80);
-      } else if (hasQrLogin()) {
-        showMainFlow();
-      } else {
-        showSecurityLogin("");
-      }
-
-      // Subir pendientes solo si hay API Netlify
       if (canUseCloudApi()) {
         flushVinculoQueue().catch(() => {});
       }
 
+      // Failsafe: si todo quedó oculto, mostrar escáner
+      setTimeout(() => {
+        const visible = [
+          "#securityScreen",
+          "#vinculoScreen",
+          "#sessionScreen",
+          "#appRoot",
+          "#lockScreen",
+        ].some((sel) => {
+          const el = $(sel);
+          return el && !el.hidden;
+        });
+        if (!visible) showSecurityLogin("");
+      }, 1200);
+
       if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
         try {
-          await navigator.serviceWorker.register("./sw.js?v=79");
+          const reg = await navigator.serviceWorker.register("./sw.js?v=80");
+          reg.update?.().catch(() => {});
+          navigator.serviceWorker.addEventListener("controllerchange", () => {
+            if (window.__qbSwReloaded) return;
+            window.__qbSwReloaded = true;
+            location.reload();
+          });
         } catch {
           /* ignore */
         }
       }
     } catch (err) {
+      showSecurityLogin("");
       const msg = $("#secMsg") || $("#pinMsg");
       if (msg) msg.textContent = "Error al iniciar. Ctrl+F5 para recargar.";
-      alert("Error al iniciar. Recargue con Ctrl+F5.\n" + (err && err.message ? err.message : err));
     }
   }
 
