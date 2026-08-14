@@ -1301,6 +1301,15 @@
   }
 
   function showVinculoThanks(identity, opts = {}) {
+    // Cierra teclado: evita que la card quede “subida” con hueco abajo (iOS)
+    try {
+      const ae = document.activeElement;
+      if (ae && typeof ae.blur === "function") ae.blur();
+    } catch {
+      /* ignore */
+    }
+    window.scrollTo(0, 0);
+
     stopCamera();
     hideAllScreens();
     const screen = $("#vinculoScreen");
@@ -1311,7 +1320,11 @@
     const form = $("#vinculoForm");
     const thanks = $("#vinculoThanks");
     if (form) form.hidden = false;
-    if (thanks) thanks.hidden = false;
+    if (thanks) {
+      thanks.hidden = false;
+      thanks.style.bottom = "0";
+      thanks.style.transform = "translate3d(0,0,0)";
+    }
     const dni = identity?.dni || state.identity?.dni || "";
     const nombre = identity?.nombre || state.identity?.nombre || "";
     if ($("#thanksDni")) $("#thanksDni").textContent = dni ? `DNI ${dni}` : "—";
@@ -1328,6 +1341,18 @@
     }
     hydrateIcons(screen);
     updateNetworkUI();
+
+    const pinThanks_ = () => {
+      window.scrollTo(0, 0);
+      const card = $("#vinculoThanks");
+      if (!card || card.hidden) return;
+      card.style.bottom = "0";
+      card.style.top = "auto";
+      card.style.transform = "translate3d(0,0,0)";
+    };
+    requestAnimationFrame(pinThanks_);
+    setTimeout(pinThanks_, 120);
+    setTimeout(pinThanks_, 400);
   }
 
   function showVinculoScreen(identity) {
@@ -2430,7 +2455,7 @@
   function bind() {
     const scrollParent_ = (el) =>
       el?.closest?.(
-        "#vinculoScreen, .session-screen, .security-screen, .app-scroll, .picker-body"
+        ".picker-list, #vinculoScreen:not(.is-thanks), .session-screen, .security-screen, .app-scroll"
       );
 
     document.addEventListener(
@@ -2443,6 +2468,26 @@
     );
 
     const lockOverscroll = (e) => {
+      // El listado del select (Grupo / Grupo LIC) debe poder deslizar
+      const pickerList = e.target?.closest?.(".picker-list");
+      if (pickerList) {
+        const canScroll = pickerList.scrollHeight > pickerList.clientHeight + 1;
+        if (!canScroll) return;
+        const atTop = pickerList.scrollTop <= 0;
+        const atBottom =
+          pickerList.scrollTop + pickerList.clientHeight >=
+          pickerList.scrollHeight - 1;
+        let dy = 0;
+        if (e.type === "wheel") dy = e.deltaY;
+        else if (e.touches && e.touches[0]) {
+          dy =
+            (pickerList._touchY || e.touches[0].clientY) -
+            e.touches[0].clientY;
+        }
+        if ((atTop && dy < 0) || (atBottom && dy > 0)) e.preventDefault();
+        return;
+      }
+
       if ($("#vinculoScreen")?.classList.contains("is-thanks")) {
         e.preventDefault();
         return;
@@ -2461,7 +2506,8 @@
       const atBottom = s.scrollTop + s.clientHeight >= s.scrollHeight - 1;
       let dy = 0;
       if (e.type === "wheel") dy = e.deltaY;
-      else if (e.touches && e.touches[0]) dy = (s._touchY || e.touches[0].clientY) - e.touches[0].clientY;
+      else if (e.touches && e.touches[0])
+        dy = (s._touchY || e.touches[0].clientY) - e.touches[0].clientY;
       if ((atTop && dy < 0) || (atBottom && dy > 0)) e.preventDefault();
     };
     document.addEventListener("wheel", lockOverscroll, { passive: false });
@@ -2872,7 +2918,7 @@
 
       if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
         try {
-          const reg = await navigator.serviceWorker.register("./sw.js?v=87");
+          const reg = await navigator.serviceWorker.register("./sw.js?v=89");
           reg.update?.().catch(() => {});
         } catch {
           /* ignore */
