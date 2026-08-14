@@ -14,6 +14,10 @@
   const IDENTITY_KEY = "qb-supervisores-identity";
   const IDENTITY_LS_KEY = "qb-supervisores-identity-ls";
   const DEFAULT_PIN = "";
+  /** Contraseña desactivada por ahora: acceso solo con QR */
+  const PASSWORD_REQUIRED = false;
+  /** Por ahora: tras vincular NO pasar a Datos de campo */
+  const SESSION_FORM_ENABLED = false;
   const API = {
     login: "/.netlify/functions/login",
     sync: "/.netlify/functions/sync",
@@ -867,11 +871,6 @@
     if ($("#btnStopCam")) $("#btnStopCam").hidden = true;
     if ($("#btnSecBack")) $("#btnSecBack").hidden = false;
   }
-
-  /** Contraseña desactivada por ahora: acceso solo con QR */
-  const PASSWORD_REQUIRED = false;
-  /** Por ahora: tras vincular NO pasar a Datos de campo */
-  const SESSION_FORM_ENABLED = false;
 
   function ensureSessionGate() {
     sessionStorage.setItem(SESSION_KEY, "1");
@@ -2823,13 +2822,8 @@
 
       if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
         try {
-          const reg = await navigator.serviceWorker.register("./sw.js?v=80");
+          const reg = await navigator.serviceWorker.register("./sw.js?v=81");
           reg.update?.().catch(() => {});
-          navigator.serviceWorker.addEventListener("controllerchange", () => {
-            if (window.__qbSwReloaded) return;
-            window.__qbSwReloaded = true;
-            location.reload();
-          });
         } catch {
           /* ignore */
         }

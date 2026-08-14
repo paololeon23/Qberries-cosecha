@@ -13,12 +13,12 @@
   <link rel="icon" href="assets/favicon.png" type="image/png" sizes="64x64" />
   <link rel="apple-touch-icon" href="assets/icon-192.png" />
   <title>QBerries · Supervisores</title>
-  <link rel="stylesheet" href="styles.css?v=80" />
-  <script src="vendor/xlsx.full.min.js?v=80" defer></script>
-  <script src="vendor/jspdf.umd.min.js?v=80" defer></script>
-  <script src="vendor/jsQR.min.js?v=80" defer></script>
-  <script src="icons.js?v=80" defer></script>
-  <script src="app.js?v=80" defer></script>
+  <link rel="stylesheet" href="styles.css?v=81" />
+  <script src="vendor/xlsx.full.min.js?v=81" defer></script>
+  <script src="vendor/jspdf.umd.min.js?v=81" defer></script>
+  <script src="vendor/jsQR.min.js?v=81" defer></script>
+  <script src="icons.js?v=81" defer></script>
+  <script src="app.js?v=81" defer></script>
 </head>
 <body>
   <div class="stage">
@@ -48,8 +48,8 @@
         <p class="pin-hint" id="pinHint">Escanee su carnet QR para entrar</p>
       </div>
 
-      <!-- Login: solo QR (oculto al cargar → no flash de seguridad en refresh) -->
-      <div class="security-screen" id="securityScreen" hidden>
+      <!-- Login: solo QR (visible al cargar: evita pantalla en blanco) -->
+      <div class="security-screen" id="securityScreen">
         <div class="hero-head">
           <div class="hero-head-left">
             <img class="hero-logo" src="assets/logo-qberries.png" alt="QBerries" />
@@ -75,9 +75,9 @@
           <div class="qr-frame" id="qrFrame">
             <video id="qrVideo" playsinline muted></video>
             <canvas id="qrCanvas" hidden></canvas>
-            <div class="qr-overlay" id="qrOverlay" hidden>
+            <div class="qr-overlay" id="qrOverlay">
               <span data-icon="scan"></span>
-              <p id="qrOverlayText"></p>
+              <p id="qrOverlayText">Toque para activar la cámara</p>
             </div>
           </div>
           <div class="sec-found" id="secFound" hidden>
@@ -454,5 +454,27 @@
       <div class="toast" id="toast" hidden></div>
     </div>
   </div>
+  <script>
+    (function () {
+      function bootUi() {
+        var ids = ["securityScreen", "vinculoScreen", "sessionScreen", "appRoot", "lockScreen"];
+        var any = ids.some(function (id) {
+          var el = document.getElementById(id);
+          return el && !el.hidden;
+        });
+        if (!any) {
+          var sec = document.getElementById("securityScreen");
+          if (sec) sec.hidden = false;
+        }
+      }
+      if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", bootUi);
+      } else {
+        bootUi();
+      }
+      setTimeout(bootUi, 800);
+      setTimeout(bootUi, 2500);
+    })();
+  </script>
 </body>
 </html>
