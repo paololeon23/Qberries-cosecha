@@ -1676,11 +1676,12 @@ img {
   line-height: 1.35;
 }
 
-/* Gracias · formulario completo detrás, desenfocado */
+/* Gracias · formulario completo detrás, desenfocado · sin hueco abajo */
 #vinculoScreen.is-thanks {
   overflow: hidden !important;
   overscroll-behavior: none;
   touch-action: none;
+  padding: 0 !important;
 }
 #vinculoScreen.is-thanks .hero-head,
 #vinculoScreen.is-thanks .id-summary,
@@ -1693,9 +1694,13 @@ img {
   height: auto !important;
   overflow: visible !important;
   max-height: none !important;
+  margin-left: 12px;
+  margin-right: 12px;
+}
+#vinculoScreen.is-thanks .hero-head {
+  margin-top: max(12px, env(safe-area-inset-top, 0px));
 }
 #vinculoScreen.is-thanks .vinculo-form {
-  /* Que se vea el bloque completo detrás (sin cortar a mitad) */
   position: relative;
   z-index: 1;
 }
@@ -1710,18 +1715,19 @@ img {
 }
 .thanks-card {
   position: absolute;
-  left: 12px;
-  right: 12px;
-  bottom: max(12px, calc(10px + var(--safe-b)));
+  left: 0;
+  right: 0;
+  bottom: 0;
   top: auto;
   width: auto;
   max-width: none;
   z-index: 12;
   background: #fff;
-  border-radius: 22px;
-  padding: 18px 14px 14px;
-  border: 1px solid rgba(230, 235, 240, 0.95);
-  box-shadow: 0 12px 32px rgba(7, 24, 36, 0.22);
+  border-radius: 22px 22px 0 0;
+  padding: 18px 16px max(16px, env(safe-area-inset-bottom, 0px));
+  border: none;
+  border-top: 1px solid rgba(230, 235, 240, 0.95);
+  box-shadow: 0 -8px 28px rgba(7, 24, 36, 0.18);
   text-align: center;
   display: flex;
   flex-direction: column;
@@ -1730,10 +1736,12 @@ img {
   animation: thanks-sheet-up 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
   box-sizing: border-box;
   height: auto;
-  max-height: calc(100% - 24px);
-  overflow: hidden;
+  max-height: min(70vh, 520px);
+  overflow: auto;
+  overscroll-behavior: none;
 }
 .thanks-card[hidden] { display: none !important; }
+.thanks-card .btn { display: none !important; }
 @keyframes thanks-sheet-up {
   from {
     opacity: 0.85;
@@ -1803,13 +1811,6 @@ img {
 .thanks-meta span:last-child {
   color: #0b3d66;
   font-size: 0.82rem;
-}
-.thanks-card .btn {
-  margin-top: 4px;
-  min-height: 44px;
-  border-radius: 12px;
-  font-weight: 800;
-  width: 100%;
 }
 .thanks-sync {
   margin: 0;

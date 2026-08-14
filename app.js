@@ -2387,10 +2387,6 @@
     on("#btnVinGrupoLic", "click", () => openPicker("grupoLic"));
     on("#btnVinGrupo", "click", () => openPicker("grupoNum"));
 
-    on("#btnThanksOk", "click", () => {
-      toast("Listo · ya puede cerrar el navegador");
-    });
-
     on("#vinculoForm", "submit", async (e) => {
       e.preventDefault();
       if (!requireQrLogin()) return;
@@ -2712,7 +2708,7 @@
 
       if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
         try {
-          await navigator.serviceWorker.register("./sw.js?v=76");
+          await navigator.serviceWorker.register("./sw.js?v=77");
         } catch {
           /* ignore */
         }
