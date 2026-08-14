@@ -2448,6 +2448,14 @@
       stopCamera();
       lock();
     });
+    on("#btnThanksRescan", "click", () => {
+      stopCamera();
+      const screen = $("#vinculoScreen");
+      if (screen) screen.classList.remove("is-thanks");
+      const thanks = $("#vinculoThanks");
+      if (thanks) thanks.hidden = true;
+      lock();
+    });
     on("#btnStartCam", "click", () => startCamera());
     on("#btnStopCam", "click", stopCamera);
     on("#btnVinGrupoLic", "click", () => openPicker("grupoLic"));
@@ -2822,7 +2830,7 @@
 
       if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
         try {
-          const reg = await navigator.serviceWorker.register("./sw.js?v=81");
+          const reg = await navigator.serviceWorker.register("./sw.js?v=82");
           reg.update?.().catch(() => {});
         } catch {
           /* ignore */
