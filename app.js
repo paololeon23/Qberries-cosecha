@@ -1164,7 +1164,7 @@
     }
     const form = $("#vinculoForm");
     const thanks = $("#vinculoThanks");
-    if (form) form.hidden = true;
+    if (form) form.hidden = false;
     if (thanks) thanks.hidden = false;
     const dni = identity?.dni || state.identity?.dni || "";
     const nombre = identity?.nombre || state.identity?.nombre || "";
@@ -2259,40 +2259,44 @@
   }
 
   function bind() {
-    const lockOverscroll = (e) => {
-      const thanks = $("#vinculoScreen")?.classList.contains("is-thanks");
-      if (thanks) {
-        e.preventDefault();
-        return;
-      }
-      const scroller = e.target?.closest?.(
-        "#vinculoScreen, .session-screen, .security-screen, .app-scroll, .picker-body"
+    const scrollParent_ = (el) =>
+      el?.closest?.(
+        ".vinculo-form, .app-scroll, .picker-body, .session-screen, .security-screen, #vinculoScreen"
       );
-      if (!scroller) {
+
+    document.addEventListener(
+      "touchstart",
+      (e) => {
+        const s = scrollParent_(e.target);
+        if (s && e.touches[0]) s._touchY = e.touches[0].clientY;
+      },
+      { passive: true }
+    );
+
+    const lockOverscroll = (e) => {
+      if ($("#vinculoScreen")?.classList.contains("is-thanks")) {
         e.preventDefault();
         return;
       }
-      const atTop = scroller.scrollTop <= 0;
-      const atBottom =
-        scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 1;
-      const dy =
-        e.type === "wheel"
-          ? e.deltaY
-          : e.touches && e.touches[0]
-            ? -(e.touches[0].clientY - (scroller._touchY || e.touches[0].clientY))
-            : 0;
+      const s = scrollParent_(e.target);
+      if (!s) {
+        e.preventDefault();
+        return;
+      }
+      const canScroll = s.scrollHeight > s.clientHeight + 1;
+      if (!canScroll) {
+        e.preventDefault();
+        return;
+      }
+      const atTop = s.scrollTop <= 0;
+      const atBottom = s.scrollTop + s.clientHeight >= s.scrollHeight - 1;
+      let dy = 0;
+      if (e.type === "wheel") dy = e.deltaY;
+      else if (e.touches && e.touches[0]) dy = (s._touchY || e.touches[0].clientY) - e.touches[0].clientY;
       if ((atTop && dy < 0) || (atBottom && dy > 0)) e.preventDefault();
     };
     document.addEventListener("wheel", lockOverscroll, { passive: false });
-    document.addEventListener(
-      "touchmove",
-      (e) => {
-        if ($("#vinculoScreen")?.classList.contains("is-thanks")) {
-          e.preventDefault();
-        }
-      },
-      { passive: false }
-    );
+    document.addEventListener("touchmove", lockOverscroll, { passive: false });
 
     on("#cards", "click", onCardsClick);
     on("#cards", "input", onCardsInput);
@@ -2647,7 +2651,7 @@
 
       if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
         try {
-          await navigator.serviceWorker.register("./sw.js?v=71");
+          await navigator.serviceWorker.register("./sw.js?v=73");
         } catch {
           /* ignore */
         }

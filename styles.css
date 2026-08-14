@@ -1291,17 +1291,29 @@ img {
   inset: 0;
   z-index: 90;
   background: #f3f7fb;
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 14px 12px 28px;
-  padding-top: max(14px, env(safe-area-inset-top, 0px));
-  padding-bottom: max(28px, calc(20px + var(--safe-b)));
+  overflow: hidden;
+  overscroll-behavior: none;
+  padding: 12px;
+  padding-top: max(12px, env(safe-area-inset-top, 0px));
+  padding-bottom: 12px;
   max-width: 100%;
-  -webkit-overflow-scrolling: touch;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 .security-screen { z-index: 92; }
 #vinculoScreen { z-index: 93; }
+#vinculoScreen .hero-head,
+#vinculoScreen .id-summary {
+  flex-shrink: 0;
+}
+#vinculoScreen .vinculo-form {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: none;
+}
 .sec-ico .ico,
 .hero-head .sec-ico .ico {
   width: 22px;
@@ -1667,27 +1679,29 @@ img {
   line-height: 1.35;
 }
 
-/* Gracias · overlay sólido + card compacta (sin huecos / sin formulario detrás) */
+/* Gracias · formulario detrás, desenfocado */
 #vinculoScreen.is-thanks {
   overflow: hidden !important;
   overscroll-behavior: none;
   touch-action: none;
-  display: block;
-  padding-bottom: max(12px, calc(10px + var(--safe-b)));
+  display: flex;
+  flex-direction: column;
 }
 #vinculoScreen.is-thanks .hero-head,
 #vinculoScreen.is-thanks .id-summary,
 #vinculoScreen.is-thanks .vinculo-form {
-  display: none !important;
+  pointer-events: none;
+  user-select: none;
+  filter: blur(4px);
 }
 #vinculoScreen.is-thanks::before {
   content: "";
   position: absolute;
   inset: 0;
   z-index: 10;
-  background: rgba(10, 24, 40, 0.55);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  background: rgba(12, 28, 44, 0.28);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 .thanks-card {
   position: absolute;
