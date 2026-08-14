@@ -106,6 +106,9 @@
     online: typeof navigator !== "undefined" ? navigator.onLine : true,
     camStream: /** @type {MediaStream|null} */ (null),
     camTimer: 0,
+    lastScanDni: "",
+    lastScanAt: 0,
+    audioCtx: /** @type {AudioContext|null} */ (null),
   };
 
   function hydrateIcons(root = document) {
@@ -970,7 +973,7 @@
     }
     if (!p) {
       $("#secMsg").textContent =
-        "No autorizado · solo Supervisores de Cosecha (COSTO DE COSECHA)";
+        `DNI ${dni} · No autorizado · solo Supervisores de Cosecha (COSTO DE COSECHA)`;
       return null;
     }
     return {
@@ -979,6 +982,34 @@
       cargo: p.cargo || "SUPERVISOR DE COSECHA",
       celular: p.celular || "",
     };
+  }
+
+  /** Beep corto tipo escáner de código de barras */
+  function playScanBeep(ok = true) {
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      if (!state.audioCtx) state.audioCtx = new AC();
+      const ctx = state.audioCtx;
+      if (ctx.state === "suspended") ctx.resume().catch(() => {});
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "square";
+      osc.frequency.setValueAtTime(ok ? 1800 : 420, now);
+      if (ok) {
+        osc.frequency.exponentialRampToValueAtTime(2400, now + 0.06);
+      }
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(0.18, now + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + (ok ? 0.12 : 0.18));
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + (ok ? 0.14 : 0.2));
+    } catch {
+      /* sin audio */
+    }
   }
 
   function vinculoDoneMap() {
@@ -1452,12 +1483,30 @@
     });
     if (!code?.data) return;
     const dni = extractDni(code.data);
+    const now = Date.now();
+    // Evita beep/mensaje en loop mientras el QR sigue en cámara
+    if (
+      dni &&
+      dni === state.lastScanDni &&
+      now - state.lastScanAt < 2500
+    ) {
+      return;
+    }
+    state.lastScanDni = dni || state.lastScanDni;
+    state.lastScanAt = now;
+
     if (!dni) {
+      playScanBeep(false);
       $("#secMsg").textContent = "QR leído · sin DNI válido";
       return;
     }
     const ok = validateSecurityDni(dni);
-    if (!ok) return;
+    if (!ok) {
+      playScanBeep(false);
+      return;
+    }
+    playScanBeep(true);
+    $("#secMsg").textContent = `DNI ${ok.dni} · ${ok.nombre}`;
     const box = $("#secFound");
     if (box) {
       box.hidden = false;
@@ -2834,7 +2883,7 @@
 
       if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
         try {
-          const reg = await navigator.serviceWorker.register("./sw.js?v=83");
+          const reg = await navigator.serviceWorker.register("./sw.js?v=84");
           reg.update?.().catch(() => {});
         } catch {
           /* ignore */
