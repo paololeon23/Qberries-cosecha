@@ -237,7 +237,7 @@
     var lock = LockService.getScriptLock();
     var got = false;
     try {
-      got = lock.tryLock(30000);
+      got = lock.tryLock(8000);
       if (!got) throw new Error('El servidor está ocupado. Intente de nuevo.');
 
       var dni = digits_(d.dni || d.dniTrabajador);
@@ -285,7 +285,8 @@
       var rowIndex = -1;
 
       if (lastRow >= 2) {
-        var colA = sh.getRange(2, 1, lastRow, 1).getValues();
+        var nRows = lastRow - 1;
+        var colA = sh.getRange(2, 1, nRows, 1).getValues();
         for (var i = 0; i < colA.length; i++) {
           if (digits_(colA[i][0]) === dni) {
             rowIndex = i + 2;
@@ -294,26 +295,19 @@
         }
       }
 
-      // DNI | NOMBRE | CELULAR | GRUPO LIC | GRUPO | SUPERVISOR | DNI SESION | HORA
       var row = [dni, nombre, celular, grupoLic, grupo, supervisorGlobal, dniSesion, hora];
 
       if (rowIndex > 0) {
-        var prev = sh.getRange(rowIndex, 1, 1, HEADERS.length).getValues()[0] || [];
-        if (!nombre && clean_(prev[1])) row[1] = clean_(prev[1]).toUpperCase();
-        if (!grupoLic && clean_(prev[3])) row[3] = clean_(prev[3]).toUpperCase();
-        if (!grupo && clean_(prev[4])) row[4] = clean_(prev[4]).toUpperCase();
-        if (!supervisorGlobal && clean_(prev[5])) row[5] = clean_(prev[5]).toUpperCase();
-        if (!dniSesion && digits_(prev[6])) row[6] = digits_(prev[6]);
         sh.getRange(rowIndex, 1, 1, HEADERS.length).setValues([row]);
         return {
           dni: dni,
-          nombre: row[1],
-          celular: row[2],
-          grupoLic: row[3],
-          grupo: row[4],
-          supervisorGlobal: row[5],
-          dniSesion: row[6],
-          hora: row[7],
+          nombre: nombre,
+          celular: celular,
+          grupoLic: grupoLic,
+          grupo: grupo,
+          supervisorGlobal: supervisorGlobal,
+          dniSesion: dniSesion,
+          hora: hora,
           updated: true,
           created: false,
           syncStatus: 'synced'
@@ -408,7 +402,10 @@
 
   /* -------------------- Sheet helpers -------------------- */
 
+  var _shCache = null;
+
   function sheet_() {
+    if (_shCache) return _shCache;
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     if (!ss) throw new Error('No hay spreadsheet activo. Abre DATA-SUPERVISORES.');
 
@@ -416,19 +413,22 @@
     if (!sh) sh = ss.getSheets()[0];
     if (!sh) sh = ss.insertSheet(SHEET_NAME);
     ensureHeaders_(sh);
+    _shCache = sh;
     return sh;
   }
 
   function ensureHeaders_(sh) {
-    var lastRow = sh.getLastRow();
     var lastCol = sh.getLastColumn();
+    var first = String(sh.getRange(1, 1).getValue() || '')
+      .trim()
+      .toUpperCase();
+    if (first === 'DNI' && lastCol >= HEADERS.length) return;
+
+    var lastRow = sh.getLastRow();
     if (lastRow === 0 || lastCol === 0) {
       writeHeaders_(sh);
       return;
     }
-    var first = String(sh.getRange(1, 1).getValue() || '')
-      .trim()
-      .toUpperCase();
     if (first !== 'DNI') {
       if (lastRow <= 1) {
         sh.clear();
