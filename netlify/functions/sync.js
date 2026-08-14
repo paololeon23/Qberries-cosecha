@@ -183,9 +183,32 @@ export async function handler(event) {
           horaRegistro: data.horaRegistro || data.hora,
           hora: data.hora || data.horaRegistro,
         }
-      : { action, token: apiToken };
+      : action === "existeVinculo"
+        ? {
+            action: "existeVinculo",
+            token: apiToken,
+            dni: digits(rawData?.dni || data?.dni),
+          }
+        : { action, token: apiToken };
 
   try {
+    // 1) ¿El DNI ya existe en el Sheet?
+    let alreadyRegistered = false;
+    if (action === "registrarVinculo" && data.dni) {
+      try {
+        const check = await callAppsScript(scriptUrl, {
+          action: "existeVinculo",
+          token: apiToken,
+          dni: data.dni,
+        });
+        if (check.parsed && check.parsed.ok === true && check.parsed.exists === true) {
+          alreadyRegistered = true;
+        }
+      } catch {
+        /* si falla el check, igual intentamos guardar */
+      }
+    }
+
     const { res, text, parsed } = await callAppsScript(scriptUrl, params);
     const ok = !!(parsed && parsed.ok === true);
     if (!ok) {
@@ -201,7 +224,29 @@ export async function handler(event) {
         data: parsed || { raw: String(text || "").slice(0, 180) },
       });
     }
-    return json(200, { ok: true, status: res.status, data: parsed });
+
+    alreadyRegistered = !!(
+      alreadyRegistered ||
+      parsed.alreadyRegistered ||
+      parsed.updated ||
+      parsed?.data?.alreadyRegistered ||
+      parsed?.data?.updated
+    );
+    const message = alreadyRegistered
+      ? "Ya se tiene este DNI registrado"
+      : parsed.message ||
+        parsed?.data?.message ||
+        "Fue enviado a la base de datos";
+
+    return json(200, {
+      ok: true,
+      status: res.status,
+      alreadyRegistered,
+      updated: alreadyRegistered || !!(parsed.updated || parsed?.data?.updated),
+      created: !alreadyRegistered && !!(parsed.created || parsed?.data?.created),
+      message,
+      data: parsed,
+    });
   } catch (err) {
     return json(502, {
       ok: false,

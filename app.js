@@ -1112,27 +1112,56 @@
     if (mode) el.classList.add(mode);
   }
 
+  /** Detecta Netlify rápido (timeout corto) y deja lista la API */
+  async function ensureCloudReady_(ms) {
+    if (!navigator.onLine) {
+      state.online = false;
+      state.cloudApi = false;
+      state.netlifyReady = false;
+      return false;
+    }
+    state.online = true;
+    if (state.cloudApi) return true;
+    await detectNetlify(ms || 3500);
+    return canUseCloudApi();
+  }
+
   async function flushVinculoQueue() {
     state.online = navigator.onLine;
     if (!state.online) {
       updateNetworkUI();
-      return { sent: 0, remain: loadVinculoQueue().length, reason: "offline" };
+      return {
+        sent: 0,
+        remain: loadVinculoQueue().length,
+        reason: "offline",
+        alreadyRegistered: false,
+      };
     }
     if (!canUseCloudApi()) {
-      updateNetworkUI();
-      return { sent: 0, remain: loadVinculoQueue().length, reason: "no-api" };
+      const ready = await ensureCloudReady_(3000);
+      if (!ready) {
+        updateNetworkUI();
+        return {
+          sent: 0,
+          remain: loadVinculoQueue().length,
+          reason: "no-api",
+          alreadyRegistered: false,
+        };
+      }
     }
     ensureSessionGate();
     const q = loadVinculoQueue();
     if (!q.length) {
       updateNetworkUI();
-      return { sent: 0, remain: 0, reason: "empty" };
+      return { sent: 0, remain: 0, reason: "empty", alreadyRegistered: false };
     }
     updateNetworkUI();
     const pin = sessionPin() || getPin();
     const remain = [];
     let sent = 0;
     let lastError = "";
+    let alreadyRegistered = false;
+    let lastMessage = "";
     for (let i = 0; i < q.length; i++) {
       const item = q[i];
       const data = buildVinculoPayload(item);
@@ -1167,10 +1196,29 @@
         }
         const json = await res.json().catch(() => ({}));
         const nested = json && typeof json.data === "object" ? json.data : null;
-        const ok =
-          res.ok &&
-          (json.ok === true || nested?.ok === true);
+        const nestedData =
+          nested && typeof nested.data === "object" ? nested.data : nested;
+        const ok = res.ok && (json.ok === true || nested?.ok === true);
         if (ok) {
+          const msg = String(
+            json.message ||
+              nested?.message ||
+              nestedData?.message ||
+              ""
+          );
+          const wasRegistered = !!(
+            json.alreadyRegistered === true ||
+            json.updated === true ||
+            nested?.alreadyRegistered === true ||
+            nested?.updated === true ||
+            nestedData?.alreadyRegistered === true ||
+            nestedData?.updated === true ||
+            /ya se tiene este dni registrado/i.test(msg)
+          );
+          if (wasRegistered) alreadyRegistered = true;
+          lastMessage = wasRegistered
+            ? "Ya se tiene este DNI registrado"
+            : msg || "Fue enviado a la base de datos";
           markVinculoDone(
             data.dni,
             data.celular,
@@ -1208,11 +1256,21 @@
     saveVinculoQueue(remain);
     updateNetworkUI();
     if (sent > 0 && remain.length === 0) {
-      toast("Enviado");
+      toast(
+        alreadyRegistered
+          ? "Ya se tiene este DNI registrado"
+          : "Enviado"
+      );
     } else if (sent > 0 && remain.length) {
       toast(`Enviado parcial · ${remain.length} pendiente(s)`);
     }
-    return { sent, remain: remain.length, reason: lastError || "ok" };
+    return {
+      sent,
+      remain: remain.length,
+      reason: lastError || "ok",
+      alreadyRegistered,
+      message: lastMessage,
+    };
   }
 
   function showVinculoThanks(identity) {
@@ -2189,23 +2247,28 @@
     return { ok: res.ok && data.ok === true, error: data.error };
   }
 
-  async function detectNetlify() {
+  async function detectNetlify(timeoutMs) {
     if (!navigator.onLine) {
       state.netlifyReady = false;
       state.cloudApi = false;
-      return;
+      return false;
     }
 
+    const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timer = ctrl
+      ? setTimeout(() => ctrl.abort(), Math.max(1200, timeoutMs || 3500))
+      : 0;
     try {
       const res = await fetch(API.sync, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "ping", pin: sessionPin() || "" }),
+        signal: ctrl ? ctrl.signal : undefined,
       });
       if (res.status === 405) {
         state.netlifyReady = false;
         state.cloudApi = false;
-        return;
+        return false;
       }
       state.netlifyReady =
         res.status === 200 || res.status === 401 || res.status === 500 || res.status === 502;
@@ -2213,9 +2276,13 @@
       if (res.status === 200) {
         await res.json().catch(() => ({}));
       }
+      return !!state.cloudApi;
     } catch {
       state.netlifyReady = false;
       state.cloudApi = false;
+      return false;
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 
@@ -2454,21 +2521,30 @@
         return;
       }
 
-      if (!canUseCloudApi()) {
-        toast("Guardado · pendiente de subir");
-        setThanksSyncStatus(
-          "Guardado en el celular · pendiente de subir",
-          "is-pending"
-        );
-        return;
-      }
-
-      setThanksSyncStatus("Enviando…", "is-pending");
-      flushVinculoQueue()
-        .then((result) => {
+      setThanksSyncStatus("Detectando internet · enviando…", "is-pending");
+      (async () => {
+        const ready = await ensureCloudReady_(2500);
+        if (!ready) {
+          toast("Guardado · pendiente de subir");
+          setThanksSyncStatus(
+            "Guardado en el celular · pendiente de subir",
+            "is-pending"
+          );
+          return;
+        }
+        setThanksSyncStatus("Enviando…", "is-pending");
+        try {
+          const result = await flushVinculoQueue();
           if (result.sent > 0 && result.remain === 0) {
-            setThanksSyncStatus("Fue enviado a la base de datos", "is-ok");
-            toast("Enviado");
+            const already =
+              result.alreadyRegistered ||
+              /ya se tiene este dni registrado/i.test(String(result.message || ""));
+            setThanksSyncStatus(
+              already
+                ? "Ya se tiene este DNI registrado"
+                : "Fue enviado a la base de datos",
+              "is-ok"
+            );
           } else if (!navigator.onLine) {
             setThanksSyncStatus(
               "Sin internet · se subirá al reconectar",
@@ -2483,13 +2559,13 @@
             );
             toast("No se pudo subir · reintente");
           }
-        })
-        .catch(() => {
+        } catch {
           setThanksSyncStatus(
             "Guardado local · se reintentará",
             "is-pending"
           );
-        });
+        }
+      })();
       return;
     });
 
@@ -2672,20 +2748,42 @@
       window.addEventListener("online", () => {
         state.online = true;
         updateNetworkUI();
-        toast("Internet recuperado · subiendo pendientes…");
-        detectNetlify()
-          .then(() => flushVinculoQueue())
+        toast("Internet recuperado · subiendo…");
+        ensureCloudReady_(2000)
+          .then((ok) => (ok ? flushVinculoQueue() : null))
+          .then((result) => {
+            if (!result || result.sent <= 0) return;
+            if (result.alreadyRegistered) {
+              setThanksSyncStatus(
+                result.message || "Ya se tiene este DNI registrado",
+                "is-ok"
+              );
+            } else if (result.remain === 0) {
+              setThanksSyncStatus("Fue enviado a la base de datos", "is-ok");
+            }
+          })
           .catch(() => {});
       });
       document.addEventListener("visibilitychange", () => {
         if (document.hidden || !navigator.onLine) return;
-        if (canUseCloudApi()) flushVinculoQueue().catch(() => {});
+        ensureCloudReady_(2000)
+          .then((ok) => (ok ? flushVinculoQueue() : null))
+          .catch(() => {});
       });
       window.addEventListener("offline", () => {
         state.online = false;
         updateNetworkUI();
         toast("Sin internet · se guarda en el celular");
       });
+
+      // Reintento rápido de pendientes
+      setInterval(() => {
+        if (!navigator.onLine) return;
+        if (!loadVinculoQueue().length) return;
+        ensureCloudReady_(2000)
+          .then((ok) => (ok ? flushVinculoQueue() : null))
+          .catch(() => {});
+      }, 8000);
 
       // Refresh: no saltar a seguridad si ya hay sesión / vínculo
       restoreIdentityFromVinculo_();
@@ -2708,7 +2806,7 @@
 
       if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
         try {
-          await navigator.serviceWorker.register("./sw.js?v=77");
+          await navigator.serviceWorker.register("./sw.js?v=79");
         } catch {
           /* ignore */
         }
