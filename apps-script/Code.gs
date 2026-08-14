@@ -252,19 +252,29 @@
 
       var nombre = clean_(d.nombre || d.name).toUpperCase();
 
-      var gLicNum = clean_(d.grupoLic || '').replace(/\D/g, '');
+      var rawLic = clean_(d.grupoLic || '').toUpperCase();
       var grupoLic = '';
-      if (gLicNum && Number(gLicNum) >= 1 && Number(gLicNum) <= 60) {
-        grupoLic = 'GRUPO LIC ' + ('0' + Number(gLicNum)).slice(-2);
+      if (/NO\s*TENGO/.test(rawLic)) {
+        grupoLic = 'NO TENGO';
+      } else {
+        var gLicNum = rawLic.replace(/\D/g, '');
+        if (gLicNum && Number(gLicNum) >= 1 && Number(gLicNum) <= 60) {
+          grupoLic = 'GRUPO LIC ' + ('0' + Number(gLicNum)).slice(-2);
+        }
       }
-      if (!grupoLic) throw new Error('Falta Grupo LIC (01 al 60)');
+      if (!grupoLic) throw new Error('Falta Grupo LIC (01 al 60 o No tengo)');
 
-      var gNum = clean_(d.grupo || '').replace(/\D/g, '');
+      var rawGrupo = clean_(d.grupo || '').toUpperCase();
       var grupo = '';
-      if (gNum && Number(gNum) >= 1 && Number(gNum) <= 60) {
-        grupo = 'GRUPO ' + ('0' + Number(gNum)).slice(-2);
+      if (/NO\s*TENGO/.test(rawGrupo)) {
+        grupo = 'NO TENGO';
+      } else {
+        var gNum = rawGrupo.replace(/\D/g, '');
+        if (gNum && Number(gNum) >= 1 && Number(gNum) <= 60) {
+          grupo = 'GRUPO ' + ('0' + Number(gNum)).slice(-2);
+        }
       }
-      if (!grupo) throw new Error('Falta Grupo (01 al 60)');
+      if (!grupo) throw new Error('Falta Grupo (01 al 60 o No tengo)');
 
       var supervisorGlobal = clean_(
         d.supervisorGlobal || d.nombreSupervisorGlobal || d.encargado || ''

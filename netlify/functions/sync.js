@@ -28,20 +28,42 @@ function padGrupo_(n) {
   return String(num).padStart(2, "0");
 }
 
+function isNoTengo(v) {
+  return /NO\s*TENGO/i.test(String(v || "").trim());
+}
+
+function normGrupoLic(v) {
+  if (isNoTengo(v)) return "NO TENGO";
+  const n = padGrupo_(v);
+  return n ? `GRUPO LIC ${n}` : "";
+}
+
+function normGrupoNum(v) {
+  if (isNoTengo(v)) return "NO TENGO";
+  const n = padGrupo_(v);
+  return n ? `GRUPO ${n}` : "";
+}
+
+function isValidGrupoLic(v) {
+  return v === "NO TENGO" || /^GRUPO LIC ([0-5][0-9]|60)$/.test(v);
+}
+
+function isValidGrupoNum(v) {
+  return v === "NO TENGO" || /^GRUPO ([0-5][0-9]|60)$/.test(v);
+}
+
 /** Solo lo que va al Sheet DATA-SUPERVISORES */
 function sanitizeVinculo(raw) {
   const src = raw && typeof raw === "object" ? raw : {};
   const dni = digits(src.dni);
   const celular = digits(src.celular || src.telefono);
   const dniSesion = digits(src.dniSesion || src.dniInicioSesion || dni) || dni;
-  const licN = padGrupo_(src.grupoLic);
-  const gN = padGrupo_(src.grupo);
   return {
     dni,
     nombre: cleanText(src.nombre || src.name),
     celular,
-    grupoLic: licN ? `GRUPO LIC ${licN}` : "",
-    grupo: gN ? `GRUPO ${gN}` : "",
+    grupoLic: normGrupoLic(src.grupoLic),
+    grupo: normGrupoNum(src.grupo),
     supervisorGlobal: cleanText(
       src.supervisorGlobal || src.nombreSupervisorGlobal || src.encargado
     ),
@@ -134,11 +156,11 @@ export async function handler(event) {
         error: "Falta nombre del supervisor global",
       });
     }
-    if (!/^GRUPO LIC ([0-5][0-9]|60)$/.test(String(data.grupoLic || ""))) {
-      return json(400, { ok: false, error: "Grupo LIC inválido (01 al 60)" });
+    if (!isValidGrupoLic(String(data.grupoLic || ""))) {
+      return json(400, { ok: false, error: "Grupo LIC inválido" });
     }
-    if (!/^GRUPO ([0-5][0-9]|60)$/.test(String(data.grupo || ""))) {
-      return json(400, { ok: false, error: "Grupo inválido (01 al 60)" });
+    if (!isValidGrupoNum(String(data.grupo || ""))) {
+      return json(400, { ok: false, error: "Grupo inválido" });
     }
   }
 

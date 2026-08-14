@@ -349,7 +349,9 @@
   }
 
   function grupoLicList_() {
-    const out = [];
+    const out = [
+      { key: "NO TENGO", primary: "No tengo", secondary: "LIC" },
+    ];
     for (let n = 1; n <= 60; n++) {
       const num = String(n).padStart(2, "0");
       out.push({
@@ -362,7 +364,9 @@
   }
 
   function grupoNumList_() {
-    const out = [];
+    const out = [
+      { key: "NO TENGO", primary: "No tengo", secondary: "" },
+    ];
     for (let n = 1; n <= 60; n++) {
       const num = String(n).padStart(2, "0");
       out.push({
@@ -374,7 +378,25 @@
     return out;
   }
 
+  function isNoTengo_(raw) {
+    return /NO\s*TENGO/i.test(String(raw || "").trim());
+  }
+
+  function isValidGrupoLic_(v) {
+    return v === "NO TENGO" || /^GRUPO LIC ([0-5][0-9]|60)$/.test(v);
+  }
+
+  function isValidGrupoNum_(v) {
+    return v === "NO TENGO" || /^GRUPO ([0-5][0-9]|60)$/.test(v);
+  }
+
+  function displayGrupo_(v) {
+    if (v === "NO TENGO") return "No tengo";
+    return String(v || "").replace(/^GRUPO\s+/i, "Grupo ");
+  }
+
   function normGrupoLic_(raw) {
+    if (isNoTengo_(raw)) return "NO TENGO";
     const gNum = String(raw || "").replace(/\D/g, "");
     if (gNum && Number(gNum) >= 1 && Number(gNum) <= 60) {
       return `GRUPO LIC ${String(Number(gNum)).padStart(2, "0")}`;
@@ -383,6 +405,7 @@
   }
 
   function normGrupoNum_(raw) {
+    if (isNoTengo_(raw)) return "NO TENGO";
     const gNum = String(raw || "").replace(/\D/g, "");
     if (gNum && Number(gNum) >= 1 && Number(gNum) <= 60) {
       return `GRUPO ${String(Number(gNum)).padStart(2, "0")}`;
@@ -397,10 +420,10 @@
     if (hidden) hidden.value = v;
     if (!label) return;
     if (v) {
-      label.textContent = v.replace(/^GRUPO\s+/i, "Grupo ");
+      label.textContent = displayGrupo_(v);
       label.classList.remove("ph");
     } else {
-      label.textContent = "Grupo LIC 01";
+      label.textContent = "Elegir";
       label.classList.add("ph");
     }
   }
@@ -412,10 +435,10 @@
     if (hidden) hidden.value = v;
     if (!label) return;
     if (v) {
-      label.textContent = v.replace(/^GRUPO\s+/i, "Grupo ");
+      label.textContent = displayGrupo_(v);
       label.classList.remove("ph");
     } else {
-      label.textContent = "Grupo 01";
+      label.textContent = "Elegir";
       label.classList.add("ph");
     }
   }
@@ -487,6 +510,7 @@
     if (ctx.kind === "grupoLic") {
       return grupoLicList_().filter((g) => {
         if (!q) return true;
+        if (g.key === "NO TENGO") return "no tengo".includes(q) || q.includes("no");
         const n = String(parseInt(g.key.replace(/\D/g, ""), 10));
         return (
           g.primary.toLowerCase().includes(q) ||
@@ -499,6 +523,7 @@
     if (ctx.kind === "grupoNum") {
       return grupoNumList_().filter((g) => {
         if (!q) return true;
+        if (g.key === "NO TENGO") return "no tengo".includes(q) || q.includes("no");
         const n = String(parseInt(g.key.replace(/\D/g, ""), 10));
         return (
           g.primary.toLowerCase().includes(q) ||
@@ -578,13 +603,13 @@
     if (ctx.kind === "grupoLic") {
       setVinGrupoLicUI(v);
       closePicker();
-      toast(v.replace(/^GRUPO\s+/i, "Grupo "));
+      toast(displayGrupo_(normGrupoLic_(v)));
       return;
     }
     if (ctx.kind === "grupoNum") {
       setVinGrupoUI(v);
       closePicker();
-      toast(v.replace(/^GRUPO\s+/i, "Grupo "));
+      toast(displayGrupo_(normGrupoNum_(v)));
       return;
     }
 
@@ -994,8 +1019,8 @@
     const clean = buildVinculoPayload(payload);
     if (!clean.dni || clean.dni.length < 8) return;
     if (!/^9\d{8}$/.test(clean.celular)) return;
-    if (!/^GRUPO LIC ([0-5][0-9]|60)$/.test(clean.grupoLic)) return;
-    if (!/^GRUPO ([0-5][0-9]|60)$/.test(clean.grupo)) return;
+    if (!isValidGrupoLic_(clean.grupoLic)) return;
+    if (!isValidGrupoNum_(clean.grupo)) return;
     if (!clean.supervisorGlobal || clean.supervisorGlobal.length < 3) return;
     const q = loadVinculoQueue();
     const next = q.filter((x) => String(x.dni) !== clean.dni);
@@ -1049,8 +1074,8 @@
       if (
         !data.dni ||
         !/^9\d{8}$/.test(data.celular) ||
-        !data.grupo ||
-        !data.grupoLic ||
+        !isValidGrupoNum_(data.grupo) ||
+        !isValidGrupoLic_(data.grupoLic) ||
         !data.supervisorGlobal
       ) {
         continue;
@@ -2313,13 +2338,13 @@
       }
       const grupoLic = String($("#vinGrupoLic")?.value || "").trim().toUpperCase();
       const grupo = String($("#vinGrupo")?.value || "").trim().toUpperCase();
-      if (!/^GRUPO LIC ([0-5][0-9]|60)$/.test(grupoLic)) {
-        toast("Elija Grupo LIC (01 al 60)");
+      if (!isValidGrupoLic_(grupoLic)) {
+        toast("Elija Grupo LIC o No tengo");
         openPicker("grupoLic");
         return;
       }
-      if (!/^GRUPO ([0-5][0-9]|60)$/.test(grupo)) {
-        toast("Elija Grupo (01 al 60)");
+      if (!isValidGrupoNum_(grupo)) {
+        toast("Elija Grupo o No tengo");
         openPicker("grupoNum");
         return;
       }
@@ -2618,7 +2643,7 @@
 
       if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
         try {
-          await navigator.serviceWorker.register("./sw.js?v=69");
+          await navigator.serviceWorker.register("./sw.js?v=70");
         } catch {
           /* ignore */
         }
