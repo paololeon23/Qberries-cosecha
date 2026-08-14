@@ -933,7 +933,7 @@
     }
     // Por ahora no entrar a Datos de campo / guías
     if (!SESSION_FORM_ENABLED) {
-      showVinculoThanks(id);
+      showVinculoThanks(id, { alreadyRegistered: true });
       return;
     }
     if (!state.session.ready) {
@@ -1238,17 +1238,14 @@
           );
           const wasRegistered = !!(
             json.alreadyRegistered === true ||
-            json.updated === true ||
             nested?.alreadyRegistered === true ||
-            nested?.updated === true ||
             nestedData?.alreadyRegistered === true ||
-            nestedData?.updated === true ||
-            /ya se tiene este dni registrado/i.test(msg)
+            /ya se tiene (este )?dni registrado/i.test(msg)
           );
           if (wasRegistered) alreadyRegistered = true;
           lastMessage = wasRegistered
             ? "Ya se tiene este DNI registrado"
-            : msg || "Fue enviado a la base de datos";
+            : "Fue guardado correctamente";
           markVinculoDone(
             data.dni,
             data.celular,
@@ -1289,7 +1286,7 @@
       toast(
         alreadyRegistered
           ? "Ya se tiene este DNI registrado"
-          : "Enviado"
+          : "Fue guardado correctamente"
       );
     } else if (sent > 0 && remain.length) {
       toast(`Enviado parcial · ${remain.length} pendiente(s)`);
@@ -1303,7 +1300,7 @@
     };
   }
 
-  function showVinculoThanks(identity) {
+  function showVinculoThanks(identity, opts = {}) {
     stopCamera();
     hideAllScreens();
     const screen = $("#vinculoScreen");
@@ -1320,9 +1317,14 @@
     if ($("#thanksDni")) $("#thanksDni").textContent = dni ? `DNI ${dni}` : "—";
     if ($("#thanksNombre")) $("#thanksNombre").textContent = nombre || "—";
     if ($("#vinHeroDni")) $("#vinHeroDni").textContent = dni ? `DNI ${dni}` : "";
-    // Si el DNI ya estaba vinculado, mostrar aviso de una vez
-    if (dni && vinculoDoneMap()[dni] && !needsVinculo({ dni, nombre })) {
+    // Solo mostrar "ya registrado" si el servidor / reapertura lo indica (NO por solo guardar local)
+    const status = $("#thanksSyncStatus");
+    if (opts.alreadyRegistered) {
       setThanksSyncStatus("Ya se tiene este DNI registrado", "is-ok");
+    } else if (status && !opts.keepStatus) {
+      status.hidden = true;
+      status.textContent = "";
+      status.classList.remove("is-ok", "is-pending", "is-err");
     }
     hydrateIcons(screen);
     updateNetworkUI();
@@ -1373,22 +1375,9 @@
       showVinculoScreen(identity);
       return;
     }
-    // ya vinculado: encola refresh silencioso y entra
-    const done = vinculoDoneMap()[identity.dni] || {};
-    enqueueVinculo({
-      dni: identity.dni,
-      nombre: identity.nombre || "",
-      celular: done.celular || identity.celular || "",
-      grupo: done.grupo || identity.grupo || "",
-      grupoLic: done.grupoLic || identity.grupoLic || "",
-      supervisorGlobal: done.supervisorGlobal || "",
-      dniSesion: identity.dni,
-      horaRegistro: new Date().toLocaleString("es-PE", { hour12: true }),
-      hora: new Date().toLocaleString("es-PE", { hour12: true }),
-    });
-    flushVinculoQueue().catch(() => {});
+    // ya vinculado en este celular: mostrar gracias (sin re-guardar en silencio)
     if (!SESSION_FORM_ENABLED) {
-      showVinculoThanks(identity);
+      showVinculoThanks(identity, { alreadyRegistered: true });
       return;
     }
     showMainFlow();
@@ -2598,11 +2587,11 @@
           if (result.sent > 0 && result.remain === 0) {
             const already =
               result.alreadyRegistered ||
-              /ya se tiene este dni registrado/i.test(String(result.message || ""));
+              /ya se tiene (este )?dni registrado/i.test(String(result.message || ""));
             setThanksSyncStatus(
               already
                 ? "Ya se tiene este DNI registrado"
-                : "Fue enviado a la base de datos",
+                : "Fue guardado correctamente",
               "is-ok"
             );
           } else if (!navigator.onLine) {
@@ -2833,11 +2822,11 @@
             if (!result || result.sent <= 0) return;
             if (result.alreadyRegistered) {
               setThanksSyncStatus(
-                result.message || "Ya se tiene este DNI registrado",
+                "Ya se tiene este DNI registrado",
                 "is-ok"
               );
             } else if (result.remain === 0) {
-              setThanksSyncStatus("Fue enviado a la base de datos", "is-ok");
+              setThanksSyncStatus("Fue guardado correctamente", "is-ok");
             }
           })
           .catch(() => {});
@@ -2883,7 +2872,7 @@
 
       if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
         try {
-          const reg = await navigator.serviceWorker.register("./sw.js?v=84");
+          const reg = await navigator.serviceWorker.register("./sw.js?v=87");
           reg.update?.().catch(() => {});
         } catch {
           /* ignore */

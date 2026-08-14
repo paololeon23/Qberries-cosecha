@@ -227,16 +227,16 @@ export async function handler(event) {
 
     alreadyRegistered = !!(
       alreadyRegistered ||
-      parsed.alreadyRegistered ||
-      parsed.updated ||
-      parsed?.data?.alreadyRegistered ||
-      parsed?.data?.updated
+      parsed.alreadyRegistered === true ||
+      parsed?.data?.alreadyRegistered === true
     );
+    // Solo "ya registrado" si existía antes o el Script lo marca así (no por created)
+    if (parsed.created === true || parsed?.data?.created === true) {
+      alreadyRegistered = false;
+    }
     const message = alreadyRegistered
       ? "Ya se tiene este DNI registrado"
-      : parsed.message ||
-        parsed?.data?.message ||
-        "Fue enviado a la base de datos";
+      : "Fue guardado correctamente";
 
     return json(200, {
       ok: true,

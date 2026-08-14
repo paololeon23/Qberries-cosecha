@@ -333,7 +333,7 @@
           updated: false,
           created: true,
           alreadyRegistered: false,
-          message: 'Registro nuevo guardado',
+          message: 'Fue guardado correctamente',
           syncStatus: 'synced'
         };
       } finally {
