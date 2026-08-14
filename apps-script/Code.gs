@@ -292,18 +292,7 @@
 
       var sh = sheet_();
       var lastRow = sh.getLastRow();
-      var rowIndex = -1;
-
-      if (lastRow >= 2) {
-        var nRows = lastRow - 1;
-        var colA = sh.getRange(2, 1, nRows, 1).getValues();
-        for (var i = 0; i < colA.length; i++) {
-          if (digits_(colA[i][0]) === dni) {
-            rowIndex = i + 2;
-            break;
-          }
-        }
-      }
+      var rowIndex = findDniRow_(sh, dni, lastRow);
 
       var row = [dni, nombre, celular, grupoLic, grupo, supervisorGlobal, dniSesion, hora];
 
@@ -348,29 +337,47 @@
     }
   }
 
+  function findDniRow_(sh, dni, lastRow) {
+    dni = digits_(dni);
+    if (!dni || !sh) return -1;
+    lastRow = lastRow || sh.getLastRow();
+    if (lastRow < 2) return -1;
+
+    // TextFinder (rápido) + comparación por dígitos (evita duplicados)
+    try {
+      var finder = sh.getRange(2, 1, lastRow - 1, 1).createTextFinder(dni);
+      finder.matchEntireCell(true);
+      var hit = finder.findNext();
+      if (hit && digits_(hit.getValue()) === dni) return hit.getRow();
+    } catch (_) {}
+
+    var nRows = lastRow - 1;
+    if (nRows < 1) return -1;
+    var colA = sh.getRange(2, 1, nRows, 1).getValues();
+    for (var i = 0; i < colA.length; i++) {
+      if (digits_(colA[i][0]) === dni) return i + 2;
+    }
+    return -1;
+  }
+
   function existeVinculo_(dni) {
     dni = digits_(dni);
     if (!dni) return null;
     var sh = sheet_();
     var lastRow = sh.getLastRow();
-    if (lastRow < 2) return null;
-    var colA = sh.getRange(2, 1, lastRow - 1, 1).getValues();
-    for (var i = 0; i < colA.length; i++) {
-      if (digits_(colA[i][0]) === dni) {
-        var r = sh.getRange(i + 2, 1, 1, HEADERS.length).getValues()[0];
-        return {
-          dni: digits_(r[0]),
-          nombre: clean_(r[1]),
-          celular: digits_(r[2]),
-          grupoLic: clean_(r[3]),
-          grupo: clean_(r[4]),
-          supervisorGlobal: clean_(r[5]),
-          dniSesion: digits_(r[6]),
-          hora: r[7] != null ? String(r[7]) : ''
-        };
-      }
-    }
-    return null;
+    var rowIndex = findDniRow_(sh, dni, lastRow);
+    if (rowIndex < 2) return null;
+    var r = sh.getRange(rowIndex, 1, 1, HEADERS.length).getValues()[0];
+    return {
+      dni: digits_(r[0]),
+      nombre: clean_(r[1]),
+      celular: digits_(r[2]),
+      grupoLic: clean_(r[3]),
+      grupo: clean_(r[4]),
+      supervisorGlobal: clean_(r[5]),
+      dniSesion: digits_(r[6]),
+      hora: r[7] != null ? String(r[7]) : ''
+    };
   }
 
   function listarVinculos_(params) {

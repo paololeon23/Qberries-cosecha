@@ -682,59 +682,104 @@
     }
   }
 
+  function isVinculoComplete_(info) {
+    if (!info) return false;
+    const cel = String(info.celular || "").replace(/\D/g, "");
+    const sup = String(info.supervisorGlobal || "").trim();
+    return (
+      cel.length >= 9 &&
+      sup.length >= 3 &&
+      isValidGrupoNum_(info.grupo) &&
+      isValidGrupoLic_(info.grupoLic)
+    );
+  }
+
   /** Login de registro = QR/DNI válido en el listado. Sin esto no hay app. */
   function hasQrLogin() {
     const id = state.identity || getIdentity();
     if (!id?.dni) return false;
-    const persona = lookupSupervisor(id.dni);
+    const dni = String(id.dni).replace(/\D/g, "");
+    const persona = lookupSupervisor(dni);
     if (!persona) {
       // JSON aún no cargado → no borrar (evita salto a seguridad en refresh)
       if (!Object.keys(state.supervisores || {}).length) {
         state.identity = id;
         return true;
       }
-      setIdentity(null);
+      // Ya vinculado en este celular → mantener sesión aunque falle el catálogo
+      const done = vinculoDoneMap()[dni];
+      if (isVinculoComplete_(done) || isVinculoComplete_(id)) {
+        state.identity = {
+          dni,
+          nombre: id.nombre || "",
+          cargo: id.cargo || "SUPERVISOR DE COSECHA",
+          celular: done?.celular || id.celular || "",
+          supervisorGlobal: done?.supervisorGlobal || id.supervisorGlobal || "",
+          grupo: done?.grupo || id.grupo || "",
+          grupoLic: done?.grupoLic || id.grupoLic || "",
+          linked: true,
+        };
+        setIdentity(state.identity);
+        return true;
+      }
       return false;
     }
-    const done = vinculoDoneMap()[id.dni] || {};
+    const done = vinculoDoneMap()[dni] || {};
     state.identity = {
-      dni: id.dni,
+      dni,
       nombre: persona.nombre || id.nombre || "",
       cargo: persona.cargo || id.cargo || "SUPERVISOR DE COSECHA",
       celular: done.celular || persona.celular || id.celular || "",
       supervisorGlobal: done.supervisorGlobal || id.supervisorGlobal || "",
       grupo: done.grupo || id.grupo || "",
       grupoLic: done.grupoLic || id.grupoLic || "",
+      linked: isVinculoComplete_(done) || isVinculoComplete_(id) || !!id.linked,
     };
     setIdentity(state.identity);
     return true;
   }
 
-  /** Tras refresh: recupera el último vínculo hecho en este dispositivo */
+  /** Tras refresh / salir del navegador: recupera el último vínculo de este celular */
   function restoreIdentityFromVinculo_() {
     const existing = getIdentity();
     if (existing?.dni) {
-      state.identity = existing;
-      return existing;
+      const dni = String(existing.dni).replace(/\D/g, "");
+      const done = vinculoDoneMap()[dni] || {};
+      const merged = {
+        ...existing,
+        dni,
+        celular: done.celular || existing.celular || "",
+        supervisorGlobal: done.supervisorGlobal || existing.supervisorGlobal || "",
+        grupo: done.grupo || existing.grupo || "",
+        grupoLic: done.grupoLic || existing.grupoLic || "",
+        linked:
+          !!existing.linked ||
+          isVinculoComplete_(done) ||
+          isVinculoComplete_(existing),
+      };
+      state.identity = merged;
+      setIdentity(merged);
+      return merged;
     }
     const map = vinculoDoneMap();
     let best = null;
     let bestAt = 0;
     Object.keys(map).forEach((dni) => {
       const info = map[dni] || {};
-      if (!info.celular || !info.supervisorGlobal) return;
+      if (!isVinculoComplete_(info)) return;
       const t = Date.parse(info.at || 0) || 0;
       if (t >= bestAt) {
         bestAt = t;
         const persona = lookupSupervisor(dni) || {};
         best = {
-          dni,
-          nombre: persona.nombre || "",
+          dni: String(dni).replace(/\D/g, ""),
+          nombre: persona.nombre || info.nombre || "",
           cargo: persona.cargo || "SUPERVISOR DE COSECHA",
           celular: info.celular || "",
           supervisorGlobal: info.supervisorGlobal || "",
           grupo: info.grupo || "",
           grupoLic: info.grupoLic || "",
+          linked: true,
         };
       }
     });
@@ -786,11 +831,25 @@
     });
   }
 
-  function showSecurityLogin(msg) {
+  function showSecurityLogin(msg, opts = {}) {
     closeSheets();
     closePicker();
-    // Solo limpia identidad al entrar a escanear de nuevo (logout / nuevo QR)
-    setIdentity(null);
+    const force = !!opts.force;
+    if (!force) {
+      const saved = restoreIdentityFromVinculo_() || getIdentity();
+      if (saved?.dni) {
+        state.identity = saved;
+        setIdentity(saved);
+        if (!needsVinculo(saved)) {
+          showMainFlow();
+          return;
+        }
+        showVinculoScreen(saved);
+        return;
+      }
+    } else {
+      setIdentity(null);
+    }
     hideAllScreens();
     const screen = $("#securityScreen");
     if (screen) screen.hidden = false;
@@ -802,12 +861,11 @@
     if (found) found.hidden = true;
     const overlay = $("#qrOverlay");
     const overlayTxt = $("#qrOverlayText");
-    if (overlayTxt) overlayTxt.textContent = "";
-    if (overlay) overlay.hidden = true;
-    if ($("#btnStartCam")) $("#btnStartCam").hidden = true;
-    if ($("#btnStopCam")) $("#btnStopCam").hidden = false;
+    if (overlayTxt) overlayTxt.textContent = "Toque para activar la cámara";
+    if (overlay) overlay.hidden = false;
+    if ($("#btnStartCam")) $("#btnStartCam").hidden = false;
+    if ($("#btnStopCam")) $("#btnStopCam").hidden = true;
     if ($("#btnSecBack")) $("#btnSecBack").hidden = false;
-    setTimeout(() => startCamera().catch(() => {}), 120);
   }
 
   /** Contraseña desactivada por ahora: acceso solo con QR */
@@ -843,10 +901,10 @@
       input?.focus();
       return;
     }
-    // Sin contraseña: vuelve al escáner QR
+    // Cambio de carnet: limpia identidad de sesión (el vínculo del DNI queda en el celular)
     setIdentity(null);
     ensureSessionGate();
-    showSecurityLogin("Escanee su carnet QR");
+    showSecurityLogin("Escanee su carnet QR", { force: true });
   }
 
   function requireQrLogin() {
@@ -933,9 +991,11 @@
   }
 
   function markVinculoDone(dni, celular, supervisorGlobal, grupo, grupoLic) {
+    const key = String(dni || "").replace(/\D/g, "");
+    if (!key) return;
     const map = vinculoDoneMap();
-    map[String(dni)] = {
-      celular: String(celular || ""),
+    const entry = {
+      celular: String(celular || "").replace(/\D/g, ""),
       supervisorGlobal: String(supervisorGlobal || "")
         .trim()
         .toUpperCase(),
@@ -943,29 +1003,30 @@
       grupoLic: normGrupoLic_(grupoLic),
       at: new Date().toISOString(),
     };
+    map[key] = entry;
     localStorage.setItem(VINCULO_DONE_KEY, JSON.stringify(map));
+    const cur = state.identity || getIdentity() || {};
+    if (String(cur.dni || "").replace(/\D/g, "") === key) {
+      setIdentity({
+        ...cur,
+        dni: key,
+        celular: entry.celular,
+        supervisorGlobal: entry.supervisorGlobal,
+        grupo: entry.grupo,
+        grupoLic: entry.grupoLic,
+        linked: true,
+      });
+    }
   }
 
   function needsVinculo(identity) {
     if (!identity?.dni) return true;
-    const done = vinculoDoneMap()[identity.dni];
-    if (
-      done?.celular &&
-      done?.supervisorGlobal &&
-      done?.grupo &&
-      done?.grupoLic
-    ) {
-      return false;
-    }
-    if (
-      identity.celular &&
-      String(identity.celular).length >= 9 &&
-      identity.supervisorGlobal &&
-      identity.grupo &&
-      identity.grupoLic
-    ) {
+    const dni = String(identity.dni).replace(/\D/g, "");
+    const done = vinculoDoneMap()[dni];
+    if (isVinculoComplete_(done)) return false;
+    if (isVinculoComplete_(identity)) {
       markVinculoDone(
-        identity.dni,
+        dni,
         identity.celular,
         identity.supervisorGlobal,
         identity.grupo,
@@ -2261,7 +2322,7 @@
   function bind() {
     const scrollParent_ = (el) =>
       el?.closest?.(
-        ".vinculo-form, .app-scroll, .picker-body, .session-screen, .security-screen, #vinculoScreen"
+        "#vinculoScreen, .session-screen, .security-screen, .app-scroll, .picker-body"
       );
 
     document.addEventListener(
@@ -2327,7 +2388,7 @@
     on("#btnVinGrupo", "click", () => openPicker("grupoNum"));
 
     on("#btnThanksOk", "click", () => {
-      toast("Registro confirmado · puede cerrar esta pestaña");
+      toast("Listo · ya puede cerrar el navegador");
     });
 
     on("#vinculoForm", "submit", async (e) => {
@@ -2651,7 +2712,7 @@
 
       if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
         try {
-          await navigator.serviceWorker.register("./sw.js?v=73");
+          await navigator.serviceWorker.register("./sw.js?v=76");
         } catch {
           /* ignore */
         }
