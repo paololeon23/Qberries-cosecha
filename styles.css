@@ -1,5 +1,3 @@
-@import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap");
-
 :root {
   /* Colores del logo QBerries */
   --qb-red: #e00b29;
@@ -25,7 +23,7 @@
   --safe-b: env(safe-area-inset-bottom, 0px);
   --safe-t: env(safe-area-inset-top, 0px);
   --nav-h: 78px;
-  --font: "Plus Jakarta Sans", "Segoe UI", system-ui, sans-serif;
+  --font: "Segoe UI", system-ui, -apple-system, sans-serif;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -158,15 +156,15 @@ img {
   display: none;
 }
 
-/* Badges estilo Tarjeta Pallet */
+/* Badges estilo Tarjeta Pallet · debajo del encabezado */
 .hero-status {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: stretch;
-  gap: 6px;
+  gap: 8px;
+  width: 100%;
+  max-width: 100%;
   flex: 0 0 auto;
-  width: 112px;
-  max-width: 38%;
 }
 .net-badge {
   display: inline-flex;
@@ -278,6 +276,8 @@ img {
 .lock-screen[hidden],
 .sheet[hidden],
 .modal-backdrop[hidden],
+.picker-backdrop[hidden],
+.qr-overlay[hidden],
 .toast[hidden] {
   display: none !important;
 }
@@ -1020,7 +1020,7 @@ img {
 .picker-backdrop {
   position: absolute;
   inset: 0;
-  z-index: 85;
+  z-index: 120;
   background: rgba(7, 24, 36, 0.5);
   display: flex;
   align-items: flex-end;
@@ -1372,42 +1372,37 @@ img {
   background: #fff;
   color: var(--ink);
   border-radius: 16px;
-  padding: 12px 12px;
+  padding: 12px 12px 10px;
   margin-bottom: 10px;
   display: flex;
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
   border: 1px solid #e6ebf0;
   box-shadow: 0 2px 10px rgba(15, 35, 55, 0.04);
   width: 100%;
   max-width: 100%;
   min-width: 0;
   box-sizing: border-box;
-  overflow: hidden;
 }
 .hero-head-left {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
   min-width: 0;
-  flex: 1 1 auto;
-  overflow: hidden;
+  width: 100%;
 }
 .hero-logo {
-  width: auto;
-  height: 36px;
-  max-width: 118px;
-  aspect-ratio: auto;
+  width: 56px;
+  height: 56px;
+  max-width: 56px;
   object-fit: contain;
-  object-position: left center;
-  border-radius: 10px;
+  object-position: center;
+  border-radius: 12px;
   background: #fff;
   border: 1px solid #eef2f6;
-  padding: 5px 8px;
-  flex: 0 0 auto;
-  flex-shrink: 0;
+  padding: 6px;
+  flex: 0 0 56px;
   box-shadow: 0 1px 4px rgba(20, 60, 28, 0.06);
   display: block;
 }
@@ -1418,10 +1413,9 @@ img {
   gap: 1px;
   min-width: 0;
   flex: 1 1 auto;
-  overflow: hidden;
 }
 .hero-brand {
-  font-size: 0.62rem;
+  font-size: 0.68rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -1430,37 +1424,26 @@ img {
 }
 .hero-head h1 {
   margin: 0;
-  font-size: 1rem;
+  font-size: 1.18rem;
   font-weight: 800;
-  line-height: 1.2;
+  line-height: 1.15;
   color: #0b3d66;
   max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .hero-head p {
   margin: 0;
-  opacity: 1;
-  font-size: 0.7rem;
+  font-size: 0.78rem;
   line-height: 1.25;
   color: #6b7280;
-  font-weight: 600;
+  font-weight: 500;
   max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .hero-dni {
-  margin-top: 2px;
-  font-size: 0.75rem;
+  margin-top: 1px;
+  font-size: 0.82rem;
   font-weight: 800;
   color: var(--qb-green);
   letter-spacing: 0.01em;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .hero-head img:not(.hero-logo) {
   display: none;
@@ -1517,13 +1500,17 @@ img {
   box-shadow: 0 4px 18px rgba(15, 35, 55, 0.05);
 }
 .id-summary {
-  background: linear-gradient(180deg, #f7fbf6 0%, #f3f7fb 100%);
-  border: 1px solid #e2ebe0;
+  background: #fff;
+  border: 1px solid #e6ebf0;
   border-radius: 14px;
   padding: 12px 14px;
   display: flex;
   flex-direction: column;
   gap: 10px;
+  margin-bottom: 10px;
+  width: 100%;
+  box-sizing: border-box;
+  box-shadow: 0 2px 10px rgba(15, 35, 55, 0.04);
 }
 .id-summary-row {
   display: flex;
@@ -1555,6 +1542,49 @@ img {
   flex-direction: column;
   gap: 6px;
   min-width: 0;
+}
+.field-label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+.vin-grupo-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  min-width: 0;
+}
+.vin-grupo-col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.vinculo-form .select-trigger {
+  width: 100%;
+  min-height: 48px;
+  border: 1.5px solid #d7e0e8;
+  border-radius: 12px;
+  background: #fff;
+  padding: 10px 10px;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #142018;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  text-align: left;
+  cursor: pointer;
+}
+.vinculo-form .select-trigger:active {
+  border-color: var(--qb-green);
+  background: #f7fbf6;
+}
+.vinculo-form .select-trigger .ph {
+  font-weight: 600;
+  color: #8a97a3;
 }
 .field-hint {
   margin: 0;
@@ -1628,56 +1658,67 @@ img {
   line-height: 1.35;
 }
 
-/* Gracias · flotante centrada */
+/* Gracias · sheet abajo + fondo suave (se ve el formulario detrás) */
 #vinculoScreen.is-thanks {
   overflow: hidden;
 }
 #vinculoScreen.is-thanks .hero-head,
+#vinculoScreen.is-thanks .id-summary,
 #vinculoScreen.is-thanks .vinculo-form {
-  visibility: hidden;
   pointer-events: none;
+  user-select: none;
 }
 #vinculoScreen.is-thanks::before {
   content: "";
   position: absolute;
   inset: 0;
-  background:
-    radial-gradient(620px 320px at 50% 35%, rgba(94, 173, 81, 0.18), transparent 60%),
-    rgba(15, 28, 22, 0.42);
-  backdrop-filter: blur(6px);
-  z-index: 5;
+  z-index: 10;
+  /* Degradado suave: arriba más claro, abajo un poco más oscuro */
+  background: linear-gradient(
+    180deg,
+    rgba(8, 28, 48, 0.22) 0%,
+    rgba(10, 26, 44, 0.28) 45%,
+    rgba(12, 22, 36, 0.42) 100%
+  );
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
 }
 .thanks-card {
   position: absolute;
-  left: 50%;
-  top: 48%;
-  transform: translate(-50%, -50%);
-  width: calc(100% - 36px);
-  max-width: 340px;
+  left: 10px;
+  right: 10px;
+  bottom: max(10px, calc(8px + var(--safe-b)));
+  top: auto;
+  transform: none;
+  width: auto;
+  max-width: none;
   z-index: 12;
   background: #fff;
-  border-radius: 22px;
-  padding: 28px 18px 22px;
+  border-radius: 24px 24px 18px 18px;
+  padding: 22px 16px 16px;
   border: 1px solid rgba(230, 235, 240, 0.95);
   box-shadow:
-    0 18px 48px rgba(10, 24, 18, 0.28),
-    0 4px 14px rgba(15, 35, 55, 0.08);
+    0 -6px 28px rgba(7, 24, 36, 0.18),
+    0 8px 20px rgba(10, 24, 18, 0.12);
   text-align: center;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  animation: thanks-float-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+  gap: 6px;
+  animation: thanks-sheet-up 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+  box-sizing: border-box;
+  max-height: min(52vh, 420px);
+  overflow-y: auto;
 }
 .thanks-card[hidden] { display: none !important; }
-@keyframes thanks-float-in {
+@keyframes thanks-sheet-up {
   from {
-    opacity: 0;
-    transform: translate(-50%, -42%) scale(0.94);
+    opacity: 0.85;
+    transform: translateY(110%);
   }
   to {
     opacity: 1;
-    transform: translate(-50%, -50%) scale(1);
+    transform: translateY(0);
   }
 }
 .thanks-ico {
@@ -1697,7 +1738,7 @@ img {
 }
 .thanks-card h2 {
   margin: 0;
-  font-size: 1.45rem;
+  font-size: 1.4rem;
   font-weight: 800;
   color: #0b3d66;
   letter-spacing: -0.02em;
@@ -1708,7 +1749,7 @@ img {
   font-weight: 700;
   color: #24312a;
   line-height: 1.35;
-  max-width: 28ch;
+  max-width: 32ch;
 }
 .thanks-sub {
   margin: 0;
@@ -1716,7 +1757,7 @@ img {
   font-weight: 600;
   color: #6b7c8c;
   line-height: 1.4;
-  max-width: 32ch;
+  max-width: 36ch;
 }
 .thanks-meta {
   margin-top: 12px;
@@ -1729,6 +1770,7 @@ img {
   border: 1px solid #e2ebe0;
   width: 100%;
   box-sizing: border-box;
+  text-align: left;
 }
 .thanks-meta span {
   font-size: 0.78rem;
@@ -1744,6 +1786,30 @@ img {
   min-height: 44px;
   border-radius: 12px;
   font-weight: 800;
+  width: 100%;
+}
+.thanks-sync {
+  margin: 8px 0 0;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.35;
+  text-align: center;
+}
+.thanks-sync.is-ok {
+  background: #e8f6e6;
+  color: #2f7a36;
+}
+.thanks-sync.is-pending {
+  background: #fff4e8;
+  color: #b45309;
+}
+.thanks-sync.is-err {
+  background: #fde8ea;
+  color: #b42318;
 }
 .session-form .pair {
   display: grid;

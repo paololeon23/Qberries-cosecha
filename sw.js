@@ -1,4 +1,4 @@
-const CACHE = "qb-supervisores-v44";
+const CACHE = "qb-supervisores-v66";
 const ASSETS = [
   "./",
   "./index.html",
@@ -7,11 +7,14 @@ const ASSETS = [
   "./icons.js",
   "./manifest.json",
   "./assets/logo-qberries.png",
+  "./assets/favicon.svg",
+  "./assets/favicon.png",
+  "./assets/icon-192.png",
+  "./assets/icon-512.png",
+  "./data/supervisores-cosecha.json",
   "./data/lotes-licapa.json",
   "./data/grupos-licapa.json",
   "./data/personas.json",
-  "./data/trabajadores.json",
-  "./data/supervisores-cosecha.json",
   "./vendor/xlsx.full.min.js",
   "./vendor/jspdf.umd.min.js",
   "./vendor/jsQR.min.js",
@@ -19,10 +22,12 @@ const ASSETS = [
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches
-      .open(CACHE)
-      .then((cache) => cache.addAll(ASSETS))
-      .then(() => self.skipWaiting())
+    caches.open(CACHE).then(async (cache) => {
+      await Promise.all(
+        ASSETS.map((url) => cache.add(url).catch(() => null))
+      );
+      await self.skipWaiting();
+    })
   );
 });
 
@@ -37,13 +42,22 @@ self.addEventListener("activate", (event) => {
   );
 });
 
+function isApi(url) {
+  return (
+    url.pathname.includes("/.netlify/functions/") ||
+    url.pathname.includes("/api/") ||
+    url.hostname.includes("script.google.com") ||
+    url.hostname.includes("googleusercontent.com")
+  );
+}
+
 self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
 
   const url = new URL(req.url);
 
-  if (url.pathname.includes("/.netlify/functions/")) {
+  if (isApi(url)) {
     event.respondWith(
       fetch(req).catch(
         () =>
@@ -56,8 +70,9 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
+  // App shell: caché primero (funciona sin internet)
   event.respondWith(
-    caches.match(req).then((cached) => {
+    caches.match(req, { ignoreSearch: true }).then((cached) => {
       const fetching = fetch(req)
         .then((res) => {
           if (res && res.ok && url.origin === self.location.origin) {

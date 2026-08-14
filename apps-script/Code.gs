@@ -1,38 +1,51 @@
 /**
  * ============================================================
  * API · SUPERVISORES — Q Berries (DATA-SUPERVISORES)
- * Spreadsheet: DATA-SUPERVISORES
+ * Spreadsheet exclusivo de vínculos QR (NO mezclar con Tarjeta/Pases)
  * ============================================================
  *
  * SETUP
  * 1) Abre el Google Sheet «DATA-SUPERVISORES»
  * 2) Extensiones → Apps Script → pega ESTE archivo completo
- * 3) Propiedades del script → API_TOKEN = (mismo valor que en Netlify)
+ * 3) Propiedades del script → API_TOKEN = (mismo que Netlify)
+ *    O edita DEFAULT_API_TOKEN abajo (vacío a propósito)
  * 4) Guardar → Implementar → Nueva versión → Aplicación web
  *    - Ejecutar como: Yo
  *    - Quién tiene acceso: Cualquier persona
- * 5) URL …/exec → Netlify env APPS_SCRIPT_URL
+ * 5) Copia la URL …/exec → SOLO a Netlify env APPS_SCRIPT_URL
+ *    (NO la pongas en el JS público de la app)
+ *
+ * SEGURIDAD
+ *  - Toda petición exige token (body.token / ?token=)
+ *  - La app pública habla con /.netlify/functions/sync (proxy)
+ *  - Usa el MISMO API_TOKEN que en Netlify
  *
  * ENDPOINTS
- *  GET/POST  action=ping
- *  POST      action=registrarVinculo
- *            data: { dni, nombre, celular, supervisorGlobal|encargado,
- *                    dniSesion|dniInicioSesion, hora|horaRegistro }
- *            → upsert por DNI (sin duplicados)
- *  GET/POST  action=listarVinculos [&dni=]
+ *  POST { action: "registrarVinculo", data: {...}, token }
+ *  GET/POST  action=listarVinculos [&dni=][&limit=]
  *  GET/POST  action=existeVinculo  &dni=
+ *  GET/POST  action=ping
  *
  * Hoja (fila 1):
- * DNI | NOMBRE | CELULAR | NOMBRE SUPERVISOR GLOBAL | DNI INICIO SESION | ULTIMA HORA REGISTRO
+ * DNI | NOMBRE | CELULAR | GRUPO LIC | GRUPO | NOMBRE SUPERVISOR GLOBAL | DNI INICIO SESION | ULTIMA HORA REGISTRO
  */
 
 var SHEET_NAME = 'Hoja 1';
+
+/**
+ * Token por defecto vacío a propósito (Netlify secrets scan).
+ * Configúralo en: Apps Script → Configuración del proyecto → Propiedades
+ *   Clave: API_TOKEN
+ *   Valor: el mismo que en Netlify
+ */
 var DEFAULT_API_TOKEN = '';
 
 var HEADERS = [
   'DNI',
   'NOMBRE',
   'CELULAR',
+  'GRUPO LIC',
+  'GRUPO',
   'NOMBRE SUPERVISOR GLOBAL',
   'DNI INICIO SESION',
   'ULTIMA HORA REGISTRO'
@@ -66,6 +79,41 @@ function doGet(e) {
         sheet: sheet_().getName(),
         spreadsheet: ssPing ? ssPing.getName() : '',
         ts: nowIso_()
+      });
+    }
+    if (
+      action === 'registrarVinculo' ||
+      action === 'guardarVinculo' ||
+      action === 'vincular'
+    ) {
+      // Live Server (JSONP): mismos campos que POST, aplanados en query
+      var dataGet = {};
+      try {
+        if (p.data) dataGet = JSON.parse(String(p.data));
+      } catch (_) {}
+      var flat = {
+        dni: p.dni || dataGet.dni,
+        nombre: p.nombre || dataGet.nombre,
+        celular: p.celular || dataGet.celular,
+        grupoLic: p.grupoLic || dataGet.grupoLic,
+        grupo: p.grupo || dataGet.grupo,
+        supervisorGlobal:
+          p.supervisorGlobal ||
+          p.encargado ||
+          dataGet.supervisorGlobal ||
+          dataGet.encargado,
+        dniSesion: p.dniSesion || dataGet.dniSesion || p.dni || dataGet.dni,
+        horaRegistro: p.horaRegistro || p.hora || dataGet.horaRegistro || dataGet.hora,
+        hora: p.hora || p.horaRegistro || dataGet.hora || dataGet.horaRegistro
+      };
+      var savedGet = registrarVinculo_(flat);
+      return jsonOut_({
+        ok: true,
+        api: 'supervisores',
+        action: 'registrarVinculo',
+        updated: !!savedGet.updated,
+        created: !!savedGet.created,
+        data: savedGet
       });
     }
     if (action === 'listarVinculos') {
@@ -111,7 +159,6 @@ function doPost(e) {
     var action = String(body.action || 'registrarVinculo').trim();
     var data = body.data || body.payload || body;
 
-    // Si viene data de vínculo sin action clara, registrar igual
     if (
       (!action || action === 'undefined' || action === 'null') &&
       data &&
@@ -133,10 +180,7 @@ function doPost(e) {
     if (
       action === 'registrarVinculo' ||
       action === 'guardarVinculo' ||
-      action === 'vincular' ||
-      action === 'sync' ||
-      action === 'registrar' ||
-      action === 'guardar'
+      action === 'vincular'
     ) {
       var saved = registrarVinculo_(data);
       return jsonOut_({
@@ -168,8 +212,7 @@ function doPost(e) {
   }
 }
 
-/* -------------------- Auth -------------------- */
-
+/** Token obligatorio (proxy Netlify lo envía; URL directa sin token = rechazada) */
 function expectedToken_() {
   try {
     var fromProps = PropertiesService.getScriptProperties().getProperty('API_TOKEN');
@@ -178,6 +221,7 @@ function expectedToken_() {
   return String(DEFAULT_API_TOKEN || '').trim();
 }
 
+/** Valida token sin throw (evita Depurador). '' = OK */
 function checkToken_(src) {
   src = src || {};
   var got = clean_(src.token || src.apiToken || src.API_TOKEN || '');
@@ -191,19 +235,23 @@ function checkToken_(src) {
   return '';
 }
 
+function assertToken_(src) {
+  var err = checkToken_(src);
+  if (err) throw new Error(err);
+}
+
 /* -------------------- Lógica -------------------- */
 
 /**
- * Upsert por DNI (sin duplicados).
- * Columnas:
- * DNI | NOMBRE | CELULAR | NOMBRE SUPERVISOR GLOBAL | DNI INICIO SESION | ULTIMA HORA REGISTRO
+ * Upsert por DNI (rápido): lock + busca solo columna A + escribe 1 fila.
+ * Columnas: DNI | NOMBRE | CELULAR | GRUPO LIC | GRUPO | NOMBRE SUPERVISOR GLOBAL | DNI INICIO SESION | ULTIMA HORA REGISTRO
  */
 function registrarVinculo_(d) {
   d = d || {};
   var lock = LockService.getScriptLock();
   var got = false;
   try {
-    got = lock.tryLock(25000);
+    got = lock.tryLock(30000);
     if (!got) throw new Error('El servidor está ocupado. Intente de nuevo.');
 
     var dni = digits_(d.dni || d.dniTrabajador);
@@ -211,75 +259,89 @@ function registrarVinculo_(d) {
       throw new Error('Falta DNI válido (8–12 dígitos)');
     }
 
-    var celularRaw = String(d.celular || d.telefono || d.phone || '').trim();
-    if (celularRaw && !/^\d+$/.test(celularRaw.replace(/[\s\-()+]/g, ''))) {
-      throw new Error('El celular debe ser solo números');
-    }
-    var celular = digits_(celularRaw);
+    var celular = digits_(d.celular || d.telefono || d.phone);
     if (!celular || !/^9\d{8}$/.test(celular)) {
-      throw new Error('Celular inválido: debe tener 9 dígitos y comenzar con 9');
+      throw new Error('Celular inválido: 9 dígitos y debe comenzar con 9');
     }
 
     var nombre = clean_(d.nombre || d.name).toUpperCase();
+
+    var gLicNum = clean_(d.grupoLic || '').replace(/\D/g, '');
+    var grupoLic = '';
+    if (gLicNum && Number(gLicNum) >= 1 && Number(gLicNum) <= 60) {
+      grupoLic = 'GRUPO LIC ' + ('0' + Number(gLicNum)).slice(-2);
+    }
+    if (!grupoLic) throw new Error('Falta Grupo LIC (01 al 60)');
+
+    var gNum = clean_(d.grupo || '').replace(/\D/g, '');
+    var grupo = '';
+    if (gNum && Number(gNum) >= 1 && Number(gNum) <= 60) {
+      grupo = 'GRUPO ' + ('0' + Number(gNum)).slice(-2);
+    }
+    if (!grupo) throw new Error('Falta Grupo (01 al 60)');
+
     var supervisorGlobal = clean_(
-      d.supervisorGlobal ||
-        d.nombreSupervisorGlobal ||
-        d.encargado ||
-        d.supervisor ||
-        d.supervisorNombre ||
-        ''
+      d.supervisorGlobal || d.nombreSupervisorGlobal || d.encargado || ''
     ).toUpperCase();
     if (!supervisorGlobal || supervisorGlobal.length < 3) {
       throw new Error('Falta el nombre del supervisor global');
     }
-    var dniSesion = digits_(
-      d.dniSesion || d.dniInicioSesion || d.dniLogin || d.dni || dni
-    );
+
+    var dniSesion = digits_(d.dniSesion || d.dniInicioSesion || d.dniLogin || dni);
     if (!dniSesion || dniSesion.length < 8) dniSesion = dni;
 
     var hora =
-      clean_(d.horaRegistro || d.hora || d.horaGuardado || d.ultimaHora) ||
+      clean_(d.horaRegistro || d.hora || d.horaGuardado) ||
       Utilities.formatDate(new Date(), 'America/Lima', 'dd/MM/yyyy hh:mm:ss a');
 
     var sh = sheet_();
-    var data = sh.getDataRange().getValues();
+    var lastRow = sh.getLastRow();
     var rowIndex = -1;
 
-    for (var i = 1; i < data.length; i++) {
-      if (digits_(data[i][0]) === dni) {
-        rowIndex = i + 1;
-        break;
+    if (lastRow >= 2) {
+      var colA = sh.getRange(2, 1, lastRow - 1, 1).getValues();
+      for (var i = 0; i < colA.length; i++) {
+        if (digits_(colA[i][0]) === dni) {
+          rowIndex = i + 2;
+          break;
+        }
       }
     }
 
-    // DNI | NOMBRE | CELULAR | NOMBRE SUPERVISOR GLOBAL | DNI INICIO SESION | ULTIMA HORA REGISTRO
-    var row = [dni, nombre, celular, supervisorGlobal, dniSesion, hora];
+    // DNI | NOMBRE | CELULAR | GRUPO LIC | GRUPO | SUPERVISOR | DNI SESION | HORA
+    var row = [dni, nombre, celular, grupoLic, grupo, supervisorGlobal, dniSesion, hora];
 
     if (rowIndex > 0) {
-      var prev = data[rowIndex - 1] || [];
+      var prev = sh.getRange(rowIndex, 1, 1, HEADERS.length).getValues()[0] || [];
       if (!nombre && clean_(prev[1])) row[1] = clean_(prev[1]).toUpperCase();
-      if (!supervisorGlobal && clean_(prev[3])) row[3] = clean_(prev[3]).toUpperCase();
-      if (!dniSesion && digits_(prev[4])) row[4] = digits_(prev[4]);
-      // celular y hora siempre se actualizan con el nuevo registro
+      if (!grupoLic && clean_(prev[3])) row[3] = clean_(prev[3]).toUpperCase();
+      if (!grupo && clean_(prev[4])) row[4] = clean_(prev[4]).toUpperCase();
+      if (!supervisorGlobal && clean_(prev[5])) row[5] = clean_(prev[5]).toUpperCase();
+      if (!dniSesion && digits_(prev[6])) row[6] = digits_(prev[6]);
       sh.getRange(rowIndex, 1, 1, HEADERS.length).setValues([row]);
       return {
         dni: dni,
         nombre: row[1],
         celular: row[2],
-        supervisorGlobal: row[3],
-        dniSesion: row[4],
-        hora: row[5],
+        grupoLic: row[3],
+        grupo: row[4],
+        supervisorGlobal: row[5],
+        dniSesion: row[6],
+        hora: row[7],
         updated: true,
         created: false,
         syncStatus: 'synced'
       };
     }
 
-    sh.appendRow(row);
+    var start = sh.getLastRow() + 1;
+    sh.getRange(start, 1, 1, HEADERS.length).setValues([row]);
     return {
       dni: dni,
       nombre: nombre,
       celular: celular,
+      grupoLic: grupoLic,
+      grupo: grupo,
       supervisorGlobal: supervisorGlobal,
       dniSesion: dniSesion,
       hora: hora,
@@ -300,16 +362,21 @@ function existeVinculo_(dni) {
   dni = digits_(dni);
   if (!dni) return null;
   var sh = sheet_();
-  var data = sh.getDataRange().getValues();
-  for (var i = 1; i < data.length; i++) {
-    if (digits_(data[i][0]) === dni) {
+  var lastRow = sh.getLastRow();
+  if (lastRow < 2) return null;
+  var colA = sh.getRange(2, 1, lastRow - 1, 1).getValues();
+  for (var i = 0; i < colA.length; i++) {
+    if (digits_(colA[i][0]) === dni) {
+      var r = sh.getRange(i + 2, 1, 1, HEADERS.length).getValues()[0];
       return {
-        dni: digits_(data[i][0]),
-        nombre: clean_(data[i][1]),
-        celular: digits_(data[i][2]),
-        supervisorGlobal: clean_(data[i][3]),
-        dniSesion: digits_(data[i][4]),
-        hora: data[i][5] != null ? String(data[i][5]) : ''
+        dni: digits_(r[0]),
+        nombre: clean_(r[1]),
+        celular: digits_(r[2]),
+        grupoLic: clean_(r[3]),
+        grupo: clean_(r[4]),
+        supervisorGlobal: clean_(r[5]),
+        dniSesion: digits_(r[6]),
+        hora: r[7] != null ? String(r[7]) : ''
       };
     }
   }
@@ -320,9 +387,13 @@ function listarVinculos_(params) {
   params = params || {};
   var filtro = digits_(params.dni);
   var sh = sheet_();
-  var data = sh.getDataRange().getValues();
+  var lastRow = sh.getLastRow();
+  if (lastRow < 2) {
+    return { ok: true, api: 'supervisores', count: 0, data: [] };
+  }
+  var data = sh.getRange(2, 1, lastRow - 1, HEADERS.length).getValues();
   var out = [];
-  for (var i = 1; i < data.length; i++) {
+  for (var i = 0; i < data.length; i++) {
     var dni = digits_(data[i][0]);
     if (!dni) continue;
     if (filtro && dni !== filtro) continue;
@@ -330,9 +401,11 @@ function listarVinculos_(params) {
       dni: dni,
       nombre: clean_(data[i][1]),
       celular: digits_(data[i][2]),
-      supervisorGlobal: clean_(data[i][3]),
-      dniSesion: digits_(data[i][4]),
-      hora: data[i][5] != null ? String(data[i][5]) : ''
+      grupoLic: clean_(data[i][3]),
+      grupo: clean_(data[i][4]),
+      supervisorGlobal: clean_(data[i][5]),
+      dniSesion: digits_(data[i][6]),
+      hora: data[i][7] != null ? String(data[i][7]) : ''
     });
   }
   out.reverse();
@@ -375,18 +448,41 @@ function ensureHeaders_(sh) {
       sh.clear();
       writeHeaders_(sh);
     } else {
-      // Inserta fila de headers si hay datos sin cabecera
       sh.insertRowBefore(1);
       writeHeaders_(sh);
     }
-  } else {
-    // Asegura columnas con nombres actuales
-    sh.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
-    sh.getRange(1, 1, 1, HEADERS.length)
+    return;
+  }
+
+  // Migración: GRUPO LIC (D) + GRUPO (E)
+  var headers = sh.getRange(1, 1, 1, Math.max(lastCol, HEADERS.length)).getValues()[0];
+  var hasGrupoLic = false;
+  var hasGrupo = false;
+  for (var h = 0; h < headers.length; h++) {
+    var name = String(headers[h] || '').trim().toUpperCase();
+    if (name === 'GRUPO LIC') hasGrupoLic = true;
+    if (name === 'GRUPO') hasGrupo = true;
+  }
+  if (!hasGrupoLic) {
+    sh.insertColumnAfter(3); // después de CELULAR
+    sh.getRange(1, 4)
+      .setValue('GRUPO LIC')
       .setFontWeight('bold')
       .setBackground('#5ead51')
       .setFontColor('#ffffff');
-    sh.setFrozenRows(1);
+    hasGrupo = false; // índices se corren
+    headers = sh.getRange(1, 1, 1, Math.max(sh.getLastColumn(), HEADERS.length)).getValues()[0];
+    for (var h2 = 0; h2 < headers.length; h2++) {
+      if (String(headers[h2] || '').trim().toUpperCase() === 'GRUPO') hasGrupo = true;
+    }
+  }
+  if (!hasGrupo) {
+    sh.insertColumnAfter(4);
+    sh.getRange(1, 5)
+      .setValue('GRUPO')
+      .setFontWeight('bold')
+      .setBackground('#5ead51')
+      .setFontColor('#ffffff');
   }
 }
 
@@ -443,8 +539,14 @@ function digits_(v) {
   return String(clean_(v) || '').replace(/\D/g, '');
 }
 
-/* -------------------- Tests -------------------- */
+/* -------------------- Pruebas (solo ping · rápido) -------------------- */
 
+/**
+ * Cómo probar (sin Depurador):
+ * 1) Elige "testPing" o "myFunction"
+ * 2) Ejecutar ▶ (NO Depurar)
+ * 3) Ver → Registros → {"ok":true,"api":"supervisores",...}
+ */
 function myFunction() {
   testPing();
 }
@@ -459,30 +561,5 @@ function testPing() {
     Logger.log(doGet({ parameter: { action: 'ping', token: tok } }).getContent());
   } catch (err) {
     Logger.log('ERROR testPing: ' + err);
-  }
-}
-
-function testRegistrar() {
-  try {
-    var tok = expectedToken_();
-    var out = doPost({
-      postData: {
-        contents: JSON.stringify({
-          action: 'registrarVinculo',
-          token: tok,
-          data: {
-            dni: '42992833',
-            nombre: 'PONCE RUIZ ISIDRO',
-            celular: '913420257',
-            supervisorGlobal: 'VERDE PINILLOS LUIS PABLITO',
-            dniSesion: '42992833',
-            hora: Utilities.formatDate(new Date(), 'America/Lima', 'dd/MM/yyyy hh:mm:ss a')
-          }
-        })
-      }
-    }).getContent();
-    Logger.log(out);
-  } catch (err) {
-    Logger.log('ERROR testRegistrar: ' + err);
   }
 }

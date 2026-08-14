@@ -1,18 +1,20 @@
 # Apps Script · DATA-SUPERVISORES
 
-Pegue `Code.gs` en el Sheet **DATA-SUPERVISORES**.
+Misma lógica/seguridad que **Tarjeta Pallet** (token + proxy Netlify).
 
-## Columnas (Hoja 1)
-| DNI | NOMBRE | CELULAR | NOMBRE SUPERVISOR GLOBAL | DNI INICIO SESION | ULTIMA HORA REGISTRO |
+## Setup
+1. Pegue `Code.gs` completo en el Sheet **DATA-SUPERVISORES**
+2. Propiedades del script → `API_TOKEN` = mismo que Netlify
+3. Implementar → **Nueva versión** → Aplicación web
+4. URL `/exec` → Netlify `APPS_SCRIPT_URL`
 
-- **DNI** + **NOMBRE**: del carnet QR
-- **CELULAR**: exactamente 9 dígitos y debe comenzar con **9**
-- **NOMBRE SUPERVISOR GLOBAL**: lo escriben ellos (solo nombre)
-- **DNI INICIO SESION**: DNI del QR que inició sesión
-- **ULTIMA HORA REGISTRO**: última vez que se guardó (Lima)
+## Columnas
+| DNI | NOMBRE | CELULAR | GRUPO LIC | GRUPO | NOMBRE SUPERVISOR GLOBAL | DNI INICIO SESION | ULTIMA HORA REGISTRO |
 
-Upsert por DNI (sin duplicados). Cada guardado actualiza celular y hora.
+## Endpoints
+- `ping`
+- `registrarVinculo` (POST, upsert por DNI)
+- `listarVinculos` / `existeVinculo`
 
-## Netlify
-- `APPS_SCRIPT_URL` = URL `/exec`
-- `API_TOKEN` = el mismo token que en Propiedades del script (solo en Netlify env, no en el código)
+## Prueba en editor
+Solo `testPing` / `myFunction` (rápido). **No** hay `testRegistrar`.

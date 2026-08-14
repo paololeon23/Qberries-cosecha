@@ -13,12 +13,12 @@
   <link rel="icon" href="assets/favicon.png" type="image/png" sizes="64x64" />
   <link rel="apple-touch-icon" href="assets/icon-192.png" />
   <title>QBerries · Supervisores</title>
-  <link rel="stylesheet" href="styles.css?v=44" />
-  <script src="vendor/xlsx.full.min.js?v=44" defer></script>
-  <script src="vendor/jspdf.umd.min.js?v=44" defer></script>
-  <script src="vendor/jsQR.min.js?v=44" defer></script>
-  <script src="icons.js?v=44" defer></script>
-  <script src="app.js?v=44" defer></script>
+  <link rel="stylesheet" href="styles.css?v=66" />
+  <script src="vendor/xlsx.full.min.js?v=66" defer></script>
+  <script src="vendor/jspdf.umd.min.js?v=66" defer></script>
+  <script src="vendor/jsQR.min.js?v=66" defer></script>
+  <script src="icons.js?v=66" defer></script>
+  <script src="app.js?v=66" defer></script>
 </head>
 <body>
   <div class="stage">
@@ -48,8 +48,8 @@
         <p class="pin-hint" id="pinHint">Escanee su carnet QR para entrar</p>
       </div>
 
-      <!-- Login: solo QR (el carnet trae el DNI) -->
-      <div class="security-screen" id="securityScreen">
+      <!-- Login: solo QR (oculto al cargar → no flash de seguridad en refresh) -->
+      <div class="security-screen" id="securityScreen" hidden>
         <div class="hero-head">
           <div class="hero-head-left">
             <img class="hero-logo" src="assets/logo-qberries.png" alt="QBerries" />
@@ -75,9 +75,9 @@
           <div class="qr-frame" id="qrFrame">
             <video id="qrVideo" playsinline muted></video>
             <canvas id="qrCanvas" hidden></canvas>
-            <div class="qr-overlay" id="qrOverlay">
+            <div class="qr-overlay" id="qrOverlay" hidden>
               <span data-icon="scan"></span>
-              <p id="qrOverlayText">Preparando cámara…</p>
+              <p id="qrOverlayText"></p>
             </div>
           </div>
           <div class="sec-found" id="secFound" hidden>
@@ -120,17 +120,17 @@
             </span>
           </div>
         </div>
-        <form class="session-form vinculo-form" id="vinculoForm">
-          <div class="id-summary" aria-label="Datos del carnet">
-            <div class="id-summary-row">
-              <span>DNI</span>
-              <strong id="vinDniShow">—</strong>
-            </div>
-            <div class="id-summary-row">
-              <span>Nombre</span>
-              <strong id="vinNombreShow">—</strong>
-            </div>
+        <div class="id-summary" aria-label="Datos del carnet">
+          <div class="id-summary-row">
+            <span>DNI</span>
+            <strong id="vinDniShow">—</strong>
           </div>
+          <div class="id-summary-row">
+            <span>Nombre</span>
+            <strong id="vinNombreShow">—</strong>
+          </div>
+        </div>
+        <form class="session-form vinculo-form" id="vinculoForm">
           <input id="vinDni" type="hidden" />
           <input id="vinNombre" type="hidden" />
 
@@ -142,10 +142,31 @@
           </div>
 
           <div class="form-block">
+            <div class="vin-grupo-pair">
+              <div class="vin-grupo-col">
+                <span class="field-label">Grupo LIC</span>
+                <input type="hidden" id="vinGrupoLic" value="" />
+                <button type="button" class="select-trigger" id="btnVinGrupoLic" aria-label="Elegir Grupo LIC">
+                  <span id="vinGrupoLicLabel" class="ph">Grupo LIC 01</span>
+                  <span class="chev" data-icon="search"></span>
+                </button>
+              </div>
+              <div class="vin-grupo-col">
+                <span class="field-label">Grupo</span>
+                <input type="hidden" id="vinGrupo" value="" />
+                <button type="button" class="select-trigger" id="btnVinGrupo" aria-label="Elegir Grupo">
+                  <span id="vinGrupoLabel" class="ph">Grupo 01</span>
+                  <span class="chev" data-icon="search"></span>
+                </button>
+              </div>
+            </div>
+            <p class="field-hint">Izquierda: Grupo LIC 01–60 · Derecha: Grupo 01–60</p>
+          </div>
+
+          <div class="form-block">
             <label for="vinEncargado">Supervisor global
               <input id="vinEncargado" type="text" placeholder="Nombre completo" required autocomplete="off" maxlength="80" />
             </label>
-            <p class="field-hint">Escriba solo el nombre del encargado</p>
           </div>
 
           <button type="submit" class="btn btn-primary btn-block btn-lg">
@@ -170,6 +191,7 @@
             <span id="thanksDni">—</span>
             <span id="thanksNombre">—</span>
           </div>
+          <p class="thanks-sync" id="thanksSyncStatus" hidden></p>
           <button type="button" class="btn btn-primary btn-block" id="btnThanksOk">
             <span data-icon="check"></span> Listo
           </button>

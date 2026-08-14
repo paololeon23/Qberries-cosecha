@@ -1,6 +1,7 @@
 .env
 .env.*
 !.env.example
+local-cloud.js
 node_modules/
 .netlify/
 *.log

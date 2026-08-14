@@ -22,16 +22,26 @@ function cleanText(v) {
     .toUpperCase();
 }
 
+function padGrupo_(n) {
+  const num = Number(String(n || "").replace(/\D/g, ""));
+  if (!num || num < 1 || num > 60) return "";
+  return String(num).padStart(2, "0");
+}
+
 /** Solo lo que va al Sheet DATA-SUPERVISORES */
 function sanitizeVinculo(raw) {
   const src = raw && typeof raw === "object" ? raw : {};
   const dni = digits(src.dni);
   const celular = digits(src.celular || src.telefono);
   const dniSesion = digits(src.dniSesion || src.dniInicioSesion || dni) || dni;
+  const licN = padGrupo_(src.grupoLic);
+  const gN = padGrupo_(src.grupo);
   return {
     dni,
     nombre: cleanText(src.nombre || src.name),
     celular,
+    grupoLic: licN ? `GRUPO LIC ${licN}` : "",
+    grupo: gN ? `GRUPO ${gN}` : "",
     supervisorGlobal: cleanText(
       src.supervisorGlobal || src.nombreSupervisorGlobal || src.encargado
     ),
@@ -112,6 +122,26 @@ exports.handler = async (event) => {
         body: JSON.stringify({
           ok: false,
           error: "Falta nombre del supervisor global",
+        }),
+      };
+    }
+    if (!/^GRUPO LIC ([0-5][0-9]|60)$/.test(String(data.grupoLic || ""))) {
+      return {
+        statusCode: 400,
+        headers: cors,
+        body: JSON.stringify({
+          ok: false,
+          error: "Grupo LIC inválido (01 al 60)",
+        }),
+      };
+    }
+    if (!/^GRUPO ([0-5][0-9]|60)$/.test(String(data.grupo || ""))) {
+      return {
+        statusCode: 400,
+        headers: cors,
+        body: JSON.stringify({
+          ok: false,
+          error: "Grupo inválido (01 al 60)",
         }),
       };
     }

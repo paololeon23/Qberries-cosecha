@@ -12,6 +12,7 @@
   const SESSION_KEY = "qb-supervisores-unlocked";
   const SESSION_PIN_KEY = "qb-supervisores-session-pin";
   const IDENTITY_KEY = "qb-supervisores-identity";
+  const IDENTITY_LS_KEY = "qb-supervisores-identity-ls";
   const DEFAULT_PIN = "";
   const API = {
     login: "/.netlify/functions/login",
@@ -95,7 +96,7 @@
     pendingConfirm: /** @type {null | (() => void)} */ (null),
     picker: /** @type {null | { kind: "grupo"|"lote", guiaId: string }} */ (null),
     netlifyReady: false,
-    /** false = Live Server / sin functions; solo datos locales + cola */
+    /** true = /.netlify/functions disponibles */
     cloudApi: false,
     unlocking: false,
     online: typeof navigator !== "undefined" ? navigator.onLine : true,
@@ -343,9 +344,110 @@
     if (el) el.hidden = true;
     const q = $("#pickerQuery");
     if (q) q.value = "";
+    const addBtn = $("#pickerAdd");
+    if (addBtn) addBtn.hidden = false;
+  }
+
+  function grupoLicList_() {
+    const out = [];
+    for (let n = 1; n <= 60; n++) {
+      const num = String(n).padStart(2, "0");
+      out.push({
+        key: `GRUPO LIC ${num}`,
+        primary: `Grupo LIC ${num}`,
+        secondary: "LIC",
+      });
+    }
+    return out;
+  }
+
+  function grupoNumList_() {
+    const out = [];
+    for (let n = 1; n <= 60; n++) {
+      const num = String(n).padStart(2, "0");
+      out.push({
+        key: `GRUPO ${num}`,
+        primary: `Grupo ${num}`,
+        secondary: "",
+      });
+    }
+    return out;
+  }
+
+  function normGrupoLic_(raw) {
+    const gNum = String(raw || "").replace(/\D/g, "");
+    if (gNum && Number(gNum) >= 1 && Number(gNum) <= 60) {
+      return `GRUPO LIC ${String(Number(gNum)).padStart(2, "0")}`;
+    }
+    return "";
+  }
+
+  function normGrupoNum_(raw) {
+    const gNum = String(raw || "").replace(/\D/g, "");
+    if (gNum && Number(gNum) >= 1 && Number(gNum) <= 60) {
+      return `GRUPO ${String(Number(gNum)).padStart(2, "0")}`;
+    }
+    return "";
+  }
+
+  function setVinGrupoLicUI(value) {
+    const v = normGrupoLic_(value);
+    const hidden = $("#vinGrupoLic");
+    const label = $("#vinGrupoLicLabel");
+    if (hidden) hidden.value = v;
+    if (!label) return;
+    if (v) {
+      label.textContent = v.replace(/^GRUPO\s+/i, "Grupo ");
+      label.classList.remove("ph");
+    } else {
+      label.textContent = "Grupo LIC 01";
+      label.classList.add("ph");
+    }
+  }
+
+  function setVinGrupoUI(value) {
+    const v = normGrupoNum_(value);
+    const hidden = $("#vinGrupo");
+    const label = $("#vinGrupoLabel");
+    if (hidden) hidden.value = v;
+    if (!label) return;
+    if (v) {
+      label.textContent = v.replace(/^GRUPO\s+/i, "Grupo ");
+      label.classList.remove("ph");
+    } else {
+      label.textContent = "Grupo 01";
+      label.classList.add("ph");
+    }
   }
 
   function openPicker(kind, guiaId) {
+    if (kind === "grupoLic" || kind === "grupoNum") {
+      state.picker = { kind, guiaId: "" };
+      const title = $("#pickerTitle");
+      const query = $("#pickerQuery");
+      const addBtn = $("#pickerAdd");
+      if (title) {
+        title.textContent =
+          kind === "grupoLic" ? "Buscar Grupo LIC" : "Buscar Grupo";
+      }
+      if (query) {
+        query.placeholder =
+          kind === "grupoLic"
+            ? "Buscar Grupo LIC 01, 02…"
+            : "Buscar Grupo 01, 02…";
+        query.value = "";
+      }
+      if (addBtn) addBtn.hidden = true;
+      renderPickerList();
+      const backdrop = $("#picker");
+      if (backdrop) {
+        backdrop.hidden = false;
+        hydrateIcons(backdrop);
+      }
+      setTimeout(() => query?.focus(), 60);
+      return;
+    }
+
     const guia = findGuia(guiaId);
     if (!guia) return;
     state.picker = { kind, guiaId };
@@ -362,7 +464,10 @@
           : "Buscar grupo...";
       query.value = "";
     }
-    if (addBtn) addBtn.textContent = "Agregar uno";
+    if (addBtn) {
+      addBtn.hidden = false;
+      addBtn.textContent = "Agregar uno";
+    }
     renderPickerList();
     const backdrop = $("#picker");
     if (backdrop) {
@@ -378,6 +483,31 @@
     const q = String($("#pickerQuery")?.value || "")
       .trim()
       .toLowerCase();
+
+    if (ctx.kind === "grupoLic") {
+      return grupoLicList_().filter((g) => {
+        if (!q) return true;
+        const n = String(parseInt(g.key.replace(/\D/g, ""), 10));
+        return (
+          g.primary.toLowerCase().includes(q) ||
+          g.key.toLowerCase().includes(q) ||
+          n.includes(q) ||
+          q.includes("lic")
+        );
+      });
+    }
+    if (ctx.kind === "grupoNum") {
+      return grupoNumList_().filter((g) => {
+        if (!q) return true;
+        const n = String(parseInt(g.key.replace(/\D/g, ""), 10));
+        return (
+          g.primary.toLowerCase().includes(q) ||
+          g.key.toLowerCase().includes(q) ||
+          n.includes(q)
+        );
+      });
+    }
+
     if (ctx.kind === "grupo") {
       return state.grupos
         .filter((g) => !q || String(g).toLowerCase().includes(q))
@@ -406,15 +536,20 @@
     const list = $("#pickerList");
     if (!list) return;
     const items = pickerItems();
-    const selected =
-      state.picker && findGuia(state.picker.guiaId)
-        ? state.picker.kind === "lote"
+    let selected = "";
+    if (state.picker?.kind === "grupoLic") {
+      selected = $("#vinGrupoLic")?.value || "";
+    } else if (state.picker?.kind === "grupoNum") {
+      selected = $("#vinGrupo")?.value || "";
+    } else if (state.picker && findGuia(state.picker.guiaId)) {
+      selected =
+        state.picker.kind === "lote"
           ? findGuia(state.picker.guiaId).lote
-          : findGuia(state.picker.guiaId).grupo
-        : "";
+          : findGuia(state.picker.guiaId).grupo;
+    }
 
     if (!items.length) {
-      list.innerHTML = `<div class="picker-empty">Sin resultados.<br/>Use «Agregar uno» si no encuentra el suyo.</div>`;
+      list.innerHTML = `<div class="picker-empty">Sin resultados.</div>`;
       return;
     }
 
@@ -437,10 +572,24 @@
   function applyPickerValue(value) {
     const ctx = state.picker;
     if (!ctx) return;
-    const guia = findGuia(ctx.guiaId);
-    if (!guia) return;
     const v = String(value || "").trim();
     if (!v) return;
+
+    if (ctx.kind === "grupoLic") {
+      setVinGrupoLicUI(v);
+      closePicker();
+      toast(v.replace(/^GRUPO\s+/i, "Grupo "));
+      return;
+    }
+    if (ctx.kind === "grupoNum") {
+      setVinGrupoUI(v);
+      closePicker();
+      toast(v.replace(/^GRUPO\s+/i, "Grupo "));
+      return;
+    }
+
+    const guia = findGuia(ctx.guiaId);
+    if (!guia) return;
 
     if (ctx.kind === "grupo") {
       guia.grupo = v;
@@ -461,7 +610,7 @@
 
   function onPickerAdd() {
     const ctx = state.picker;
-    if (!ctx) return;
+    if (!ctx || ctx.kind === "grupoLic" || ctx.kind === "grupoNum") return;
     const typed = String($("#pickerQuery")?.value || "").trim();
     if (!typed) {
       toast("Escriba arriba lo que desea agregar");
@@ -492,7 +641,13 @@
 
   function getIdentity() {
     try {
-      return JSON.parse(sessionStorage.getItem(IDENTITY_KEY) || "null");
+      const fromSession = JSON.parse(sessionStorage.getItem(IDENTITY_KEY) || "null");
+      if (fromSession?.dni) return fromSession;
+    } catch {
+      /* ignore */
+    }
+    try {
+      return JSON.parse(localStorage.getItem(IDENTITY_LS_KEY) || "null");
     } catch {
       return null;
     }
@@ -504,6 +659,11 @@
     if (!id?.dni) return false;
     const persona = lookupSupervisor(id.dni);
     if (!persona) {
+      // JSON aún no cargado → no borrar (evita salto a seguridad en refresh)
+      if (!Object.keys(state.supervisores || {}).length) {
+        state.identity = id;
+        return true;
+      }
       setIdentity(null);
       return false;
     }
@@ -513,10 +673,47 @@
       nombre: persona.nombre || id.nombre || "",
       cargo: persona.cargo || id.cargo || "SUPERVISOR DE COSECHA",
       celular: done.celular || persona.celular || id.celular || "",
-      supervisorGlobal: done.supervisorGlobal || "",
+      supervisorGlobal: done.supervisorGlobal || id.supervisorGlobal || "",
+      grupo: done.grupo || id.grupo || "",
+      grupoLic: done.grupoLic || id.grupoLic || "",
     };
     setIdentity(state.identity);
     return true;
+  }
+
+  /** Tras refresh: recupera el último vínculo hecho en este dispositivo */
+  function restoreIdentityFromVinculo_() {
+    const existing = getIdentity();
+    if (existing?.dni) {
+      state.identity = existing;
+      return existing;
+    }
+    const map = vinculoDoneMap();
+    let best = null;
+    let bestAt = 0;
+    Object.keys(map).forEach((dni) => {
+      const info = map[dni] || {};
+      if (!info.celular || !info.supervisorGlobal) return;
+      const t = Date.parse(info.at || 0) || 0;
+      if (t >= bestAt) {
+        bestAt = t;
+        const persona = lookupSupervisor(dni) || {};
+        best = {
+          dni,
+          nombre: persona.nombre || "",
+          cargo: persona.cargo || "SUPERVISOR DE COSECHA",
+          celular: info.celular || "",
+          supervisorGlobal: info.supervisorGlobal || "",
+          grupo: info.grupo || "",
+          grupoLic: info.grupoLic || "",
+        };
+      }
+    });
+    if (best?.dni) {
+      setIdentity(best);
+      return best;
+    }
+    return null;
   }
 
   /** Evita mezclar datos de otro DNI al refrescar el mismo dispositivo */
@@ -533,9 +730,18 @@
   }
 
   function setIdentity(identity) {
-    state.identity = identity;
-    if (identity) sessionStorage.setItem(IDENTITY_KEY, JSON.stringify(identity));
-    else sessionStorage.removeItem(IDENTITY_KEY);
+    state.identity = identity || null;
+    try {
+      if (identity) {
+        sessionStorage.setItem(IDENTITY_KEY, JSON.stringify(identity));
+        localStorage.setItem(IDENTITY_LS_KEY, JSON.stringify(identity));
+      } else {
+        sessionStorage.removeItem(IDENTITY_KEY);
+        localStorage.removeItem(IDENTITY_LS_KEY);
+      }
+    } catch {
+      /* ignore */
+    }
   }
 
   function hideAllScreens() {
@@ -552,9 +758,9 @@
   }
 
   function showSecurityLogin(msg) {
-    stopCamera();
     closeSheets();
     closePicker();
+    // Solo limpia identidad al entrar a escanear de nuevo (logout / nuevo QR)
     setIdentity(null);
     hideAllScreens();
     const screen = $("#securityScreen");
@@ -565,10 +771,14 @@
     if (formMsg) formMsg.textContent = msg || "";
     const found = $("#secFound");
     if (found) found.hidden = true;
+    const overlay = $("#qrOverlay");
     const overlayTxt = $("#qrOverlayText");
-    if (overlayTxt) overlayTxt.textContent = "Apunte al QR del carnet";
-    // Arranca cámara sola (solo escáner)
-    setTimeout(() => startCamera().catch(() => {}), 200);
+    if (overlayTxt) overlayTxt.textContent = "";
+    if (overlay) overlay.hidden = true;
+    if ($("#btnStartCam")) $("#btnStartCam").hidden = true;
+    if ($("#btnStopCam")) $("#btnStopCam").hidden = false;
+    if ($("#btnSecBack")) $("#btnSecBack").hidden = false;
+    setTimeout(() => startCamera().catch(() => {}), 120);
   }
 
   /** Contraseña desactivada por ahora: acceso solo con QR */
@@ -693,13 +903,15 @@
     }
   }
 
-  function markVinculoDone(dni, celular, supervisorGlobal) {
+  function markVinculoDone(dni, celular, supervisorGlobal, grupo, grupoLic) {
     const map = vinculoDoneMap();
     map[String(dni)] = {
       celular: String(celular || ""),
       supervisorGlobal: String(supervisorGlobal || "")
         .trim()
         .toUpperCase(),
+      grupo: normGrupoNum_(grupo),
+      grupoLic: normGrupoLic_(grupoLic),
       at: new Date().toISOString(),
     };
     localStorage.setItem(VINCULO_DONE_KEY, JSON.stringify(map));
@@ -708,13 +920,28 @@
   function needsVinculo(identity) {
     if (!identity?.dni) return true;
     const done = vinculoDoneMap()[identity.dni];
-    if (done?.celular && done?.supervisorGlobal) return false;
+    if (
+      done?.celular &&
+      done?.supervisorGlobal &&
+      done?.grupo &&
+      done?.grupoLic
+    ) {
+      return false;
+    }
     if (
       identity.celular &&
       String(identity.celular).length >= 9 &&
-      identity.supervisorGlobal
+      identity.supervisorGlobal &&
+      identity.grupo &&
+      identity.grupoLic
     ) {
-      markVinculoDone(identity.dni, identity.celular, identity.supervisorGlobal);
+      markVinculoDone(
+        identity.dni,
+        identity.celular,
+        identity.supervisorGlobal,
+        identity.grupo,
+        identity.grupoLic
+      );
       return false;
     }
     return true;
@@ -745,6 +972,8 @@
       .trim()
       .replace(/\s+/g, " ")
       .toUpperCase();
+    const grupoLic = normGrupoLic_(raw?.grupoLic);
+    const grupo = normGrupoNum_(raw?.grupo);
     const hora =
       String(raw?.horaRegistro || raw?.hora || "").trim() ||
       new Date().toLocaleString("es-PE", { hour12: true });
@@ -752,6 +981,8 @@
       dni,
       nombre,
       celular,
+      grupoLic,
+      grupo,
       supervisorGlobal,
       dniSesion,
       horaRegistro: hora,
@@ -763,6 +994,8 @@
     const clean = buildVinculoPayload(payload);
     if (!clean.dni || clean.dni.length < 8) return;
     if (!/^9\d{8}$/.test(clean.celular)) return;
+    if (!/^GRUPO LIC ([0-5][0-9]|60)$/.test(clean.grupoLic)) return;
+    if (!/^GRUPO ([0-5][0-9]|60)$/.test(clean.grupo)) return;
     if (!clean.supervisorGlobal || clean.supervisorGlobal.length < 3) return;
     const q = loadVinculoQueue();
     const next = q.filter((x) => String(x.dni) !== clean.dni);
@@ -771,64 +1004,67 @@
     updateNetworkUI();
   }
 
-  function isHostedOnNetlify() {
-    const h = String(location.hostname || "").toLowerCase();
-    if (!h || h === "localhost" || h === "127.0.0.1" || h === "[::1]") {
-      // Pruebas locales con local-server.ps1
-      try {
-        if (localStorage.getItem("qb-local-cloud") === "1") return true;
-      } catch {
-        /* ignore */
-      }
-      return false;
-    }
-    return true;
+  /** Solo proxy Netlify (/.netlify/functions/…) */
+  function canUseCloudApi() {
+    return !!navigator.onLine && !!state.cloudApi;
   }
 
-  function canUseCloudApi() {
-    return !!state.cloudApi && navigator.onLine;
+  function canUseNetlifyProxy() {
+    return canUseCloudApi();
+  }
+
+  function setThanksSyncStatus(text, mode) {
+    const el = $("#thanksSyncStatus");
+    if (!el) return;
+    el.hidden = false;
+    el.textContent = text;
+    el.classList.remove("is-ok", "is-pending", "is-err");
+    if (mode) el.classList.add(mode);
   }
 
   async function flushVinculoQueue() {
     state.online = navigator.onLine;
     if (!state.online) {
       updateNetworkUI();
-      return { sent: 0, remain: loadVinculoQueue().length };
+      return { sent: 0, remain: loadVinculoQueue().length, reason: "offline" };
     }
     if (!canUseCloudApi()) {
-      // Live Server / sin Netlify: no llamar POST (evita 405)
       updateNetworkUI();
-      return { sent: 0, remain: loadVinculoQueue().length };
+      return { sent: 0, remain: loadVinculoQueue().length, reason: "no-api" };
     }
     ensureSessionGate();
     const q = loadVinculoQueue();
     if (!q.length) {
       updateNetworkUI();
-      return { sent: 0, remain: 0 };
+      return { sent: 0, remain: 0, reason: "empty" };
     }
     updateNetworkUI();
     const pin = sessionPin() || getPin();
     const remain = [];
     let sent = 0;
+    let lastError = "";
     for (let i = 0; i < q.length; i++) {
       const item = q[i];
       const data = buildVinculoPayload(item);
       if (
         !data.dni ||
         !/^9\d{8}$/.test(data.celular) ||
+        !data.grupo ||
+        !data.grupoLic ||
         !data.supervisorGlobal
       ) {
         continue;
       }
       try {
+        const body = {
+          action: "registrarVinculo",
+          pin,
+          data,
+        };
         const res = await fetch(API.sync, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "registrarVinculo",
-            pin,
-            data,
-          }),
+          body: JSON.stringify(body),
         });
         if (res.status === 405) {
           state.cloudApi = false;
@@ -836,21 +1072,41 @@
           for (let j = i; j < q.length; j++) {
             remain.push(buildVinculoPayload(q[j]));
           }
+          lastError = "API no disponible (405)";
           break;
         }
         const json = await res.json().catch(() => ({}));
         const ok =
-          res.ok && (json.ok === true || json?.data?.ok === true);
+          res.ok &&
+          (json.ok === true ||
+            json?.data?.ok === true ||
+            (json.api === "supervisores" && json.data && json.ok !== false));
         if (ok) {
-          markVinculoDone(data.dni, data.celular, data.supervisorGlobal);
+          markVinculoDone(
+            data.dni,
+            data.celular,
+            data.supervisorGlobal,
+            data.grupo,
+            data.grupoLic
+          );
           sent += 1;
         } else {
+          lastError =
+            json?.message ||
+            json?.data?.message ||
+            json?.error ||
+            json?.data?.error ||
+            "Error al guardar";
+          if (json?.code === "UNAUTHORIZED") {
+            lastError = "UNAUTHORIZED · revise API_TOKEN en Netlify";
+          }
           remain.push({
             ...data,
             queuedAt: item.queuedAt || new Date().toISOString(),
           });
         }
-      } catch {
+      } catch (err) {
+        lastError = String(err && err.message ? err.message : err);
         remain.push({
           ...data,
           queuedAt: item.queuedAt || new Date().toISOString(),
@@ -860,11 +1116,11 @@
     saveVinculoQueue(remain);
     updateNetworkUI();
     if (sent > 0 && remain.length === 0) {
-      toast("Enviado al servidor");
+      toast("Enviado");
     } else if (sent > 0 && remain.length) {
       toast(`Enviado parcial · ${remain.length} pendiente(s)`);
     }
-    return { sent, remain: remain.length };
+    return { sent, remain: remain.length, reason: lastError || "ok" };
   }
 
   function showVinculoThanks(identity) {
@@ -877,7 +1133,8 @@
     }
     const form = $("#vinculoForm");
     const thanks = $("#vinculoThanks");
-    if (form) form.hidden = true;
+    // Formulario queda detrás (difuminado); la card sube encima
+    if (form) form.hidden = false;
     if (thanks) thanks.hidden = false;
     const dni = identity?.dni || state.identity?.dni || "";
     const nombre = identity?.nombre || state.identity?.nombre || "";
@@ -914,11 +1171,13 @@
     $("#vinNombre").value = nombre;
     if ($("#vinDniShow")) $("#vinDniShow").textContent = dni || "—";
     if ($("#vinNombreShow")) $("#vinNombreShow").textContent = nombre || "—";
-    const prev = vinculoDoneMap()[dni]?.supervisorGlobal || "";
-    $("#vinEncargado").value = prev || "";
+    const prev = vinculoDoneMap()[dni] || {};
+    $("#vinEncargado").value = prev.supervisorGlobal || "";
+    setVinGrupoLicUI(prev.grupoLic || "");
+    setVinGrupoUI(prev.grupo || "");
     if ($("#vinHeroDni")) $("#vinHeroDni").textContent = dni ? `DNI ${dni}` : "";
     $("#vinCelular").value =
-      identity.celular || vinculoDoneMap()[dni]?.celular || "";
+      identity.celular || prev.celular || "";
     updateNetworkUI();
     setTimeout(() => $("#vinCelular")?.focus(), 80);
   }
@@ -937,6 +1196,8 @@
       dni: identity.dni,
       nombre: identity.nombre || "",
       celular: done.celular || identity.celular || "",
+      grupo: done.grupo || identity.grupo || "",
+      grupoLic: done.grupoLic || identity.grupoLic || "",
       supervisorGlobal: done.supervisorGlobal || "",
       dniSesion: identity.dni,
       horaRegistro: new Date().toLocaleString("es-PE", { hour12: true }),
@@ -951,15 +1212,30 @@
   }
 
   async function startCamera() {
-    stopCamera();
+    // Detener stream previo sin restaurar overlay/botones de “idle”
+    if (state.camTimer) {
+      clearInterval(state.camTimer);
+      state.camTimer = 0;
+    }
+    if (state.camStream) {
+      state.camStream.getTracks().forEach((t) => t.stop());
+      state.camStream = null;
+    }
     const video = $("#qrVideo");
     const overlay = $("#qrOverlay");
     if (!navigator.mediaDevices?.getUserMedia) {
       $("#secMsg").textContent = "Cámara no disponible en este dispositivo";
       toast("Se necesita cámara para escanear el carnet");
+      if (overlay) overlay.hidden = false;
+      if ($("#btnStartCam")) $("#btnStartCam").hidden = false;
+      if ($("#btnStopCam")) $("#btnStopCam").hidden = true;
       return;
     }
     try {
+      if ($("#btnStartCam")) $("#btnStartCam").hidden = true;
+      if ($("#btnStopCam")) $("#btnStopCam").hidden = false;
+      if (overlay) overlay.hidden = true;
+      $("#secMsg").textContent = "";
       state.camStream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: { ideal: "environment" } },
         audio: false,
@@ -967,14 +1243,20 @@
       video.srcObject = state.camStream;
       await video.play();
       if (overlay) overlay.hidden = true;
-      $("#btnStartCam").hidden = true;
-      $("#btnStopCam").hidden = false;
-      $("#secMsg").textContent = "Escaneando…";
+      if ($("#btnStartCam")) $("#btnStartCam").hidden = true;
+      if ($("#btnStopCam")) $("#btnStopCam").hidden = false;
+      $("#secMsg").textContent = "";
       state.camTimer = window.setInterval(scanQrFrame, 280);
     } catch {
       $("#secMsg").textContent = "No se pudo abrir la cámara · revise permisos";
       toast("Active el permiso de cámara");
+      if (overlay) {
+        const t = $("#qrOverlayText");
+        if (t) t.textContent = "Toque para activar la cámara";
+        overlay.hidden = false;
+      }
       if ($("#btnStartCam")) $("#btnStartCam").hidden = false;
+      if ($("#btnStopCam")) $("#btnStopCam").hidden = true;
     }
   }
 
@@ -993,6 +1275,8 @@
       video.srcObject = null;
     }
     const overlay = $("#qrOverlay");
+    const overlayTxt = $("#qrOverlayText");
+    if (overlayTxt) overlayTxt.textContent = "Cámara detenida";
     if (overlay) overlay.hidden = false;
     if ($("#btnStartCam")) $("#btnStartCam").hidden = false;
     if ($("#btnStopCam")) $("#btnStopCam").hidden = true;
@@ -1058,9 +1342,17 @@
     }
 
     try {
+      if (!navigator.onLine && Object.keys(state.supervisores || {}).length) {
+        const elOff = $("#trabCount");
+        if (elOff) {
+          elOff.textContent = "Listo para escanear · modo sin internet";
+        }
+        return;
+      }
       const res = await fetch("data/supervisores-cosecha.json", {
         cache: "force-cache",
       });
+      if (!res.ok) throw new Error("catalogo");
       const data = await res.json();
       const byDni = data.byDni || data;
       const next = {};
@@ -1096,6 +1388,13 @@
   }
 
   async function loadPersonas() {
+    // Flujo actual = solo vínculo QR → no cargar catálogo pesado
+    if (!SESSION_FORM_ENABLED) {
+      const el = $("#trabCount");
+      if (el) el.textContent = "Listo para escanear · solo Supervisores de Cosecha";
+      return;
+    }
+
     // 1) Cache local primero (rápido)
     try {
       const cached = localStorage.getItem(PERSONAS_KEY);
@@ -1158,8 +1457,8 @@
       /* ignore */
     }
 
-    // 3) Solo en Netlify (no en Live Server → evita 405)
-    if (!canUseCloudApi()) {
+    // 3) Solo proxy Netlify
+    if (!canUseNetlifyProxy()) {
       setCount(Object.keys(state.personas).length ? " · local" : "");
       return;
     }
@@ -1177,8 +1476,6 @@
         body: JSON.stringify({ pin: sessionPin() || undefined }),
       });
       if (res.status === 405) {
-        state.cloudApi = false;
-        state.netlifyReady = false;
         throw new Error("no-api");
       }
       if (!res.ok) throw new Error("api");
@@ -1196,12 +1493,12 @@
         savePersonas();
         localStorage.setItem(
           PERSONAS_META_KEY,
-          JSON.stringify({ at: Date.now(), count: Object.keys(state.personas).length })
+          JSON.stringify({ at: Date.now(), source: "api" })
         );
-        setCount(" · actualizado");
+        setCount(" · nube");
       }
     } catch {
-      setCount(Object.keys(state.personas).length ? " · offline" : " · sin red");
+      setCount(Object.keys(state.personas).length ? " · local" : "");
     }
   }
 
@@ -1807,17 +2104,12 @@
       state.cloudApi = false;
       return;
     }
-    // Live Server / local: no llamar functions (solo Netlify en producción)
-    if (!isHostedOnNetlify()) {
-      state.netlifyReady = false;
-      state.cloudApi = false;
-      return;
-    }
+
     try {
-      const res = await fetch(API.login, {
+      const res = await fetch(API.sync, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pin: "__probe__" }),
+        body: JSON.stringify({ action: "ping", pin: sessionPin() || "" }),
       });
       if (res.status === 405) {
         state.netlifyReady = false;
@@ -1825,20 +2117,14 @@
         return;
       }
       state.netlifyReady =
-        res.status === 401 || res.status === 500 || res.status === 200;
-      state.cloudApi = state.netlifyReady;
+        res.status === 200 || res.status === 401 || res.status === 500 || res.status === 502;
+      state.cloudApi = res.status !== 404 && res.status !== 405;
+      if (res.status === 200) {
+        await res.json().catch(() => ({}));
+      }
     } catch {
       state.netlifyReady = false;
       state.cloudApi = false;
-    }
-    if (state.netlifyReady) {
-      const hint = $("#pinHint");
-      if (hint) hint.textContent = "Contraseña definida en Netlify (LOGIN_PIN)";
-      const btnPin = $("#btnCambiarPin");
-      if (btnPin) {
-        btnPin.disabled = true;
-        btnPin.title = "En producción use LOGIN_PIN en Netlify";
-      }
     }
   }
 
@@ -1968,12 +2254,14 @@
     });
     on("#btnStartCam", "click", () => startCamera());
     on("#btnStopCam", "click", stopCamera);
+    on("#btnVinGrupoLic", "click", () => openPicker("grupoLic"));
+    on("#btnVinGrupo", "click", () => openPicker("grupoNum"));
 
     on("#btnThanksOk", "click", () => {
       toast("Registro confirmado · puede cerrar esta pestaña");
     });
 
-    on("#vinculoForm", "submit", (e) => {
+    on("#vinculoForm", "submit", async (e) => {
       e.preventDefault();
       if (!requireQrLogin()) return;
       const id = state.identity || getIdentity();
@@ -1985,6 +2273,18 @@
       const celular = rawCel.replace(/\D/g, "");
       if (!/^9\d{8}$/.test(celular)) {
         toast("Celular inválido: 9 dígitos y debe empezar con 9");
+        return;
+      }
+      const grupoLic = String($("#vinGrupoLic")?.value || "").trim().toUpperCase();
+      const grupo = String($("#vinGrupo")?.value || "").trim().toUpperCase();
+      if (!/^GRUPO LIC ([0-5][0-9]|60)$/.test(grupoLic)) {
+        toast("Elija Grupo LIC (01 al 60)");
+        openPicker("grupoLic");
+        return;
+      }
+      if (!/^GRUPO ([0-5][0-9]|60)$/.test(grupo)) {
+        toast("Elija Grupo (01 al 60)");
+        openPicker("grupoNum");
         return;
       }
       const supervisorGlobal = String($("#vinEncargado")?.value || "")
@@ -2000,29 +2300,71 @@
         dni: id.dni,
         nombre: id.nombre || "",
         celular,
+        grupoLic,
+        grupo,
         supervisorGlobal,
         dniSesion: id.dni,
         horaRegistro: hora,
         hora,
       });
-      markVinculoDone(id.dni, celular, supervisorGlobal);
+      markVinculoDone(id.dni, celular, supervisorGlobal, grupo, grupoLic);
       if (state.personas[id.dni]) {
         state.personas[id.dni].celular = celular;
         savePersonas();
       }
       enqueueVinculo(payload);
-      if (!canUseCloudApi()) {
-        toast("Guardado en el celular · se sube al publicar en Netlify");
-      } else if (!navigator.onLine) {
-        toast("Guardado en el celular · se subirá al tener internet");
-      } else {
-        toast("Guardado");
-      }
-      flushVinculoQueue().catch(() => {});
       showVinculoThanks({
         dni: id.dni,
         nombre: id.nombre || "",
       });
+
+      // Sin internet: guarda local y sube al reconectar
+      if (!navigator.onLine) {
+        toast("Guardado · se enviará con internet");
+        setThanksSyncStatus(
+          "Sin internet · guardado en el celular · se subirá al reconectar",
+          "is-pending"
+        );
+        return;
+      }
+
+      if (!canUseCloudApi()) {
+        toast("Guardado · pendiente de subir");
+        setThanksSyncStatus(
+          "Guardado en el celular · pendiente de subir",
+          "is-pending"
+        );
+        return;
+      }
+
+      setThanksSyncStatus("Enviando…", "is-pending");
+      flushVinculoQueue()
+        .then((result) => {
+          if (result.sent > 0 && result.remain === 0) {
+            setThanksSyncStatus("Fue enviado a la base de datos", "is-ok");
+            toast("Enviado");
+          } else if (!navigator.onLine) {
+            setThanksSyncStatus(
+              "Sin internet · se subirá al reconectar",
+              "is-pending"
+            );
+          } else {
+            setThanksSyncStatus(
+              result.reason && result.reason !== "ok"
+                ? `No subió: ${result.reason}`
+                : "Pendiente de subir",
+              "is-err"
+            );
+            toast("No se pudo subir · reintente");
+          }
+        })
+        .catch(() => {
+          setThanksSyncStatus(
+            "Guardado local · se reintentará",
+            "is-pending"
+          );
+        });
+      return;
     });
 
     on("#sessionForm", "submit", (e) => {
@@ -2167,6 +2509,9 @@
       ensureSessionGate();
 
       hydrateIcons();
+      closePicker();
+      closeModal();
+      closeSheets();
       loadStore();
       state.guias = (state.guias || []).map((g) => ({
         ...emptyGuia(),
@@ -2176,13 +2521,24 @@
         jabas: g.jabas ?? "",
       }));
 
-      await detectNetlify().catch(() => {
+      // No bloquear arranque por la nube (funciona sin internet)
+      if (navigator.onLine) {
+        detectNetlify().catch(() => {
+          state.netlifyReady = false;
+          state.cloudApi = false;
+        });
+      } else {
         state.netlifyReady = false;
         state.cloudApi = false;
-      });
+      }
       await loadSupervisores();
-      await loadPersonas();
-      await loadCatalogs();
+      if (SESSION_FORM_ENABLED) {
+        await loadPersonas();
+        await loadCatalogs();
+      } else {
+        const el = $("#trabCount");
+        if (el) el.textContent = "Listo para escanear · solo Supervisores de Cosecha";
+      }
       bind();
       updateNetworkUI();
       setInterval(updateClock, 30000);
@@ -2190,10 +2546,14 @@
       window.addEventListener("online", () => {
         state.online = true;
         updateNetworkUI();
-        if (canUseCloudApi()) {
-          toast("Internet recuperado · subiendo…");
-          flushVinculoQueue().catch(() => {});
-        }
+        toast("Internet recuperado · subiendo pendientes…");
+        detectNetlify()
+          .then(() => flushVinculoQueue())
+          .catch(() => {});
+      });
+      document.addEventListener("visibilitychange", () => {
+        if (document.hidden || !navigator.onLine) return;
+        if (canUseCloudApi()) flushVinculoQueue().catch(() => {});
       });
       window.addEventListener("offline", () => {
         state.online = false;
@@ -2201,15 +2561,18 @@
         toast("Sin internet · se guarda en el celular");
       });
 
-      // Primero siempre QR (contraseña desactivada)
+      // Refresh: no saltar a seguridad si ya hay sesión / vínculo
+      restoreIdentityFromVinculo_();
+      ensureSessionGate();
+
       if (PASSWORD_REQUIRED && !isUnlocked()) {
         hideAllScreens();
         $("#lockScreen").hidden = false;
         setTimeout(() => $("#loginPass")?.focus(), 80);
-      } else if (!hasQrLogin()) {
-        showSecurityLogin("Escanee su carnet QR");
+      } else if (hasQrLogin()) {
+        showMainFlow();
       } else {
-        showMainFlow(); // respeta vínculo / datos de campo / guías
+        showSecurityLogin("");
       }
 
       // Subir pendientes solo si hay API Netlify
@@ -2219,13 +2582,12 @@
 
       if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
         try {
-          await navigator.serviceWorker.register("./sw.js?v=44");
+          await navigator.serviceWorker.register("./sw.js?v=66");
         } catch {
           /* ignore */
         }
       }
     } catch (err) {
-      console.error(err);
       const msg = $("#secMsg") || $("#pinMsg");
       if (msg) msg.textContent = "Error al iniciar. Ctrl+F5 para recargar.";
       alert("Error al iniciar. Recargue con Ctrl+F5.\n" + (err && err.message ? err.message : err));
