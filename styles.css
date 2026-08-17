@@ -26,9 +26,9 @@
   --radius-sm: 14px;
   --safe-b: env(safe-area-inset-bottom, 0px);
   --safe-t: env(safe-area-inset-top, 0px);
-  /* Solo parte del área segura: lo justo para no pisar el gesto del iPhone.
-   * El resto ya es blanco, así que no hace falta reservarlo todo aquí. */
-  --nav-safe-bottom: max(8px, calc(env(safe-area-inset-bottom, 0px) * 0.5));
+  /* Mínimo relleno abajo: la barra queda pegada al borde. El área segura no se
+   * reserva aquí porque todo ese pie ya es blanco. */
+  --nav-safe-bottom: max(2px, calc(env(safe-area-inset-bottom, 0px) * 0.1));
   --nav-bar-total: calc(56px + var(--nav-safe-bottom));
   --nav-h: 56px;
   --font: "Segoe UI", system-ui, -apple-system, sans-serif;
@@ -2394,7 +2394,7 @@ body[data-page="scan"] .lock-screen {
   align-items: flex-end;
   height: auto;
   min-height: 0;
-  padding: 8px 8px var(--nav-safe-bottom);
+  padding: 6px 8px var(--nav-safe-bottom);
   background: #ffffff;
   border-top: 1px solid var(--border);
   border-radius: 0;
