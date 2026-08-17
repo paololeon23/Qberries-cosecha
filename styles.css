@@ -2437,10 +2437,13 @@ body[data-page="scan"] .app-tabbar,
   content: none;
 }
 
-/* Acción central flotante (+) — no altera el ritmo de las otras 4 tabs */
+/* Acción central (+): fuera del flujo, así no estira la barra y queda a la
+ * misma línea que las demás pestañas, apenas asomando hacia arriba. */
 .app-tabbar .tab-main {
   gap: 0;
   min-width: 60px;
+  height: 0;
+  align-self: flex-end;
   z-index: 1;
 }
 .app-tabbar .tab-main .ico {
@@ -2448,20 +2451,23 @@ body[data-page="scan"] .app-tabbar,
   height: 24px;
 }
 .app-tabbar .tab-main .tab-main-circle {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
   display: grid;
   place-items: center;
-  width: 52px;
-  height: 52px;
+  width: 50px;
+  height: 50px;
   border-radius: 50%;
   color: #fff;
   background: var(--primary);
   border: 3px solid var(--white);
   box-shadow: 0 6px 16px rgba(47, 122, 54, 0.28);
-  transform: translateY(-14px);
+  transform: translateX(-50%);
   transition: transform 0.12s ease;
 }
 .app-tabbar .tab-main:active .tab-main-circle {
-  transform: translateY(-14px) scale(0.94);
+  transform: translateX(-50%) scale(0.94);
 }
 .app-tabbar .tab-main.is-active::before,
 .app-tabbar .tab-main.active::before {
@@ -4012,14 +4018,7 @@ body.kb-open .picker {
   .harvest-users-btn .ico,
   .harvest-copy-btn .ico { width: 19px; height: 19px; }
   .app-tabbar em { font-size: 10px; }
-  .app-tabbar .tab-main .tab-main-circle {
-    width: 48px;
-    height: 48px;
-    transform: translateY(-12px);
-  }
-  .app-tabbar .tab-main:active .tab-main-circle {
-    transform: translateY(-12px) scale(0.94);
-  }
+  .app-tabbar .tab-main .tab-main-circle { width: 46px; height: 46px; }
   .history-item-actions button { font-size: 0.62rem; padding: 0 4px; }
   .net-badge { font-size: 0.6rem; padding: 4px 7px; }
   .vin-grupo-pair { gap: 8px; }
@@ -4052,13 +4051,6 @@ body.kb-open .picker {
   .harvest-head { padding: max(8px, calc(4px + var(--safe-t))) 12px 8px; }
   .harvest-logo { width: 36px; height: 36px; max-width: 36px; flex-basis: 36px; }
   .export-preview { max-height: min(96dvh, 96%); }
-  .app-tabbar .tab-main .tab-main-circle {
-    width: 44px;
-    height: 44px;
-    transform: translateY(-10px);
-  }
-  .app-tabbar .tab-main:active .tab-main-circle {
-    transform: translateY(-10px) scale(0.94);
-  }
+  .app-tabbar .tab-main .tab-main-circle { width: 42px; height: 42px; }
   .qr-frame { max-height: 190px; }
 }
