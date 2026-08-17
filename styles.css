@@ -1352,6 +1352,11 @@ img {
   max-width: 100%;
   -webkit-overflow-scrolling: touch;
 }
+/* Escaneo: sin barra inferior, aprovecha todo el alto del celular. */
+body[data-page="scan"] .security-screen,
+body[data-page="scan"] .lock-screen {
+  padding-bottom: max(16px, calc(12px + var(--safe-b)));
+}
 .security-screen { z-index: 92; }
 #vinculoScreen { z-index: 93; }
 #vinculoScreen .vinculo-form {
@@ -2303,7 +2308,7 @@ img {
   font-size: 0.66rem;
   font-weight: 800;
 }
-/* Barra inferior global: visible en escáner, vínculo y registro */
+/* Barra inferior: solo con sesión (Inicio / Registro / Vincular). */
 .app-tabbar {
   position: absolute;
   left: 0;
@@ -2319,6 +2324,11 @@ img {
   backdrop-filter: blur(12px);
   box-shadow: 0 -6px 18px rgba(30, 65, 35, 0.1);
 }
+/* En escanear carnet no hay navegación: es el inicio del acceso. */
+body[data-page="scan"] .app-tabbar,
+.app-tabbar[hidden] {
+  display: none !important;
+}
 .app-tabbar button {
   position: relative;
   border: 0;
@@ -2330,7 +2340,9 @@ img {
   background: transparent;
   color: #79867b;
   cursor: pointer;
+  transition: color 0.15s ease, transform 0.12s ease;
 }
+.app-tabbar button:active { transform: scale(0.93); }
 .app-tabbar .ico { width: 20px; height: 20px; }
 .app-tabbar em {
   font-style: normal;
@@ -3706,6 +3718,47 @@ img {
     width: min(100%, 480px);
     background: #f3f7fb;
   }
+}
+
+/* ——— TECLADO DEL CELULAR: SIN HUECOS ——— */
+
+/*
+ * --app-h lo calcula la app con la ventana visible real (visualViewport).
+ * Así, al abrir el teclado en iPhone o Android, la pantalla se recorta
+ * exactamente hasta donde empieza el teclado en lugar de dejar un vacío.
+ */
+html,
+body,
+.stage,
+.phone {
+  height: var(--app-h, 100dvh);
+  max-height: var(--app-h, 100dvh);
+}
+@media (max-width: 899px) {
+  html,
+  body,
+  .stage,
+  .phone {
+    height: var(--app-h, 100dvh);
+    max-height: var(--app-h, 100dvh);
+  }
+}
+
+/* Mientras se escribe, la barra de pestañas estorba: se oculta. */
+body.kb-open .app-tabbar {
+  display: none;
+}
+body.kb-open .harvest-scroll {
+  padding-bottom: 18px;
+}
+body.kb-open .home-scroll,
+body.kb-open .vinculo-scroll {
+  padding-bottom: 20px;
+}
+body.kb-open .export-preview,
+body.kb-open .manual-worker,
+body.kb-open .picker {
+  max-height: calc(var(--app-h, 100dvh) - 12px);
 }
 
 /* ——— AJUSTE FINO PARA PANTALLAS DE CELULAR ——— */

@@ -30,13 +30,15 @@
     *
     * DATA-SUPERVISORES (fila 1):
     * DNI | NOMBRE | CELULAR | GRUPO LIC | GRUPO | NOMBRE SUPERVISOR GLOBAL | DNI INICIO SESION | ULTIMA HORA REGISTRO
-    * Hoja 1: registros de cosecha, una fila por trabajador
-    * Hoja 2: trabajadores agregados manualmente
+    * Hoja 1: historial detallado anterior (ya no recibe registros nuevos)
+    * DATA-MANUAL: resumen de cada registro, sin ID visible
+    * TRABAJADORES-MANUALES: trabajadores agregados manualmente
     */
 
     var SHEET_NAME = 'DATA-SUPERVISORES';
     var HARVEST_SHEET_NAME = 'Hoja 1';
-    var MANUAL_SHEET_NAME = 'Hoja 2';
+    var SUMMARY_SHEET_NAME = 'DATA-MANUAL';
+    var MANUAL_SHEET_NAME = 'TRABAJADORES-MANUALES';
 
     /**
     * Token por defecto vacío a propósito (Netlify secrets scan).
@@ -82,6 +84,18 @@
       'NOMBRE TRABAJADOR',
       'DNI SUPERVISOR',
       'NOMBRE SUPERVISOR'
+    ];
+
+    var SUMMARY_HEADERS = [
+      'TOTAL TURNO DÍA',
+      'TOTAL TURNO TARDE',
+      'TOTAL DE TODO',
+      'TOTAL DE TRABAJADORES',
+      'NOMBRE DEL SUPERVISOR',
+      'DÍA',
+      'HORA DE GUARDADO',
+      'TIPO',
+      'LOTE O LOTES'
     ];
 
     var _jsonpCb = '';
@@ -428,16 +442,13 @@
     }
 
     /**
-    * Hoja 1: una fila por trabajador del registro guardado.
-    * El ID evita duplicados cuando el celular reintenta una cola offline.
+    * Guarda solamente el resumen solicitado en DATA-MANUAL.
+    * No agrega filas por trabajador ni escribe IDs en la hoja.
     */
     function registrarCosecha_(d) {
       d = d || {};
-      var id = clean_(d.id);
       var workers = Array.isArray(d.workers) ? d.workers : [];
       var supervisorDni = digits_(d.supervisorDni);
-      var supervisorNombre = clean_(d.supervisorNombre).toUpperCase();
-      if (!id) throw new Error('Falta ID del registro');
       if (!workers.length) throw new Error('Faltan trabajadores');
       if (!supervisorDni) throw new Error('Falta DNI del supervisor');
 
@@ -446,60 +457,11 @@
       try {
         got = lock.tryLock(8000);
         if (!got) throw new Error('El servidor está ocupado. Intente de nuevo.');
-        var sh = harvestSheet_();
-        if (findValueRow_(sh, 1, id) > 0) {
-          return { id: id, created: false, duplicate: true, rows: 0 };
-        }
-
-        var fecha = clean_(d.fecha) || Utilities.formatDate(
-          new Date(),
-          'America/Lima',
-          'yyyy-MM-dd'
-        );
-        var hora = formatHora_(d.horaGuardado);
-        var tipo = clean_(d.tipo).toUpperCase();
-        var observacion = clean_(d.observacion).toUpperCase();
-        var lote = clean_(d.lote).toUpperCase();
-        var variedad = clean_(d.variedad).toUpperCase();
-        var totalGeneral = number_(d.totalGeneral);
-        var rows = [];
-
-        for (var i = 0; i < workers.length; i++) {
-          var w = workers[i] || {};
-          var dni = digits_(w.dni);
-          var nombre = clean_(w.nombre).toUpperCase();
-          if (!dni || !nombre) continue;
-          var manana = number_(w.manana);
-          var tarde = number_(w.tarde);
-          var total = number_(w.total);
-          if (!total && (manana || tarde)) total = manana + tarde;
-          rows.push([
-            id,
-            fecha,
-            hora,
-            tipo,
-            dni,
-            nombre,
-            manana,
-            tarde,
-            total,
-            totalGeneral,
-            lote,
-            variedad,
-            observacion,
-            supervisorDni,
-            supervisorNombre
-          ]);
-        }
-        if (!rows.length) throw new Error('No hay trabajadores válidos');
-        sh.getRange(sh.getLastRow() + 1, 1, rows.length, HARVEST_HEADERS.length)
-          .setValues(rows);
+        var created = saveHarvestSummary_(d);
         return {
-          id: id,
-          created: true,
-          duplicate: false,
-          rows: rows.length,
-          totalGeneral: totalGeneral
+          created: created,
+          duplicate: !created,
+          rows: created ? 1 : 0
         };
       } finally {
         if (got) {
@@ -508,7 +470,83 @@
       }
     }
 
-    /** Hoja 2: altas manuales reportadas desde el celular. */
+    /**
+    * DATA-MANUAL: una sola fila de resumen por guardado.
+    * Los duplicados se detectan comparando las columnas visibles; no usa ID.
+    */
+    function saveHarvestSummary_(d) {
+      var workers = Array.isArray(d.workers) ? d.workers : [];
+      var totalDia = 0;
+      var totalTarde = 0;
+      var totalTrabajadores = 0;
+      var workerSeen = {};
+      var lotes = [];
+      for (var i = 0; i < workers.length; i++) {
+        var workerKey = digits_(workers[i] && workers[i].dni);
+        if (!workerKey || workerSeen[workerKey]) continue;
+        workerSeen[workerKey] = true;
+        totalTrabajadores++;
+        totalDia += number_(workers[i] && workers[i].manana);
+        totalTarde += number_(workers[i] && workers[i].tarde);
+        addUniqueLote_(lotes, workers[i] && (workers[i].lote || workers[i].codLote));
+      }
+      addUniqueLote_(lotes, d.lote);
+      if (Array.isArray(d.lotes)) {
+        for (var j = 0; j < d.lotes.length; j++) addUniqueLote_(lotes, d.lotes[j]);
+      }
+
+      var fecha = clean_(d.fecha) || Utilities.formatDate(
+        new Date(),
+        'America/Lima',
+        'yyyy-MM-dd'
+      );
+      var row = [
+        totalDia,
+        totalTarde,
+        totalDia + totalTarde,
+        totalTrabajadores,
+        clean_(d.supervisorNombre).toUpperCase(),
+        fecha,
+        formatHora_(d.horaGuardado),
+        summaryType_(d.tipo),
+        lotes.join(', ')
+      ];
+
+      var sh = summarySheet_();
+      if (summaryRowExists_(sh, row)) return false;
+      sh.getRange(sh.getLastRow() + 1, 1, 1, SUMMARY_HEADERS.length)
+        .setValues([row]);
+      return true;
+    }
+
+    function addUniqueLote_(list, value) {
+      var lote = clean_(value).toUpperCase();
+      if (lote && list.indexOf(lote) < 0) list.push(lote);
+    }
+
+    function summaryType_(value) {
+      var tipo = clean_(value).toUpperCase();
+      if (tipo.indexOf('DESCARTE') >= 0) return 'DESCARTE';
+      if (tipo.indexOf('DESCUENTO') >= 0 || tipo.indexOf('RESTA') >= 0) return 'RESTA';
+      return 'SUMA';
+    }
+
+    function summaryRowExists_(sh, row) {
+      if (!sh || sh.getLastRow() < 2) return false;
+      var values = sh
+        .getRange(2, 1, sh.getLastRow() - 1, SUMMARY_HEADERS.length)
+        .getDisplayValues();
+      var expected = row.map(function (value) { return clean_(value); }).join('|');
+      for (var i = 0; i < values.length; i++) {
+        var current = values[i]
+          .map(function (value) { return clean_(value); })
+          .join('|');
+        if (current === expected) return true;
+      }
+      return false;
+    }
+
+    /** Altas manuales reportadas desde el celular, en hoja separada. */
     function registrarManual_(d) {
       d = d || {};
       var dni = digits_(d.dni);
@@ -663,15 +701,84 @@
       return sh;
     }
 
+    function summarySheet_() {
+      var ss = SpreadsheetApp.getActiveSpreadsheet();
+      if (!ss) throw new Error('No hay spreadsheet activo');
+      migrateLegacyManualSheet_(ss);
+      var sh = ss.getSheetByName(SUMMARY_SHEET_NAME);
+      if (!sh) {
+        var blankLegacy = ss.getSheetByName('Hoja 2');
+        if (blankLegacy && blankLegacy.getLastRow() === 0) {
+          blankLegacy.setName(SUMMARY_SHEET_NAME);
+          sh = blankLegacy;
+        } else {
+          sh = ss.insertSheet(SUMMARY_SHEET_NAME);
+        }
+        ss.setActiveSheet(sh);
+        ss.moveActiveSheet(2);
+      }
+      ensureExactSummaryHeaders_(ss, sh);
+      return ss.getSheetByName(SUMMARY_SHEET_NAME);
+    }
+
     function manualSheet_() {
       if (_manualShCache) return _manualShCache;
       var ss = SpreadsheetApp.getActiveSpreadsheet();
       if (!ss) throw new Error('No hay spreadsheet activo');
+      migrateLegacyManualSheet_(ss);
       var sh = ss.getSheetByName(MANUAL_SHEET_NAME);
       if (!sh) sh = ss.insertSheet(MANUAL_SHEET_NAME);
       ensureTableHeaders_(sh, MANUAL_HEADERS);
       _manualShCache = sh;
       return sh;
+    }
+
+    /**
+    * Conserva las altas manuales antiguas: la anterior "Hoja 2" se mueve
+    * a TRABAJADORES-MANUALES antes de crear el nuevo resumen DATA-MANUAL.
+    */
+    function migrateLegacyManualSheet_(ss) {
+      if (ss.getSheetByName(MANUAL_SHEET_NAME)) return;
+      var legacy = ss.getSheetByName('Hoja 2');
+      if (!legacy || legacy.getLastRow() < 1 || legacy.getLastColumn() < 4) return;
+      var headers = legacy
+        .getRange(1, 1, 1, legacy.getLastColumn())
+        .getDisplayValues()[0]
+        .map(function (value) { return clean_(value).toUpperCase(); });
+      if (
+        headers.indexOf('DNI TRABAJADOR') >= 0 &&
+        headers.indexOf('NOMBRE TRABAJADOR') >= 0
+      ) {
+        legacy.setName(MANUAL_SHEET_NAME);
+      }
+    }
+
+    function ensureExactSummaryHeaders_(ss, sh) {
+      if (!sh.getLastRow()) {
+        writeTableHeaders_(sh, SUMMARY_HEADERS);
+        return;
+      }
+      var current = sh
+        .getRange(1, 1, 1, Math.max(sh.getLastColumn(), SUMMARY_HEADERS.length))
+        .getDisplayValues()[0]
+        .slice(0, SUMMARY_HEADERS.length)
+        .map(function (value) { return clean_(value).toUpperCase(); });
+      var expected = SUMMARY_HEADERS.map(function (value) {
+        return clean_(value).toUpperCase();
+      });
+      if (current.join('|') === expected.join('|')) return;
+
+      // No borrar información previa: apartarla y crear la estructura correcta.
+      var backupName = 'DATA-MANUAL-ANTERIOR-' + Utilities.formatDate(
+        new Date(),
+        'America/Lima',
+        'yyyyMMdd-HHmmss'
+      );
+      sh.setName(backupName);
+      var fresh = ss.insertSheet(SUMMARY_SHEET_NAME);
+      writeTableHeaders_(fresh, SUMMARY_HEADERS);
+      ss.setActiveSheet(fresh);
+      ss.moveActiveSheet(2);
     }
 
     /**

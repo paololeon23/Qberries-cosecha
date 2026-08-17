@@ -18,9 +18,10 @@
   const HARVEST_KEY = "qb-supervisores-harvest-v1";
   const HARVEST_HISTORY_KEY = "qb-supervisores-excel-history-v1";
   const SESSION_MANUAL_PERSONAS_KEY = "qb-supervisores-manual-personas-v1";
+  const LOGOUT_FLAG_KEY = "qb-supervisores-logout-v1";
   const HISTORY_TTL_MS = 48 * 60 * 60 * 1000;
   const HISTORY_PAGE_SIZE = 8;
-  const APP_VERSION = "v154";
+  const APP_VERSION = "v158";
   const HARVEST_TYPES = [
     { key: "suma-jarras", label: "Suma de jarras", observacion: "SUMAR JARRAS" },
     { key: "descuento-jarras", label: "Descuento jarras", observacion: "DESCUENTO JARRAS" },
@@ -63,6 +64,43 @@
     const targetPath = new URL(target, location.origin).pathname.replace(/index\.html$/, "");
     if (currentPath === targetPath && !location.search) return;
     beginNavigation(target, replace);
+  }
+
+  /**
+   * El teclado del celular tapa parte de la pantalla sin cambiar la altura
+   * del documento (iPhone) o la cambia tarde (Android). Se mide la ventana
+   * visible real para que la app ocupe justo ese alto y no quede un hueco.
+   */
+  function setupViewportMetrics() {
+    const root = document.documentElement;
+    const vv = window.visualViewport;
+
+    const apply = () => {
+      const height = Math.round(vv ? vv.height : window.innerHeight);
+      const keyboard = vv
+        ? Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop))
+        : 0;
+      root.style.setProperty("--app-h", `${height}px`);
+      root.style.setProperty("--kb-h", `${keyboard}px`);
+      document.body?.classList.toggle("kb-open", keyboard > 120);
+    };
+
+    apply();
+    if (vv) {
+      vv.addEventListener("resize", apply);
+      vv.addEventListener("scroll", apply);
+    }
+    window.addEventListener("resize", apply);
+    window.addEventListener("orientationchange", () => setTimeout(apply, 250));
+    document.addEventListener("focusin", (e) => {
+      const field = e.target?.closest?.("input, textarea, select");
+      if (!field) return;
+      setTimeout(() => {
+        apply();
+        field.scrollIntoView({ block: "center", behavior: "smooth" });
+      }, 320);
+    });
+    document.addEventListener("focusout", () => setTimeout(apply, 320));
   }
 
   function todayISO() {
@@ -961,7 +999,36 @@
   }
 
   /** Tras refresh / salir del navegador: recupera el último vínculo de este celular */
+  /**
+   * Tras cerrar sesión no se debe reconstruir al supervisor anterior:
+   * la app tiene que exigir un nuevo escaneo de carnet.
+   */
+  function wasLoggedOut() {
+    try {
+      return localStorage.getItem(LOGOUT_FLAG_KEY) === "1";
+    } catch {
+      return false;
+    }
+  }
+
+  function markLoggedOut() {
+    try {
+      localStorage.setItem(LOGOUT_FLAG_KEY, "1");
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function clearLoggedOutFlag() {
+    try {
+      localStorage.removeItem(LOGOUT_FLAG_KEY);
+    } catch {
+      /* ignore */
+    }
+  }
+
   function restoreIdentityFromVinculo_() {
+    if (wasLoggedOut()) return null;
     const existing = getIdentity();
     if (existing?.dni) {
       const dni = String(existing.dni).replace(/\D/g, "");
@@ -1144,6 +1211,7 @@
   function lock() {
     stopCamera();
     state.pendingIdentity = null;
+    markLoggedOut();
     clearAuthenticatedSession();
     clearSessionManualPersonas();
     state.harvest = emptyHarvest();
@@ -1745,6 +1813,7 @@
   }
 
   function afterQrLogin(identity, authToken) {
+    clearLoggedOutFlag();
     setIdentity(identity);
     saveAuthenticatedSession(identity, authToken || authenticatedToken());
     state.pendingIdentity = null;
@@ -2463,6 +2532,41 @@
     sheet.style.display = "none";
   }
 
+  /** La navegación solo existe con sesión iniciada: nunca en el escaneo. */
+  function syncTabbarVisibility() {
+    const bar = $("#appTabbar");
+    if (!bar) return;
+    const signedIn = !!(state.identity?.dni || getIdentity()?.dni);
+    const show = PAGE !== "scan" && signedIn;
+    bar.hidden = !show;
+    if (show) bar.removeAttribute("hidden");
+    else bar.setAttribute("hidden", "");
+  }
+
+  function currentTab() {
+    const help = $("#helpSheet");
+    if (help && !help.hidden) return "ayuda";
+    const history = $("#historySheet");
+    if (history && !history.hidden) return "excel";
+    if (PAGE === "inicio") return "inicio";
+    if (PAGE === "registro") return "registro";
+    if (PAGE === "vinculo") return "vincular";
+    return "";
+  }
+
+  function refreshTabbar() {
+    syncTabbarVisibility();
+    const bar = $("#appTabbar");
+    if (!bar) return;
+    const active = currentTab();
+    $$("[data-tab]", bar).forEach((btn) => {
+      const isActive = btn.dataset.tab === active;
+      btn.classList.toggle("is-active", isActive);
+      if (isActive) btn.setAttribute("aria-current", "page");
+      else btn.removeAttribute("aria-current");
+    });
+  }
+
   function onTabbarClick(tab) {
     if (navigationLocked) return;
     cancelRegistroRedirect();
@@ -2998,11 +3102,13 @@
     const sheet = $("#historySheet");
     if (sheet) sheet.hidden = false;
     hydrateIcons(sheet);
+    refreshTabbar();
   }
 
   function closeHarvestHistory() {
     const sheet = $("#historySheet");
     if (sheet) sheet.hidden = true;
+    refreshTabbar();
   }
 
   async function clearAppCache(button) {
@@ -3083,9 +3189,10 @@
           </section>
         </div>`;
       ($("#phone") || document.body).appendChild(sheet);
-      sheet
-        .querySelector(".help-close")
-        ?.addEventListener("click", () => (sheet.hidden = true));
+      sheet.querySelector(".help-close")?.addEventListener("click", () => {
+        sheet.hidden = true;
+        refreshTabbar();
+      });
       const tools = sheet.querySelector(".app-tools-backdrop");
       sheet.querySelector(".help-settings")?.addEventListener("click", () => {
         if (tools) tools.hidden = false;
@@ -3102,6 +3209,7 @@
       updateButton?.addEventListener("click", () => updateApp(updateButton));
     }
     sheet.hidden = false;
+    refreshTabbar();
   }
 
   function showHarvestHome(identity) {
@@ -4467,6 +4575,7 @@
 
   async function init() {
     try {
+      setupViewportMetrics();
       hydrateIcons();
       closePicker();
       closeModal();
@@ -4501,6 +4610,7 @@
       }
 
       bind();
+      refreshTabbar();
       openRequestedTab();
       document.body.classList.remove("app-booting");
       document.body.classList.add("app-ready");
@@ -4621,7 +4731,7 @@
 
       if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
         try {
-          const reg = await navigator.serviceWorker.register("/sw.js?v=154", {
+          const reg = await navigator.serviceWorker.register("/sw.js?v=158", {
             scope: "/",
           });
           reg.update?.().catch(() => {});
