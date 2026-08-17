@@ -132,19 +132,6 @@ html:not(.has-session) body.app-booting,
 html:not(.has-session) body.app-booting::before {
   background: var(--bg);
 }
-/* Respaldo: el pie de la pantalla siempre blanco, igual que la barra. */
-body:not([data-page="scan"]):not(.kb-open) .stage::after {
-  content: "";
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: max(var(--safe-b), 56px);
-  z-index: 96;
-  background: var(--white);
-  pointer-events: none;
-}
-
 /*
  * Cambio de pestaña: se usa el snapshot para no dejar un frame en blanco,
  * pero SIN fundido. El fundido ocultaba la barra y se veía un “pestañeo”.
@@ -1663,10 +1650,10 @@ body[data-page="scan"] .lock-screen {
 }
 .harvest-users-btn,
 .harvest-copy-btn {
-  width: 42px;
-  height: 42px;
+  width: 34px;
+  height: 34px;
   border: 1.5px solid #d5e7d1;
-  border-radius: 14px;
+  border-radius: 11px;
   background: #f3faf1;
   color: var(--qb-green-dark, #2f7a36);
   display: grid;
@@ -1686,8 +1673,8 @@ body[data-page="scan"] .lock-screen {
 }
 .harvest-users-btn .ico,
 .harvest-copy-btn .ico {
-  width: 22px;
-  height: 22px;
+  width: 16px;
+  height: 16px;
 }
 .harvest-manual-hint {
   margin: 8px 0 0;
@@ -2398,7 +2385,7 @@ body[data-page="scan"] .lock-screen {
   background: #ffffff;
   border-top: 1px solid var(--border);
   border-radius: 0;
-  box-shadow: 0 -5px 20px rgba(0, 0, 0, 0.05);
+  box-shadow: none;
   overflow: visible;
   isolation: isolate;
 }
@@ -2449,6 +2436,14 @@ body[data-page="scan"] .app-tabbar,
   width: 24px;
   height: 24px;
 }
+/* El icono va centrado en su pestaña aunque el texto sea más ancho. */
+.app-tabbar [data-icon]:not(.tab-main-circle) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  line-height: 0;
+}
 .app-tabbar em,
 .app-tabbar span.nav-label {
   font-style: normal;
@@ -2493,7 +2488,7 @@ body[data-page="scan"] .app-tabbar,
   color: #fff;
   background: var(--primary);
   border: 3px solid var(--white);
-  box-shadow: 0 6px 16px rgba(47, 122, 54, 0.28);
+  box-shadow: none;
   transform: translateX(-50%);
   transition: transform 0.12s ease;
 }
@@ -4049,9 +4044,9 @@ body.kb-open .picker {
   .export-preview-row { grid-template-columns: minmax(0, 1fr); }
   .export-preview-actions button { font-size: 0.7rem; }
   .harvest-users-btn,
-  .harvest-copy-btn { width: 38px; height: 38px; border-radius: 12px; }
+  .harvest-copy-btn { width: 32px; height: 32px; border-radius: 10px; }
   .harvest-users-btn .ico,
-  .harvest-copy-btn .ico { width: 19px; height: 19px; }
+  .harvest-copy-btn .ico { width: 15px; height: 15px; }
   .app-tabbar em { font-size: 10px; }
   .app-tabbar .tab-main .tab-main-circle { width: 46px; height: 46px; }
   .history-item-actions button { font-size: 0.62rem; padding: 0 4px; }
