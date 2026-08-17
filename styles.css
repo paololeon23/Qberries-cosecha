@@ -5,15 +5,18 @@
   --qb-green: #5ead51;
   --qb-green-dark: #2f7a36;
   --qb-lime: #b4c739;
+  --primary: #2f7a36;
   --navy: #5ead51;
   --navy-2: #3f8a3d;
   --navy-soft: #eaf6e8;
   --navy-chip: #d8efd4;
   --bg: #f3f6f1;
   --surface: #ffffff;
+  --white: #ffffff;
   --ink: #142018;
   --muted: #5c6b60;
   --line: #d9e4d6;
+  --border: #E2E8F0;
   --danger: #e00b29;
   --danger-soft: #fde8ea;
   --ok: #5ead51;
@@ -23,7 +26,10 @@
   --radius-sm: 14px;
   --safe-b: env(safe-area-inset-bottom, 0px);
   --safe-t: env(safe-area-inset-top, 0px);
-  --nav-h: 52px;
+  /* Barra inferior tipo PWA: safe-area + altura útil */
+  --nav-safe-bottom: max(4px, env(safe-area-inset-bottom, 0px));
+  --nav-bar-total: calc(56px + var(--nav-safe-bottom));
+  --nav-h: 56px;
   --font: "Segoe UI", system-ui, -apple-system, sans-serif;
   /* Unidad proporcional: 1 = diseño de referencia (celular de 390 px de ancho).
    * En móvil se recalcula con el ancho real para que todo se vea igual. */
@@ -495,7 +501,7 @@ body:not([data-page="scan"]):not(.kb-open) .stage::after {
   overflow-x: hidden;
   overscroll-behavior: contain;
   padding: 14px 78px 14px 14px;
-  padding-bottom: calc(var(--nav-h) + 28px);
+  padding-bottom: calc(var(--nav-bar-total) + 12px);
   -webkit-overflow-scrolling: touch;
   resize: none;
   scrollbar-gutter: stable;
@@ -932,7 +938,7 @@ body:not([data-page="scan"]):not(.kb-open) .stage::after {
 .fab {
   position: absolute;
   right: 18px;
-  bottom: calc(var(--nav-h) + 10px);
+  bottom: calc(var(--nav-bar-total) + 26px);
   z-index: 25;
   width: 56px;
   height: 56px;
@@ -1591,7 +1597,7 @@ body[data-page="scan"] .lock-screen {
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 12px 12px calc(var(--nav-h) + var(--safe-b) + 12px);
+  padding: 12px 12px calc(var(--nav-bar-total) + 12px);
   -webkit-overflow-scrolling: touch;
 }
 .harvest-field-card,
@@ -2352,33 +2358,28 @@ body[data-page="scan"] .lock-screen {
   font-size: 0.66rem;
   font-weight: 800;
 }
-/* ——— BARRA INFERIOR: COMPACTA, PEGADA AL BORDE ——— */
-.app-tabbar {
+/* ——— BOTTOM TAB BAR (PWA limpia iOS/Android) ——— */
+.app-tabbar,
+#appTabbar {
   position: fixed;
-  left: 0;
-  right: 0;
   bottom: 0;
-  z-index: 100;
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  align-items: end;
-  /* Sin altura fija: solo el alto del icono + etiqueta + safe-area. */
+  left: 0;
+  width: 100%;
+  max-width: 100%;
+  z-index: 900;
+  display: flex;
+  justify-content: space-around;
+  align-items: flex-end;
   height: auto;
   min-height: 0;
-  padding: 6px 2px 0;
-  /* Único espacio bajo las etiquetas: el gesto del iPhone (0 en Android). */
-  padding-bottom: env(safe-area-inset-bottom, 0px);
-  border-top: 1px solid #e3ebe1;
-  background: #ffffff;
-  box-shadow:
-    0 -4px 14px rgba(30, 65, 35, 0.08),
-    /* Blanco continuo por debajo: no asoma el fondo de la app. */
-    0 80px 0 0 #ffffff;
+  padding: 10px 4px calc(10px + var(--nav-safe-bottom));
+  background: var(--white);
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -5px 20px rgba(0, 0, 0, 0.05);
   overflow: visible;
   isolation: isolate;
   view-transition-name: tabbar;
 }
-/* Sin franja extra debajo: el hueco marcado se elimina. */
 .app-tabbar::after {
   content: none;
 }
@@ -2386,53 +2387,66 @@ body[data-page="scan"] .app-tabbar,
 .app-tabbar[hidden] {
   display: none !important;
 }
-.app-tabbar button {
+
+.app-tabbar button,
+.app-tabbar .nav-btn {
   position: relative;
   border: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: flex-end;
-  gap: 1px;
-  min-width: 0;
+  justify-content: center;
+  gap: 4px;
+  min-width: 60px;
   height: auto;
   min-height: 0;
-  padding: 4px 2px 6px;
+  padding: 0;
+  margin: 0;
   background: transparent;
-  color: #79867b;
+  color: #94A3B8;
+  font: inherit;
   cursor: pointer;
   overflow: visible;
   -webkit-tap-highlight-color: transparent;
+  text-decoration: none;
   transition: color 0.15s ease, transform 0.12s ease;
 }
-.app-tabbar button:not(.tab-main):active { transform: scale(0.93); }
-.app-tabbar .ico { width: 20px; height: 20px; }
-.app-tabbar em {
-  font-style: normal;
-  font-size: 0.58rem;
-  font-weight: 700;
-  letter-spacing: 0.01em;
-  line-height: 1;
+.app-tabbar button:not(.tab-main):active {
+  transform: scale(0.96);
 }
-.app-tabbar button.is-active { color: var(--qb-green-dark, #2f7a36); }
-.app-tabbar button.is-active::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 28px;
-  height: 3px;
-  border-radius: 999px;
-  background: var(--qb-green-dark);
+.app-tabbar .ico {
+  width: 24px;
+  height: 24px;
+}
+.app-tabbar em,
+.app-tabbar span.nav-label {
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.02em;
+}
+/* Activo: solo color primary. Sin pill, sin fondo, sin badge. */
+.app-tabbar button.is-active,
+.app-tabbar button.active,
+.app-tabbar .nav-btn.active {
+  color: var(--primary);
+}
+.app-tabbar button.is-active::before,
+.app-tabbar button.active::before {
+  content: none;
 }
 
+/* Acción central flotante (+) — no altera el ritmo de las otras 4 tabs */
 .app-tabbar .tab-main {
   gap: 0;
-  padding: 0 2px 6px;
+  min-width: 60px;
   z-index: 1;
 }
-.app-tabbar .tab-main .ico { width: 24px; height: 24px; }
+.app-tabbar .tab-main .ico {
+  width: 24px;
+  height: 24px;
+}
 .app-tabbar .tab-main .tab-main-circle {
   display: grid;
   place-items: center;
@@ -2440,19 +2454,23 @@ body[data-page="scan"] .app-tabbar,
   height: 52px;
   border-radius: 50%;
   color: #fff;
-  background: linear-gradient(145deg, #5ead51 0%, #2f7a36 100%);
-  border: 4px solid #fff;
-  box-shadow: 0 8px 18px rgba(47, 122, 54, 0.34);
-  transform: translateY(-18px);
+  background: var(--primary);
+  border: 3px solid var(--white);
+  box-shadow: 0 6px 16px rgba(47, 122, 54, 0.28);
+  transform: translateY(-14px);
   transition: transform 0.12s ease;
 }
 .app-tabbar .tab-main:active .tab-main-circle {
-  transform: translateY(-18px) scale(0.94);
+  transform: translateY(-14px) scale(0.94);
 }
-.app-tabbar .tab-main.is-active::before { content: none; }
+.app-tabbar .tab-main.is-active::before,
+.app-tabbar .tab-main.active::before {
+  content: none;
+}
 
 @media (min-width: 900px) {
-  .app-tabbar {
+  .app-tabbar,
+  #appTabbar {
     left: 50%;
     right: auto;
     width: min(100%, 480px);
@@ -2573,7 +2591,7 @@ body[data-page="scan"] .app-tabbar,
   margin-top: -20px;
   overflow-x: hidden;
   overflow-y: auto;
-  padding: 0 16px calc(var(--nav-h) + var(--safe-b) + 12px);
+  padding: 0 16px calc(var(--nav-bar-total) + 12px);
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
 }
@@ -3372,7 +3390,7 @@ body[data-page="scan"] .app-tabbar,
   flex: 1 1 auto;
   overflow-x: hidden;
   overflow-y: auto;
-  padding: 12px 14px calc(var(--nav-h) + var(--safe-b) + 12px);
+  padding: 12px 14px calc(var(--nav-bar-total) + 12px);
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
 }
@@ -3943,13 +3961,13 @@ body.kb-open .picker {
 @media (max-width: 899px) {
   :root { --u: clamp(0.85px, calc(100vw / 390), 1.12px); }
   .harvest-scroll {
-    padding: calc(11 * var(--u)) calc(11 * var(--u)) calc(var(--nav-h) + var(--safe-b) + 12px);
+    padding: calc(11 * var(--u)) calc(11 * var(--u)) calc(var(--nav-bar-total) + 12px);
   }
   .harvest-field-card,
   .harvest-add-card,
   .harvest-register-card { padding: calc(13 * var(--u)) calc(12 * var(--u)); }
   .home-scroll {
-    padding: 0 calc(13 * var(--u)) calc(var(--nav-h) + var(--safe-b) + 12px);
+    padding: 0 calc(13 * var(--u)) calc(var(--nav-bar-total) + 12px);
   }
   .home-hero {
     padding: calc(18 * var(--u) + var(--safe-t)) calc(15 * var(--u)) calc(32 * var(--u));
@@ -3965,7 +3983,7 @@ body.kb-open .picker {
     padding: calc(13 * var(--u)) calc(12 * var(--u)) calc(15px + var(--safe-b));
   }
   .vinculo-scroll {
-    padding: calc(11 * var(--u)) calc(12 * var(--u)) calc(var(--nav-h) + var(--safe-b) + 12px);
+    padding: calc(11 * var(--u)) calc(12 * var(--u)) calc(var(--nav-bar-total) + 12px);
   }
   .home-action-grid { gap: calc(9 * var(--u)); margin-top: calc(16 * var(--u)); }
   .home-action-icon {
@@ -3993,14 +4011,14 @@ body.kb-open .picker {
   .harvest-copy-btn { width: 38px; height: 38px; border-radius: 12px; }
   .harvest-users-btn .ico,
   .harvest-copy-btn .ico { width: 19px; height: 19px; }
-  .app-tabbar em { font-size: 0.55rem; }
+  .app-tabbar em { font-size: 10px; }
   .app-tabbar .tab-main .tab-main-circle {
     width: 48px;
     height: 48px;
-    transform: translateY(-16px);
+    transform: translateY(-12px);
   }
   .app-tabbar .tab-main:active .tab-main-circle {
-    transform: translateY(-16px) scale(0.94);
+    transform: translateY(-12px) scale(0.94);
   }
   .history-item-actions button { font-size: 0.62rem; padding: 0 4px; }
   .net-badge { font-size: 0.6rem; padding: 4px 7px; }
@@ -4037,10 +4055,10 @@ body.kb-open .picker {
   .app-tabbar .tab-main .tab-main-circle {
     width: 44px;
     height: 44px;
-    transform: translateY(-12px);
+    transform: translateY(-10px);
   }
   .app-tabbar .tab-main:active .tab-main-circle {
-    transform: translateY(-12px) scale(0.94);
+    transform: translateY(-10px) scale(0.94);
   }
   .qr-frame { max-height: 190px; }
 }

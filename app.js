@@ -21,7 +21,7 @@
   const LOGOUT_FLAG_KEY = "qb-supervisores-logout-v1";
   const HISTORY_TTL_MS = 48 * 60 * 60 * 1000;
   const HISTORY_PAGE_SIZE = 8;
-  const APP_VERSION = "v173";
+  const APP_VERSION = "v174";
   const HARVEST_TYPES = [
     { key: "suma-jarras", label: "Suma de jarras", observacion: "SUMAR JARRAS" },
     { key: "descuento-jarras", label: "Descuento jarras", observacion: "DESCUENTO JARRAS" },
@@ -2558,11 +2558,25 @@
     else bar.setAttribute("hidden", "");
   }
 
+  function persistDraftBeforeNav() {
+    try {
+      if (PAGE === "registro" && state.harvest) saveHarvest();
+      if (typeof saveStore === "function") saveStore();
+      if (typeof saveSessionManualPersonas === "function") {
+        saveSessionManualPersonas();
+      }
+    } catch {
+      /* el cambio de pestaña no debe fallar por el borrador */
+    }
+  }
+
   function markTabPressed(tab) {
     const bar = $("#appTabbar");
     if (!bar || !tab || tab === "ayuda") return;
     $$("[data-tab]", bar).forEach((btn) => {
-      btn.classList.toggle("is-active", btn.dataset.tab === tab);
+      const on = btn.dataset.tab === tab;
+      btn.classList.toggle("is-active", on);
+      btn.classList.toggle("active", on);
     });
   }
 
@@ -2585,37 +2599,63 @@
     $$("[data-tab]", bar).forEach((btn) => {
       const isActive = btn.dataset.tab === active;
       btn.classList.toggle("is-active", isActive);
+      btn.classList.toggle("active", isActive);
       if (isActive) btn.setAttribute("aria-current", "page");
       else btn.removeAttribute("aria-current");
     });
   }
 
-  function onTabbarClick(tab) {
+  async function onTabbarClick(tab) {
     if (navigationLocked) return;
     cancelRegistroRedirect();
+
+    // Misma pestaña: no redirigir (salvo scroll suave / sheets).
     if (tab === "ayuda") {
       openAyuda();
       return;
     }
+    if (tab === "excel") {
+      if ($("#historySheet")) {
+        openHarvestHistory();
+        return;
+      }
+      persistDraftBeforeNav();
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      beginNavigation("/inicio/?tab=excel");
+      return;
+    }
+    if (tab === "inicio" && PAGE === "inicio") {
+      $(".home-scroll")?.scrollTo?.({ top: 0, behavior: "smooth" });
+      return;
+    }
+    if (tab === "registro" && PAGE === "registro") {
+      $(".harvest-scroll")?.scrollTo?.({ top: 0, behavior: "smooth" });
+      return;
+    }
+    if (tab === "vincular" && PAGE === "vinculo") return;
+
     const id = state.identity || getIdentity();
     if (!id?.dni || !hasQrLogin()) {
       toast("Escanee su carnet para continuar");
       if (PAGE !== "scan") goTo("scan");
       return;
     }
+
+    // Guardar borrador local ANTES de cambiar de módulo (~150 ms).
+    persistDraftBeforeNav();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    if (navigationLocked) return;
+
     if (tab === "vincular") {
-      if (PAGE === "vinculo") return;
       goTo("vinculo");
       return;
     }
     if (tab === "inicio") {
-      if (PAGE !== "inicio") goTo("inicio");
-      else $(".home-scroll")?.scrollTo?.({ top: 0, behavior: "smooth" });
+      goTo("inicio");
       return;
     }
     if (tab === "registro") {
-      if (PAGE !== "registro") goTo("registro");
-      else $(".harvest-scroll")?.scrollTo?.({ top: 0, behavior: "smooth" });
+      goTo("registro");
       return;
     }
     if (tab === "agregar") {
@@ -2626,16 +2666,6 @@
       const input = $("#harvestWorkerDni");
       input?.scrollIntoView?.({ behavior: "smooth", block: "center" });
       setTimeout(() => input?.focus(), 220);
-      return;
-    }
-    if (tab === "excel") {
-      // Abrir historial en la misma pantalla (sin recargar) para evitar pestañeo.
-      if ($("#historySheet")) {
-        openHarvestHistory();
-        return;
-      }
-      beginNavigation("/inicio/?tab=excel");
-      return;
     }
   }
 
@@ -4797,7 +4827,7 @@
 
       if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
         try {
-          const reg = await navigator.serviceWorker.register("/sw.js?v=173", {
+          const reg = await navigator.serviceWorker.register("/sw.js?v=174", {
             scope: "/",
           });
           reg.update?.().catch(() => {});

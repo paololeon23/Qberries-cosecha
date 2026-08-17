@@ -28,9 +28,9 @@
       }
     } catch (e) {}
   </script>
-  <link rel="stylesheet" href="/styles.css?v=173" />
-  <script src="/icons.js?v=173" defer></script>
-  <script src="/app.js?v=173" defer></script>
+  <link rel="stylesheet" href="/styles.css?v=174" />
+  <script src="/icons.js?v=174" defer></script>
+  <script src="/app.js?v=174" defer></script>
 </head>
 <body data-page="vinculo" class="app-booting">
   <div class="stage">
@@ -166,19 +166,19 @@
       </div>
 
       <nav class="app-tabbar" id="appTabbar" aria-label="Navegación principal">
-        <button type="button" data-tab="inicio">
+        <button type="button" class="nav-btn nav-link" data-tab="inicio" data-nav-index="0" aria-label="Inicio">
           <span data-icon="home"></span><em>Inicio</em>
         </button>
-        <button type="button" data-tab="registro">
+        <button type="button" class="nav-btn nav-link" data-tab="registro" data-nav-index="1" aria-label="Registro">
           <span data-icon="clipboard"></span><em>Registro</em>
         </button>
-        <button type="button" data-tab="vincular" class="tab-main is-active" aria-label="Vincular">
+        <button type="button" class="nav-btn tab-main is-active active" data-tab="vincular" data-nav-index="2" aria-label="Vincular" aria-current="page">
           <span class="tab-main-circle" data-icon="plus"></span>
         </button>
-        <button type="button" data-tab="excel">
+        <button type="button" class="nav-btn nav-link" data-tab="excel" data-nav-index="3" aria-label="Excel">
           <span data-icon="fileSpreadsheet"></span><em>Excel</em>
         </button>
-        <button type="button" data-tab="ayuda">
+        <button type="button" class="nav-btn nav-link" data-tab="ayuda" data-nav-index="4" aria-label="Ayuda">
           <span data-icon="info"></span><em>Ayuda</em>
         </button>
       </nav>
