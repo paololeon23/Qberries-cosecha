@@ -21,7 +21,7 @@
   const LOGOUT_FLAG_KEY = "qb-supervisores-logout-v1";
   const HISTORY_TTL_MS = 48 * 60 * 60 * 1000;
   const HISTORY_PAGE_SIZE = 8;
-  const APP_VERSION = "v181";
+  const APP_VERSION = "v184";
   const HARVEST_TYPES = [
     { key: "suma-jarras", label: "Suma de jarras", observacion: "SUMAR JARRAS" },
     { key: "descuento-jarras", label: "Descuento jarras", observacion: "DESCUENTO JARRAS" },
@@ -225,6 +225,9 @@
     $$("[data-icon]", root).forEach((node) => {
       const name = node.getAttribute("data-icon");
       if (!name || !window.QBIcons) return;
+      // Si el icono ya viene escrito en el HTML, no se vuelve a pintar:
+      // reemplazarlo se veía como un parpadeo al abrir cada pestaña.
+      if (node.firstElementChild?.tagName?.toLowerCase() === "svg") return;
       node.innerHTML = ico(
         name,
         node.classList.contains("field-ico") ? "ico ico-sm" : "ico"
@@ -2551,10 +2554,18 @@
   function syncTabbarVisibility() {
     const bar = $("#appTabbar");
     if (!bar) return;
-    const signedIn = !!(state.identity?.dni || getIdentity()?.dni);
-    const show = PAGE !== "scan" && signedIn;
-    bar.hidden = !show;
-    if (show) bar.removeAttribute("hidden");
+    if (PAGE === "scan") {
+      bar.hidden = true;
+      bar.setAttribute("hidden", "");
+      return;
+    }
+    // En Inicio / Registro / Vincular la barra ya está en el HTML.
+    // No ocultarla ni un frame: eso es el pestañeo al cambiar de pestaña.
+    const signedIn =
+      !!(state.identity?.dni || getIdentity()?.dni) ||
+      document.documentElement.classList.contains("has-session");
+    bar.hidden = !signedIn;
+    if (signedIn) bar.removeAttribute("hidden");
     else bar.setAttribute("hidden", "");
   }
 
@@ -4825,7 +4836,7 @@
 
       if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
         try {
-          const reg = await navigator.serviceWorker.register("/sw.js?v=181", {
+          const reg = await navigator.serviceWorker.register("/sw.js?v=184", {
             scope: "/",
           });
           reg.update?.().catch(() => {});

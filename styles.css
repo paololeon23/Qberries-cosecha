@@ -26,9 +26,8 @@
   --radius-sm: 14px;
   --safe-b: env(safe-area-inset-bottom, 0px);
   --safe-t: env(safe-area-inset-top, 0px);
-  /* Barra inferior tipo PWA. Del área segura del iPhone solo se reserva una
-   * parte: lo justo para no pisar el gesto, sin dejar un bloque blanco. */
-  --nav-safe-bottom: max(2px, calc(env(safe-area-inset-bottom, 0px) * 0.12));
+  /* Safe area completa: el padding de la nav pinta de blanco el home indicator. */
+  --nav-safe-bottom: env(safe-area-inset-bottom, 0px);
   --nav-bar-total: calc(56px + var(--nav-safe-bottom));
   --nav-h: 56px;
   --font: "Segoe UI", system-ui, -apple-system, sans-serif;
@@ -51,8 +50,8 @@ html { resize: none; }
 body {
   font-family: var(--font);
   color: var(--ink);
-  /* Mismo tono que la app: si algo queda descubierto no se ve una franja negra. */
-  background: var(--bg);
+  /* Blanco como la nav: la franja del home indicator no debe verse verde. */
+  background: #ffffff;
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
   resize: none;
@@ -67,7 +66,7 @@ body {
 html:not(.has-session) body.app-booting .phone {
   visibility: hidden;
 }
-body.app-booting {
+html:not(.has-session) body.app-booting {
   background: var(--bg);
 }
 html:not(.has-session) body.app-booting::after {
@@ -121,8 +120,16 @@ body::before {
   position: fixed;
   inset: 0;
   z-index: -1;
-  background: var(--bg);
+  background: #ffffff;
   pointer-events: none;
+}
+body[data-page="scan"],
+body[data-page="scan"]::before {
+  background: var(--bg);
+}
+html:not(.has-session) body.app-booting,
+html:not(.has-session) body.app-booting::before {
+  background: var(--bg);
 }
 /* Respaldo: el pie de la pantalla siempre blanco, igual que la barra. */
 body:not([data-page="scan"]):not(.kb-open) .stage::after {
@@ -138,16 +145,19 @@ body:not([data-page="scan"]):not(.kb-open) .stage::after {
 }
 
 /*
- * Cambio de pestaña sin parpadeo: el navegador mantiene la pantalla anterior
- * y funde hacia la nueva, como en una app instalada.
+ * Cambio de pestaña: se usa el snapshot para no dejar un frame en blanco,
+ * pero SIN fundido. El fundido ocultaba la barra y se veía un “pestañeo”.
  */
 @view-transition {
   navigation: auto;
 }
+::view-transition {
+  background-color: #ffffff;
+}
 ::view-transition-old(root),
 ::view-transition-new(root) {
-  animation-duration: 0.16s;
-  animation-timing-function: ease;
+  animation-duration: 0.01s;
+  animation-timing-function: step-end;
 }
 @media (prefers-reduced-motion: reduce) {
   ::view-transition-old(root),
@@ -167,7 +177,7 @@ body:not([data-page="scan"]):not(.kb-open) .stage::after {
   display: grid;
   place-items: stretch;
   padding: 0;
-  background: #f3f7fb;
+  background: #ffffff;
   resize: none;
 }
 
@@ -2373,6 +2383,7 @@ body[data-page="scan"] .lock-screen {
   position: fixed;
   bottom: 0;
   left: 0;
+  right: 0;
   width: 100%;
   max-width: 100%;
   /* Debajo de hojas y modales (110–160): nunca tapa sus botones. */
@@ -2382,13 +2393,14 @@ body[data-page="scan"] .lock-screen {
   align-items: flex-end;
   height: auto;
   min-height: 0;
-  padding: 6px 4px var(--nav-safe-bottom);
-  background: var(--white);
+  /* El safe-area es padding de la nav: el home indicator queda sobre blanco. */
+  padding: 10px 8px calc(10px + env(safe-area-inset-bottom, 0px));
+  background: #ffffff;
   border-top: 1px solid var(--border);
+  border-radius: 0;
   box-shadow: 0 -5px 20px rgba(0, 0, 0, 0.05);
   overflow: visible;
   isolation: isolate;
-  view-transition-name: tabbar;
 }
 /* Todo lo que quede por debajo de la barra también es blanco: se ve una sola
  * pieza continua hasta el borde del celular, sin franja de otro color. */
@@ -3805,7 +3817,8 @@ body[data-page="scan"] .app-tabbar,
     height: 100dvh;
     max-height: 100dvh;
   }
-  .stage { padding: 0; background: var(--bg); }
+  .stage { padding: 0; background: #ffffff; }
+  body[data-page="scan"] .stage { background: var(--bg); }
   .phone {
     width: 100%;
     height: 100%;
