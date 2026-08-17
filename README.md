@@ -35,6 +35,17 @@ Plantilla: `.env.example`
 
 Abra la app con el servidor Netlify/local. El primer acceso con contraseña necesita internet (validación en servidor).
 
+## Instalar con QR
+
+Página de instalación: `/instalar/` (por ejemplo `https://qberries-cosecha.netlify.app/instalar/`).
+
+- QR listo para imprimir: `assets/qr-instalar-app.png`.
+- La página detecta el celular: en **Android** muestra un botón que instala la app;
+  en **iPhone** guía los tres pasos de Safari (Compartir → Añadir a pantalla de inicio),
+  porque iOS no permite instalar por código.
+- La propia página dibuja su QR, así que si cambia el dominio el código se actualiza solo.
+- También se llega desde la app: **Ayuda → engranaje → QR para instalar en otro celular**.
+
 ## Offline / PWA
 
 - Primera visita **con internet** instala la app en caché (Service Worker).

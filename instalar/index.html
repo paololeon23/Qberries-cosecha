@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#5ead51" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="QBerries" />
+  <meta name="description" content="Instale la app de supervisores QBerries en su celular." />
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="icon" href="/assets/icon-192.png" type="image/png" sizes="192x192" />
+  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png" />
+  <title>QBerries · Instalar la app</title>
+  <!-- Chrome dispara este evento muy temprano: se captura antes de todo. -->
+  <script>
+    window.__qbInstallEvent = null;
+    window.addEventListener("beforeinstallprompt", function (e) {
+      e.preventDefault();
+      window.__qbInstallEvent = e;
+      document.dispatchEvent(new Event("qb-installable"));
+    });
+  </script>
+  <style>
+    :root {
+      --qb-green: #5ead51;
+      --qb-green-dark: #2f7a36;
+      --bg: #f3f6f1;
+      --ink: #142018;
+      --muted: #5c6b60;
+      --line: #d9e4d6;
+    }
+    * , *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      min-height: 100vh;
+      padding: max(20px, env(safe-area-inset-top)) 16px calc(28px + env(safe-area-inset-bottom));
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      -webkit-text-size-adjust: 100%;
+    }
+    .wrap { width: 100%; max-width: 460px; margin: 0 auto; display: grid; gap: 16px; }
+
+    .hero { text-align: center; display: grid; gap: 10px; justify-items: center; }
+    .hero img { width: 132px; height: auto; }
+    .hero h1 { margin: 0; font-size: 1.35rem; line-height: 1.25; }
+    .hero p { margin: 0; font-size: 0.9rem; color: var(--muted); line-height: 1.45; }
+
+    .card {
+      padding: 18px 16px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: #fff;
+      box-shadow: 0 8px 24px rgba(32, 90, 40, 0.08);
+    }
+    .card h2 { margin: 0 0 10px; font-size: 1rem; }
+    .card p { margin: 0 0 12px; font-size: 0.86rem; color: var(--muted); line-height: 1.5; }
+    .card p:last-child { margin-bottom: 0; }
+    [hidden] { display: none !important; }
+
+    .btn {
+      width: 100%;
+      min-height: 52px;
+      padding: 12px 16px;
+      border: 0;
+      border-radius: 14px;
+      background: var(--qb-green-dark);
+      color: #fff;
+      font-size: 1rem;
+      font-weight: 700;
+      font-family: inherit;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+    }
+    .btn:active { transform: scale(0.99); }
+    .btn.ghost {
+      background: #fff;
+      color: var(--qb-green-dark);
+      border: 1.5px solid var(--qb-green);
+      min-height: 46px;
+      font-size: 0.9rem;
+    }
+    .btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+
+    ol.steps { margin: 0; padding: 0; list-style: none; display: grid; gap: 12px; counter-reset: s; }
+    ol.steps li {
+      counter-increment: s;
+      display: grid;
+      grid-template-columns: 30px minmax(0, 1fr);
+      gap: 12px;
+      align-items: start;
+      font-size: 0.9rem;
+      line-height: 1.45;
+    }
+    ol.steps li::before {
+      content: counter(s);
+      width: 30px;
+      height: 30px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: #eaf6e8;
+      color: var(--qb-green-dark);
+      font-weight: 800;
+      font-size: 0.85rem;
+    }
+    ol.steps strong { display: block; }
+    ol.steps small { color: var(--muted); font-size: 0.8rem; }
+    .share-ico {
+      display: inline-flex;
+      vertical-align: -5px;
+      width: 20px;
+      height: 20px;
+      color: #0a84ff;
+    }
+
+    .note {
+      margin-top: 12px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: #fff8e6;
+      border: 1px solid #f0dca8;
+      font-size: 0.8rem;
+      line-height: 1.45;
+      color: #6b5310;
+    }
+
+    .qr-box {
+      display: grid;
+      place-items: center;
+      padding: 14px;
+      border-radius: 16px;
+      background: #fff;
+      border: 1px solid var(--line);
+    }
+    .qr-box svg { width: 100%; height: auto; max-width: 260px; display: block; }
+    .qr-url {
+      margin-top: 10px;
+      display: block;
+      padding: 9px 10px;
+      border-radius: 10px;
+      background: #f4f7f3;
+      color: var(--qb-green-dark);
+      font-size: 0.74rem;
+      font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+      overflow-wrap: anywhere;
+      text-align: center;
+    }
+
+    .ok-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: #eaf6e8;
+      color: var(--qb-green-dark);
+      font-size: 0.82rem;
+      font-weight: 700;
+      margin-bottom: 10px;
+    }
+
+    @media print {
+      body { background: #fff; padding: 0; }
+      .no-print { display: none !important; }
+      .card { border: 0; box-shadow: none; }
+      .qr-box svg { max-width: 460px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <header class="hero">
+      <img src="/assets/logo-qberries.png" alt="QBerries" />
+      <h1>Instalar la app de Supervisores</h1>
+      <p>Queda como una aplicación en la pantalla de inicio y funciona en el campo aunque no haya internet.</p>
+    </header>
+
+    <!-- Android / Chrome: instalación con un toque -->
+    <section class="card no-print" id="stepAndroid" hidden>
+      <h2>Instalación directa</h2>
+      <p>Toque el botón y confirme <strong>Instalar</strong>. El ícono de QBerries aparecerá junto a sus otras apps.</p>
+      <button type="button" class="btn" id="btnInstall">Instalar aplicación</button>
+      <div class="note" id="androidFallback" hidden>
+        Si no aparece la ventana de confirmación: abra el menú del navegador
+        (<strong>⋮</strong>, arriba a la derecha) y elija <strong>Instalar aplicación</strong>
+        o <strong>Agregar a pantalla de inicio</strong>.
+      </div>
+    </section>
+
+    <!-- iPhone / iPad: Safari no permite instalar por código -->
+    <section class="card no-print" id="stepIos" hidden>
+      <h2>Instalar en iPhone o iPad</h2>
+      <p>En iPhone la instalación se confirma desde Safari en tres pasos:</p>
+      <ol class="steps">
+        <li>
+          <div>
+            <strong>Toque el botón Compartir</strong>
+            <small>
+              Es el ícono
+              <svg class="share-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4"/><path d="M8 8l4-4 4 4"/><path d="M6 12v7a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-7"/></svg>
+              en la barra inferior de Safari.
+            </small>
+          </div>
+        </li>
+        <li>
+          <div>
+            <strong>Elija “Añadir a pantalla de inicio”</strong>
+            <small>Deslice la lista hacia abajo si no lo ve de inmediato.</small>
+          </div>
+        </li>
+        <li>
+          <div>
+            <strong>Confirme con “Añadir”</strong>
+            <small>Listo: abra QBerries desde el ícono nuevo, ya no desde el navegador.</small>
+          </div>
+        </li>
+      </ol>
+      <div class="note" id="iosNotSafari" hidden>
+        Está viendo esta página en otro navegador. Para instalar, ábrala en
+        <strong>Safari</strong>: copie el enlace de abajo y péguelo en Safari.
+      </div>
+    </section>
+
+    <!-- Escritorio u otros navegadores -->
+    <section class="card no-print" id="stepOther" hidden>
+      <h2>Escanee el código con el celular</h2>
+      <p>
+        Esta página está abierta en una computadora. Escanee el código QR de abajo con la
+        cámara del celular y siga el paso que aparecerá en pantalla.
+      </p>
+    </section>
+
+    <!-- Ya instalada -->
+    <section class="card no-print" id="stepDone" hidden>
+      <span class="ok-badge">La app ya está instalada</span>
+      <p>Puede abrirla desde el ícono de QBerries en su pantalla de inicio.</p>
+      <a class="btn" href="/index.html">Abrir la app</a>
+    </section>
+
+    <!-- QR para compartir / imprimir -->
+    <section class="card" id="qrCard">
+      <h2>Código QR para compartir</h2>
+      <p class="no-print">
+        Cualquier supervisor que escanee este código llega a esta misma página y podrá instalar
+        la app en Android o iPhone. Puede imprimirlo o enviarlo por WhatsApp.
+      </p>
+      <div class="qr-box" id="qrBox"></div>
+      <code class="qr-url" id="qrUrl"></code>
+      <div class="btn-row no-print">
+        <button type="button" class="btn ghost" id="btnDownloadQr">Descargar QR</button>
+        <button type="button" class="btn ghost" id="btnPrintQr">Imprimir</button>
+      </div>
+      <div class="btn-row no-print" style="grid-template-columns: 1fr;">
+        <button type="button" class="btn ghost" id="btnCopyLink">Copiar enlace</button>
+      </div>
+    </section>
+  </main>
+
+  <script src="/vendor/qrcode.min.js?v=205"></script>
+  <script>
+    (function () {
+      var $ = function (id) { return document.getElementById(id); };
+
+      /** URL limpia de esta misma página: es lo que viaja dentro del QR. */
+      var INSTALL_URL =
+        location.origin + location.pathname.replace(/index\.html$/, "");
+
+      // El navegador solo ofrece instalar si hay service worker activo.
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker
+          .register("/sw.js?v=205", { scope: "/" })
+          .catch(function () {});
+      }
+
+      var ua = navigator.userAgent || "";
+      var isIOS =
+        /iPad|iPhone|iPod/.test(ua) ||
+        (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+      var isAndroid = /Android/.test(ua);
+      var isSafari =
+        /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS|OPiOS|Chrome|Android/.test(ua);
+      var installed =
+        window.matchMedia("(display-mode: standalone)").matches ||
+        window.matchMedia("(display-mode: fullscreen)").matches ||
+        navigator.standalone === true;
+
+      var PANELS = ["stepAndroid", "stepIos", "stepOther", "stepDone"];
+      function show(id) {
+        PANELS.forEach(function (name) {
+          var el = $(name);
+          if (el) el.hidden = name !== id;
+        });
+      }
+
+      function pickPanel() {
+        if (installed) return show("stepDone");
+        if (isIOS) {
+          if ($("iosNotSafari")) $("iosNotSafari").hidden = isSafari;
+          return show("stepIos");
+        }
+        if (isAndroid || window.__qbInstallEvent) return show("stepAndroid");
+        return show("stepOther");
+      }
+      pickPanel();
+
+      // Chrome puede avisar que se puede instalar después de cargar la página.
+      document.addEventListener("qb-installable", function () {
+        if (!installed && !isIOS) show("stepAndroid");
+      });
+      window.addEventListener("appinstalled", function () {
+        installed = true;
+        show("stepDone");
+      });
+
+      var btnInstall = $("btnInstall");
+      if (btnInstall) {
+        btnInstall.addEventListener("click", async function () {
+          var evt = window.__qbInstallEvent;
+          if (!evt) {
+            // Firefox/Samsung y Chrome sin criterios: se guía por el menú.
+            if ($("androidFallback")) $("androidFallback").hidden = false;
+            return;
+          }
+          btnInstall.disabled = true;
+          try {
+            evt.prompt();
+            var choice = await evt.userChoice;
+            window.__qbInstallEvent = null;
+            if (choice && choice.outcome === "accepted") show("stepDone");
+            else if ($("androidFallback")) $("androidFallback").hidden = false;
+          } catch (err) {
+            if ($("androidFallback")) $("androidFallback").hidden = false;
+          }
+          btnInstall.disabled = false;
+        });
+      }
+
+      // ——— Código QR (se dibuja en el propio celular / computadora) ———
+      var qr = null;
+      try {
+        qr = qrcode(0, "M");
+        qr.addData(INSTALL_URL);
+        qr.make();
+      } catch (err) {
+        qr = null;
+      }
+
+      if ($("qrUrl")) $("qrUrl").textContent = INSTALL_URL;
+
+      if (qr && $("qrBox")) {
+        $("qrBox").innerHTML = qr.createSvgTag({
+          cellSize: 8,
+          margin: 24,
+          scalable: true,
+          alt: "Código QR para instalar la app de QBerries",
+        });
+      } else if ($("qrCard")) {
+        $("qrCard").hidden = true;
+      }
+
+      /** PNG grande y nítido: sirve para imprimir o enviar por WhatsApp. */
+      function qrToCanvas(scale, quiet) {
+        var n = qr.getModuleCount();
+        var size = (n + quiet * 2) * scale;
+        var cv = document.createElement("canvas");
+        cv.width = size;
+        cv.height = size;
+        var ctx = cv.getContext("2d");
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, size, size);
+        ctx.fillStyle = "#111111";
+        for (var r = 0; r < n; r++) {
+          for (var c = 0; c < n; c++) {
+            if (qr.isDark(r, c)) {
+              ctx.fillRect((c + quiet) * scale, (r + quiet) * scale, scale, scale);
+            }
+          }
+        }
+        return cv;
+      }
+
+      if ($("btnDownloadQr")) {
+        $("btnDownloadQr").addEventListener("click", function () {
+          if (!qr) return;
+          try {
+            var link = document.createElement("a");
+            link.href = qrToCanvas(14, 4).toDataURL("image/png");
+            link.download = "QBerries-instalar-app.png";
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+          } catch (err) {
+            /* algunos navegadores bloquean la descarga: queda el QR en pantalla */
+          }
+        });
+      }
+
+      if ($("btnPrintQr")) {
+        $("btnPrintQr").addEventListener("click", function () {
+          window.print();
+        });
+      }
+
+      if ($("btnCopyLink")) {
+        $("btnCopyLink").addEventListener("click", async function () {
+          var btn = $("btnCopyLink");
+          var original = btn.textContent;
+          try {
+            await navigator.clipboard.writeText(INSTALL_URL);
+            btn.textContent = "Enlace copiado";
+          } catch (err) {
+            btn.textContent = "Copie el enlace de arriba";
+          }
+          setTimeout(function () {
+            btn.textContent = original;
+          }, 1800);
+        });
+      }
+    })();
+  </script>
+</body>
+</html>

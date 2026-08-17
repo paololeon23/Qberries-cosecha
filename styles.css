@@ -1651,12 +1651,14 @@ body[data-page="scan"] .lock-screen {
 .harvest-copy-btn {
   width: 34px;
   height: 34px;
+  padding: 0;
   border: 1.5px solid #d5e7d1;
   border-radius: 11px;
   background: #f3faf1;
   color: var(--qb-green-dark, #2f7a36);
   display: grid;
   place-items: center;
+  line-height: 0;
   cursor: pointer;
   flex-shrink: 0;
 }
@@ -1670,10 +1672,20 @@ body[data-page="scan"] .lock-screen {
   background: #e5f5e1;
   border-color: var(--qb-green);
 }
-.harvest-users-btn .ico,
-.harvest-copy-btn .ico {
+.harvest-users-btn [data-icon],
+.harvest-copy-btn [data-icon] {
+  display: grid;
+  place-items: center;
   width: 16px;
   height: 16px;
+  line-height: 0;
+}
+.harvest-users-btn .ico,
+.harvest-copy-btn .ico {
+  display: block;
+  width: 16px;
+  height: 16px;
+  margin: 0;
 }
 .harvest-manual-hint {
   margin: 8px 0 0;
@@ -2262,13 +2274,14 @@ body[data-page="scan"] .lock-screen {
 
 /* Historial temporal de archivos */
 .history-sheet {
-  position: absolute;
+  /* fixed + opaco: cubre la nav desde el primer frame (sin fundido = sin pestañeo). */
+  position: fixed;
   inset: 0;
   z-index: 135;
   overflow-y: auto;
   padding: max(16px, var(--safe-t)) 14px calc(20px + var(--safe-b));
   background: #f3f7f1;
-  animation: rise 0.2s ease;
+  animation: none;
 }
 .history-sheet[hidden] { display: none !important; }
 
@@ -3084,7 +3097,8 @@ body[data-page="scan"] .app-tabbar,
   line-height: 1.4;
 }
 .app-tools-cache,
-.app-tools-update {
+.app-tools-update,
+.app-tools-install {
   width: 100%;
   min-height: 46px;
   margin-top: 8px;
@@ -3097,6 +3111,12 @@ body[data-page="scan"] .app-tabbar,
   font-size: 0.8rem;
   font-weight: 850;
   cursor: pointer;
+}
+.app-tools-install {
+  border: 1px solid #cfe0cb;
+  background: #f3faf1;
+  color: var(--qb-green-dark);
+  text-decoration: none;
 }
 .app-tools-cache {
   border: 1px solid #e6c8cb;
@@ -3111,7 +3131,8 @@ body[data-page="scan"] .app-tabbar,
 .app-tools-cache:disabled,
 .app-tools-update:disabled { opacity: 0.65; cursor: wait; }
 .app-tools-cache .ico,
-.app-tools-update .ico { width: 18px; height: 18px; }
+.app-tools-update .ico,
+.app-tools-install .ico { width: 18px; height: 18px; }
 .app-version {
   display: block;
   margin-top: 14px;

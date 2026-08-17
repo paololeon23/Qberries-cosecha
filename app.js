@@ -21,7 +21,7 @@
   const LOGOUT_FLAG_KEY = "qb-supervisores-logout-v1";
   const HISTORY_TTL_MS = 48 * 60 * 60 * 1000;
   const HISTORY_PAGE_SIZE = 8;
-  const APP_VERSION = "v201";
+  const APP_VERSION = "v205";
   const HARVEST_TYPES = [
     { key: "suma-jarras", label: "Suma de jarras", observacion: "SUMAR JARRAS" },
     { key: "descuento-jarras", label: "Descuento jarras", observacion: "DESCUENTO JARRAS" },
@@ -122,8 +122,12 @@
   function setupViewportMetrics() {
     const root = document.documentElement;
     const vv = window.visualViewport;
+    let pendingFrame = 0;
+    /** Mientras se centra un campo, no se corrige el scroll: se veía un rebote. */
+    let focusScrollUntil = 0;
 
     const apply = () => {
+      pendingFrame = 0;
       const height = Math.round(vv ? vv.height : window.innerHeight);
       const offsetTop = vv ? Math.round(vv.offsetTop) : 0;
       const keyboard = vv
@@ -136,33 +140,52 @@
       document.body?.classList.toggle("kb-open", open);
       // iPhone empuja toda la ventana hacia arriba para destapar el campo y
       // debajo asoma el fondo del sistema (franja negra). Se devuelve a cero.
-      if (open && (window.scrollY || offsetTop)) {
+      if (
+        open &&
+        Date.now() > focusScrollUntil &&
+        (window.scrollY || offsetTop)
+      ) {
         window.scrollTo(0, 0);
         if (root.scrollTop) root.scrollTop = 0;
         if (document.body?.scrollTop) document.body.scrollTop = 0;
       }
     };
 
+    /** Un ajuste por frame: los eventos de teclado llegan en ráfaga. */
+    const schedule = () => {
+      if (pendingFrame) return;
+      pendingFrame = requestAnimationFrame(apply);
+    };
+
+    const isFieldCovered = (el) => {
+      const rect = el.getBoundingClientRect();
+      const visible = vv ? vv.height : window.innerHeight;
+      return rect.top < 8 || rect.bottom > visible - 8;
+    };
+
     apply();
     if (vv) {
-      vv.addEventListener("resize", apply);
-      vv.addEventListener("scroll", apply);
+      vv.addEventListener("resize", schedule);
+      vv.addEventListener("scroll", schedule);
     }
-    window.addEventListener("resize", apply);
-    window.addEventListener("scroll", apply, { passive: true });
+    window.addEventListener("resize", schedule);
+    window.addEventListener("scroll", schedule, { passive: true });
     window.addEventListener("orientationchange", () => setTimeout(apply, 250));
     document.addEventListener("focusin", (e) => {
       const field = e.target?.closest?.("input, textarea, select");
       if (!field) return;
-      [80, 260, 520].forEach((delay) =>
-        setTimeout(() => {
-          apply();
-          field.scrollIntoView({ block: "center", behavior: "smooth" });
-        }, delay)
-      );
+      focusScrollUntil = Date.now() + 700;
+      // Un solo ajuste, sin animación y solo si el teclado tapa el campo.
+      setTimeout(() => {
+        apply();
+        if (isFieldCovered(field)) {
+          field.scrollIntoView({ block: "center", behavior: "auto" });
+        }
+      }, 280);
     });
     document.addEventListener("focusout", () => {
-      [80, 320].forEach((delay) => setTimeout(apply, delay));
+      focusScrollUntil = 0;
+      setTimeout(apply, 220);
     });
   }
 
@@ -2734,8 +2757,8 @@
         return;
       }
       const input = $("#harvestWorkerDni");
-      input?.scrollIntoView?.({ behavior: "smooth", block: "center" });
-      setTimeout(() => input?.focus(), 220);
+      // Enfocar y dejar que el ajuste de teclado centre el campo una sola vez.
+      input?.focus();
     }
   }
 
@@ -3228,10 +3251,13 @@
 
   function openHarvestHistory() {
     state.historyPage = 0;
-    renderHarvestHistory();
     const sheet = $("#historySheet");
-    if (sheet) sheet.hidden = false;
+    if (!sheet) return;
+    // Pintar lista e iconos ANTES de mostrar: si se hidrata después,
+    // el cierre (X) y el contenido aparecen un frame tarde (= pestañeo).
+    renderHarvestHistory();
     hydrateIcons(sheet);
+    sheet.hidden = false;
     refreshTabbar();
   }
 
@@ -3353,6 +3379,7 @@
               <button type="button" class="app-tools-close" aria-label="Cerrar">${ico("x")}</button>
             </div>
             <p>Borre toda la caché de la app (archivos, service worker e IndexedDB) y luego actualice. Sus registros de cosecha, historial y sesión no se eliminan.</p>
+            <a class="app-tools-install" href="/instalar/">${ico("download")} QR para instalar en otro celular</a>
             <button type="button" class="app-tools-cache">${ico("trash")} Borrar caché</button>
             <button type="button" class="app-tools-update">${ico("refresh")} Actualizar app</button>
             <small class="app-version">Versión de la app: ${APP_VERSION}</small>
@@ -4904,7 +4931,7 @@
 
       if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
         try {
-          const reg = await navigator.serviceWorker.register("/sw.js?v=201", {
+          const reg = await navigator.serviceWorker.register("/sw.js?v=205", {
             scope: "/",
           });
           reg.update?.().catch(() => {});

@@ -1,4 +1,4 @@
-const CACHE = "qb-supervisores-v201";
+const CACHE = "qb-supervisores-v205";
 const ASSETS = [
   "/",
   "/index.html",
@@ -8,6 +8,8 @@ const ASSETS = [
   "/vinculo/index.html",
   "/registro/",
   "/registro/index.html",
+  "/instalar/",
+  "/instalar/index.html",
   "/styles.css",
   "/app.js",
   "/icons.js",
@@ -22,6 +24,7 @@ const ASSETS = [
   "/data/personas.json",
   "/vendor/jsQR.min.js",
   "/vendor/xlsx.full.min.js",
+  "/vendor/qrcode.min.js",
 ];
 
 self.addEventListener("install", (event) => {
