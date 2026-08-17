@@ -1,4 +1,4 @@
-const CACHE = "qb-supervisores-v222";
+const CACHE = "qb-supervisores-v224";
 const ASSETS = [
   "/",
   "/index.html",
@@ -21,7 +21,6 @@ const ASSETS = [
   "/data/lotes-licapa.json",
   "/data/grupos-licapa.json",
   "/data/trabajadores.json",
-  "/data/personas.json",
   "/vendor/jsQR.min.js",
   "/vendor/xlsx.full.min.js",
   "/vendor/qrcode.min.js",
@@ -93,15 +92,18 @@ self.addEventListener("fetch", (event) => {
 
   if (isCatalog(url)) {
     event.respondWith(
-      fetch(req)
-        .then((res) => {
-          if (res && res.ok && url.origin === self.location.origin) {
-            const copy = res.clone();
-            caches.open(CACHE).then((cache) => cache.put(req, copy));
-          }
-          return res;
-        })
-        .catch(() => caches.match(req, { ignoreSearch: true }))
+      caches.match(req, { ignoreSearch: true }).then((cached) => {
+        const fetching = fetch(req)
+          .then((res) => {
+            if (res && res.ok && url.origin === self.location.origin) {
+              const copy = res.clone();
+              caches.open(CACHE).then((cache) => cache.put(req, copy));
+            }
+            return res;
+          })
+          .catch(() => cached);
+        return cached || fetching;
+      })
     );
     return;
   }

@@ -261,7 +261,7 @@
     </section>
   </main>
 
-  <script src="/vendor/qrcode.min.js?v=222"></script>
+  <script src="/vendor/qrcode.min.js?v=224"></script>
   <script>
     (function () {
       var $ = function (id) { return document.getElementById(id); };
@@ -273,7 +273,7 @@
       // El navegador solo ofrece instalar si hay service worker activo.
       if ("serviceWorker" in navigator) {
         navigator.serviceWorker
-          .register("/sw.js?v=222", { scope: "/" })
+          .register("/sw.js?v=224", { scope: "/" })
           .catch(function () {});
       }
 

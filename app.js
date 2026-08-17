@@ -22,7 +22,7 @@
   const LOGOUT_FLAG_KEY = "qb-supervisores-logout-v1";
   const HISTORY_TTL_MS = 48 * 60 * 60 * 1000;
   const HISTORY_PAGE_SIZE = 8;
-  const APP_VERSION = "v222";
+  const APP_VERSION = "v224";
   const HARVEST_TYPES = [
     { key: "suma-jarras", label: "Suma de jarras", short: "Suma", observacion: "SUMAR JARRAS" },
     { key: "descuento-jarras", label: "Descuento jarras", short: "Resta", observacion: "DESCUENTO JARRAS" },
@@ -2183,116 +2183,121 @@
     }
   }
 
-  async function loadSupervisores() {
-    // Caché local primero
+  function hydrateSupervisoresFromStorage() {
     try {
       const cached = localStorage.getItem(SUPERVISORES_KEY);
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        const next = {};
-        Object.entries(parsed || {}).forEach(([k, v]) => {
-          if (v && v.nombre) {
-            next[String(k).replace(/\D/g, "")] = {
-              nombre: String(v.nombre).toUpperCase(),
-              cargo: String(v.cargo || "SUPERVISOR DE COSECHA").toUpperCase(),
-              celular: String(v.celular || "").replace(/\D/g, ""),
-              supervisorGlobal: String(
-                v.supervisorGlobal || v.encargado || ""
-              ).toUpperCase(),
-            };
-          }
-        });
-        state.supervisores = next;
-      }
-    } catch {
-      state.supervisores = {};
-    }
-
-    try {
-      if (!navigator.onLine && Object.keys(state.supervisores || {}).length) {
-        const elOff = $("#trabCount");
-        if (elOff) {
-          elOff.textContent = "Listo para escanear · modo sin internet";
-        }
-        return;
-      }
-      const res = await fetch("/data/supervisores-cosecha.json", {
-        cache: "no-store",
-      });
-      if (!res.ok) throw new Error("catalogo");
-      const data = await res.json();
-      const byDni = data.byDni || data;
+      if (!cached) return;
+      const parsed = JSON.parse(cached);
       const next = {};
-      Object.entries(byDni).forEach(([dni, info]) => {
-        const key = String(dni).replace(/\D/g, "");
-        if (!key || !info) return;
-        const nombre = String(info.nombre || info || "").toUpperCase();
-        if (!nombre) return;
-        next[key] = {
-          nombre,
-          cargo: String(info.cargo || "SUPERVISOR DE COSECHA").toUpperCase(),
-          celular: String(info.celular || "").replace(/\D/g, ""),
-          supervisorGlobal: String(
-            info.supervisorGlobal || info.encargado || ""
-          ).toUpperCase(),
-        };
+      Object.entries(parsed || {}).forEach(([k, v]) => {
+        if (v && v.nombre) {
+          next[String(k).replace(/\D/g, "")] = {
+            nombre: String(v.nombre).toUpperCase(),
+            cargo: String(v.cargo || "SUPERVISOR DE COSECHA").toUpperCase(),
+            celular: String(v.celular || "").replace(/\D/g, ""),
+            supervisorGlobal: String(
+              v.supervisorGlobal || v.encargado || ""
+            ).toUpperCase(),
+          };
+        }
       });
-      if (Object.keys(next).length) {
-        state.supervisores = next;
-        saveSupervisores();
-      }
+      if (Object.keys(next).length) state.supervisores = next;
     } catch {
-      /* keep cache */
+      /* keep current */
     }
+  }
+
+  function applySupervisoresBundle(data) {
+    const byDni = data?.byDni || data || {};
+    const next = {};
+    Object.entries(byDni).forEach(([dni, info]) => {
+      const key = String(dni).replace(/\D/g, "");
+      if (!key || !info) return;
+      const nombre = String(info.nombre || info || "").toUpperCase();
+      if (!nombre) return;
+      next[key] = {
+        nombre,
+        cargo: String(info.cargo || "SUPERVISOR DE COSECHA").toUpperCase(),
+        celular: String(info.celular || "").replace(/\D/g, ""),
+        supervisorGlobal: String(
+          info.supervisorGlobal || info.encargado || ""
+        ).toUpperCase(),
+      };
+    });
+    if (Object.keys(next).length) {
+      state.supervisores = next;
+      saveSupervisores();
+    }
+  }
+
+  function hydratePersonasFromStorage() {
+    try {
+      const cached = localStorage.getItem(PERSONAS_KEY);
+      if (!cached) return;
+      const parsed = JSON.parse(cached);
+      const next = {};
+      Object.entries(parsed || {}).forEach(([k, v]) => {
+        if (typeof v === "string") next[k] = { nombre: v, cargo: "", celular: "" };
+        else if (v && v.nombre) {
+          next[k] = {
+            nombre: v.nombre,
+            cargo: v.cargo || "",
+            celular: v.celular || "",
+          };
+        }
+      });
+      if (Object.keys(next).length) state.personas = next;
+    } catch {
+      /* keep current */
+    }
+  }
+
+  async function fetchLocalJson(url) {
+    try {
+      const res = await fetch(url);
+      if (res.ok) return await res.json();
+    } catch {
+      /* offline: SW cache or localStorage already loaded */
+    }
+    return null;
+  }
+
+  async function loadSupervisores() {
+    hydrateSupervisoresFromStorage();
+    const data = await fetchLocalJson("/data/supervisores-cosecha.json");
+    if (data) applySupervisoresBundle(data);
 
     const el = $("#trabCount");
     if (el) {
       const n = Object.keys(state.supervisores).length;
       el.textContent = n
-        ? "Listo para escanear · solo Supervisores de Cosecha"
+        ? navigator.onLine
+          ? "Listo para escanear · solo Supervisores de Cosecha"
+          : "Listo para escanear · sin internet"
         : "Sin listado de supervisores";
     }
   }
 
   async function loadPersonas() {
-    // 1) Cache local primero (rápido)
-    try {
-      const cached = localStorage.getItem(PERSONAS_KEY);
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        const next = {};
-        Object.entries(parsed || {}).forEach(([k, v]) => {
-          if (typeof v === "string") next[k] = { nombre: v, cargo: "", celular: "" };
-          else if (v && v.nombre) {
-            next[k] = {
-              nombre: v.nombre,
-              cargo: v.cargo || "",
-              celular: v.celular || "",
-            };
-          }
-        });
-        state.personas = next;
-      }
-    } catch {
-      state.personas = {};
-    }
+    hydratePersonasFromStorage();
 
     const setCount = (extra = "") => {
       const el = $("#trabCount");
       if (!el) return;
-      const n = Object.keys(state.personas).length;
       const nSup = Object.keys(state.supervisores || {}).length;
       if (nSup) {
-        el.textContent = "Listo para escanear · solo Supervisores de Cosecha";
+        el.textContent = navigator.onLine
+          ? "Listo para escanear · solo Supervisores de Cosecha"
+          : "Listo para escanear · sin internet";
         return;
       }
+      const n = Object.keys(state.personas).length;
       el.textContent = n
         ? `Listo para escanear${extra}`
         : `Preparando…${extra}`;
     };
     setCount("");
 
-    // 2) Catálogo offline completo (trabajadores) → seed mínimo (personas)
     const mergePersonaBundle = (data) => {
       const list = Array.isArray(data)
         ? data
@@ -2320,80 +2325,11 @@
       return added;
     };
 
-    try {
-      const res = await fetch("/data/trabajadores.json", {
-        cache: "no-store",
-      });
-      if (res.ok) {
-        const data = await res.json();
-        const n = mergePersonaBundle(data);
-        if (n > 0) {
-          savePersonas();
-          setCount(" · local");
-        }
-      }
-    } catch {
-      /* ignore */
-    }
-
-    if (Object.keys(state.personas).length < 10) {
-      try {
-        const res = await fetch("/data/personas.json", {
-          cache: "force-cache",
-        });
-        if (res.ok) {
-          const data = await res.json();
-          if (mergePersonaBundle(data) > 0) {
-            savePersonas();
-            setCount(" · local");
-          }
-        }
-      } catch {
-        /* ignore */
-      }
-    }
-
-    // 3) Solo proxy Netlify
-    if (!canUseNetlifyProxy()) {
-      setCount(Object.keys(state.personas).length ? " · local" : "");
-      return;
-    }
-    try {
-      const meta = JSON.parse(localStorage.getItem(PERSONAS_META_KEY) || "{}");
-      const age = Date.now() - Number(meta.at || 0);
-      const fresh = age > 0 && age < 1000 * 60 * 60 * 12; // 12h
-      if (fresh && Object.keys(state.personas).length > 100) {
-        setCount(" · lista");
-        return;
-      }
-      const res = await fetch(API.trabajadores, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pin: sessionPin() || undefined }),
-      });
-      if (res.status === 405) {
-        throw new Error("no-api");
-      }
-      if (!res.ok) throw new Error("api");
-      const json = await res.json();
-      if (json?.ok && json.byDni) {
-        Object.entries(json.byDni).forEach(([dni, info]) => {
-          const key = String(dni).replace(/\D/g, "");
-          if (!key || !info?.nombre) return;
-          state.personas[key] = {
-            nombre: String(info.nombre).toUpperCase(),
-            cargo: String(info.cargo || "").toUpperCase(),
-            celular: String(info.celular || "").replace(/\D/g, ""),
-          };
-        });
-        savePersonas();
-        localStorage.setItem(
-          PERSONAS_META_KEY,
-          JSON.stringify({ at: Date.now(), source: "api" })
-        );
-        setCount(" · nube");
-      }
-    } catch {
+    const data = await fetchLocalJson("/data/trabajadores.json");
+    if (data && mergePersonaBundle(data) > 0) {
+      savePersonas();
+      setCount(" · local");
+    } else {
       setCount(Object.keys(state.personas).length ? " · local" : "");
     }
   }
@@ -5403,6 +5339,10 @@
         jabas: g.jabas ?? "",
       }));
 
+      // Data local al instante: DNI/QR validan sin esperar internet
+      hydrateSupervisoresFromStorage();
+      hydratePersonasFromStorage();
+
       // Pantalla YA (no dejar blanco mientras carga datos)
       restoreIdentityFromVinculo_();
       updateNetworkUI();
@@ -5435,34 +5375,34 @@
         state.cloudApi = false;
       }
 
-      if (PAGE === "scan") {
-        loadSupervisores()
-          .then(() => {
-            const el = $("#trabCount");
-            if (el && !SESSION_FORM_ENABLED) {
-              el.textContent =
-                "Listo para escanear · solo Supervisores de Cosecha";
-            }
-            updateNetworkUI();
-          })
-          .catch(() => {});
-      }
-
+      loadSupervisores()
+        .then(() => {
+          const el = $("#trabCount");
+          if (el && PAGE === "scan" && !SESSION_FORM_ENABLED) {
+            el.textContent = navigator.onLine
+              ? "Listo para escanear · solo Supervisores de Cosecha"
+              : "Listo para escanear · sin internet";
+          }
+          updateNetworkUI();
+        })
+        .catch(() => {});
+      loadPersonas()
+        .then(() => {
+          if (PAGE === "registro" && $("#harvestScreen") && !$("#harvestScreen").hidden) {
+            renderHarvest();
+          }
+        })
+        .catch(() => {});
       if (PAGE === "registro") {
         loadCatalogs().catch(() => {});
-        loadPersonas()
-          .then(() => {
-            if ($("#harvestScreen") && !$("#harvestScreen").hidden) {
-              renderHarvest();
-            }
-          })
-          .catch(() => {});
       }
 
       window.addEventListener("online", () => {
         state.online = true;
         updateNetworkUI();
         toast("Internet recuperado · subiendo…");
+        loadSupervisores().catch(() => {});
+        loadPersonas().catch(() => {});
         ensureCloudReady_(2000)
           .then(async (ok) => {
             if (!ok) return null;
@@ -5537,7 +5477,7 @@
 
       if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
         try {
-          const reg = await navigator.serviceWorker.register("/sw.js?v=222", {
+          const reg = await navigator.serviceWorker.register("/sw.js?v=224", {
             scope: "/",
           });
           reg.update?.().catch(() => {});

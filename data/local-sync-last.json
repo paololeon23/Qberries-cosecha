@@ -1,9 +1,0 @@
-﻿{
-    "local":  true,
-    "ok":  false,
-    "data":  {
-                 "ok":  false,
-                 "message":  "Acción POST no válida: registrarVinculo"
-             },
-    "status":  200
-}

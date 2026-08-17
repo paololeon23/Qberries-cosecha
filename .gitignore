@@ -6,3 +6,13 @@ node_modules/
 .netlify/
 *.log
 .DS_Store
+
+# Excel de origen: no van en la app ni en el sitio
+data/*.xlsx
+data/~$*
+data/_xlsx_*/
+data/promociones-supervisores.json
+data/local-sync-last.json
+data/_*.cjs
+data/_*.txt
+data/_*.js
