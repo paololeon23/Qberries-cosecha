@@ -3,7 +3,7 @@
 
   const STORAGE_KEY = "qb-supervisores-guia-v5";
   const PERSONAS_KEY = "qb-trabajadores-v1";
-  const SUPERVISORES_KEY = "qb-supervisores-cosecha-v1";
+  const SUPERVISORES_KEY = "qb-supervisores-cosecha-v2";
   const PERSONAS_META_KEY = "qb-trabajadores-meta-v1";
   const VINCULO_QUEUE_KEY = "qb-supervisores-vinculo-queue-v1";
   const CLOUD_DATA_QUEUE_KEY = "qb-supervisores-data-queue-v1";
@@ -22,7 +22,7 @@
   const LOGOUT_FLAG_KEY = "qb-supervisores-logout-v1";
   const HISTORY_TTL_MS = 48 * 60 * 60 * 1000;
   const HISTORY_PAGE_SIZE = 8;
-  const APP_VERSION = "v215";
+  const APP_VERSION = "v222";
   const HARVEST_TYPES = [
     { key: "suma-jarras", label: "Suma de jarras", short: "Suma", observacion: "SUMAR JARRAS" },
     { key: "descuento-jarras", label: "Descuento jarras", short: "Resta", observacion: "DESCUENTO JARRAS" },
@@ -2217,7 +2217,7 @@
         return;
       }
       const res = await fetch("/data/supervisores-cosecha.json", {
-        cache: "force-cache",
+        cache: "no-store",
       });
       if (!res.ok) throw new Error("catalogo");
       const data = await res.json();
@@ -2322,7 +2322,7 @@
 
     try {
       const res = await fetch("/data/trabajadores.json", {
-        cache: "force-cache",
+        cache: "no-store",
       });
       if (res.ok) {
         const data = await res.json();
@@ -2667,10 +2667,21 @@
     renderHarvest();
   }
 
-  function clearCurrentHarvestWorkers() {
-    const bucket = harvestTypeBucket(state.harvest.tipo);
-    bucket.workers = [];
-    attachCurrentHarvestDraft();
+  function resetHarvestTypeAfterSave(tipo) {
+    const key = normalizeHarvestType(tipo);
+    if (!state.harvest.byType || typeof state.harvest.byType !== "object") {
+      state.harvest.byType = emptyHarvestByType();
+    }
+    state.harvest.byType[key] = emptyHarvestTypeDraft();
+    if (normalizeHarvestType(state.harvest.tipo) === key) {
+      attachCurrentHarvestDraft();
+    }
+    clearHarvestWorkerForm();
+    document.querySelectorAll("[data-harvest-field]").forEach((input) => {
+      input.value = "";
+    });
+    saveHarvest();
+    renderHarvest();
   }
 
   function harvestOwnerMatches(item) {
@@ -3295,6 +3306,7 @@
         buildHarvestSyncPayload(snapshot),
         snapshot.id
       );
+      resetHarvestTypeAfterSave(snapshot.tipo);
       flushCloudDataQueue().catch(() => {});
       return snapshot;
     }
@@ -3314,15 +3326,7 @@
       buildHarvestSyncPayload(snapshot),
       snapshot.id
     );
-    if (
-      PAGE === "registro" &&
-      normalizeHarvestType(snapshot.tipo) ===
-        normalizeHarvestType(state.harvest.tipo)
-    ) {
-      clearCurrentHarvestWorkers();
-      saveHarvest();
-      renderHarvestWorkers();
-    }
+    resetHarvestTypeAfterSave(snapshot.tipo);
     if (state.previewDraftSnapshot?.id === snapshot.id) {
       state.previewDraftSnapshot = snapshot;
     }
@@ -5533,7 +5537,7 @@
 
       if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
         try {
-          const reg = await navigator.serviceWorker.register("/sw.js?v=215", {
+          const reg = await navigator.serviceWorker.register("/sw.js?v=222", {
             scope: "/",
           });
           reg.update?.().catch(() => {});

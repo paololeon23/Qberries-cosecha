@@ -1,4 +1,4 @@
-const CACHE = "qb-supervisores-v208";
+const CACHE = "qb-supervisores-v222";
 const ASSETS = [
   "/",
   "/index.html",
@@ -47,6 +47,10 @@ self.addEventListener("activate", (event) => {
   );
 });
 
+function isCatalog(url) {
+  return url.pathname.startsWith("/data/");
+}
+
 function isApi(url) {
   return (
     url.pathname.includes("/.netlify/functions/") ||
@@ -83,6 +87,21 @@ self.addEventListener("fetch", (event) => {
             headers: { "Content-Type": "application/json" },
           })
       )
+    );
+    return;
+  }
+
+  if (isCatalog(url)) {
+    event.respondWith(
+      fetch(req)
+        .then((res) => {
+          if (res && res.ok && url.origin === self.location.origin) {
+            const copy = res.clone();
+            caches.open(CACHE).then((cache) => cache.put(req, copy));
+          }
+          return res;
+        })
+        .catch(() => caches.match(req, { ignoreSearch: true }))
     );
     return;
   }
