@@ -1961,6 +1961,11 @@ body[data-page="scan"] .lock-screen {
   font-weight: 800;
   text-align: center;
 }
+.harvest-worker-row input::placeholder {
+  color: #9aa89c;
+  font-weight: 700;
+  opacity: 1;
+}
 .harvest-worker-total {
   color: #245b2d;
   font-size: 0.88rem;
@@ -2261,6 +2266,164 @@ body[data-page="scan"] .lock-screen {
   box-shadow: 0 6px 14px rgba(47, 122, 54, 0.24);
 }
 .save-harvest[hidden] { display: none !important; }
+.export-preview-types {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin: 10px 0 0;
+}
+.export-preview-types[hidden] { display: none !important; }
+.export-preview-types button {
+  min-height: 36px;
+  border: 1.5px solid #d5e7d1;
+  border-radius: 11px;
+  background: #f3faf1;
+  color: #2f7a36;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+.export-preview-types button.is-on {
+  background: var(--qb-green-dark);
+  border-color: var(--qb-green-dark);
+  color: #fff;
+}
+.export-preview-types button:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+.check-pick-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 165;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 12px 12px calc(12px + var(--safe-b));
+  background: rgba(7, 24, 36, 0.55);
+  backdrop-filter: blur(5px);
+}
+.check-pick-backdrop[hidden] { display: none !important; }
+.check-pick {
+  width: 100%;
+  max-width: 420px;
+  max-height: min(86dvh, 86%);
+  overflow: hidden;
+  padding: 16px 14px 14px;
+  border-radius: 22px 22px 18px 18px;
+  background: #fff;
+  box-shadow: 0 18px 48px rgba(7, 24, 36, 0.28);
+  display: flex;
+  flex-direction: column;
+}
+.check-pick-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.check-pick-head small {
+  display: block;
+  color: var(--qb-green);
+  font-size: 0.58rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+.check-pick-head h2 {
+  margin: 2px 0 0;
+  color: #0b3d66;
+  font-size: 1.05rem;
+}
+.check-pick-head button {
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 50%;
+  background: #eaf6e8;
+  color: var(--navy);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.check-pick-copy {
+  margin: 8px 0 10px;
+  color: #5f6f63;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.check-pick-search {
+  position: relative;
+  display: block;
+  margin: 0 0 10px;
+}
+.check-pick-search-ico {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #6a776e;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+.check-pick-search-ico .ico { width: 16px; height: 16px; }
+.check-pick-search input {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px 10px 40px;
+  border: 1.5px solid #d5e7d1;
+  border-radius: 12px;
+  background: #f7fbf6;
+  color: #142018;
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+.check-pick-search input:focus {
+  outline: none;
+  border-color: var(--qb-green);
+  background: #fff;
+}
+.check-pick-empty {
+  padding: 18px 8px;
+  text-align: center;
+  color: #6a776e;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+.check-pick-all,
+.check-pick-item {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 10px 4px;
+  border-bottom: 1px solid #edf2ea;
+  font-size: 0.84rem;
+}
+.check-pick-all { font-weight: 800; color: #2f7a36; }
+.check-pick-item strong { display: block; font-size: 0.82rem; }
+.check-pick-item small { color: #6a776e; font-size: 0.68rem; }
+.check-pick-list {
+  flex: 1 1 auto;
+  min-height: 180px;
+  max-height: min(52vh, 420px);
+  margin-bottom: 12px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+  border: 1.5px solid #d5e7d1;
+  border-radius: 14px;
+  background: #fbfcfa;
+  padding: 4px 8px;
+}
+.check-pick-item:last-child { border-bottom: 0; }
+.check-pick .btn { margin-top: 4px; flex-shrink: 0; }
 .share-whatsapp {
   border: 0;
   background: #25d366;
@@ -2293,7 +2456,8 @@ body:has(.history-sheet:not([hidden]))::before {
 }
 body:has(.history-sheet:not([hidden])) .app-tabbar,
 body:has(.help-sheet:not([hidden])) .app-tabbar,
-body:has(.app-tools-backdrop:not([hidden])) .app-tabbar {
+body:has(.app-tools-backdrop:not([hidden])) .app-tabbar,
+body:has(.check-pick-backdrop:not([hidden])) .app-tabbar {
   visibility: hidden;
   pointer-events: none;
 }
@@ -3983,6 +4147,7 @@ body.kb-open .security-screen {
 }
 body.kb-open .export-preview,
 body.kb-open .manual-worker,
+body.kb-open .check-pick,
 body.kb-open .picker {
   max-height: calc(var(--app-h, 100dvh) - 12px);
 }

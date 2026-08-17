@@ -28,10 +28,10 @@
       }
     } catch (e) {}
   </script>
-  <link rel="stylesheet" href="/styles.css?v=205" />
-  <script src="/vendor/xlsx.full.min.js?v=205" defer></script>
-  <script src="/icons.js?v=205" defer></script>
-  <script src="/app.js?v=205" defer></script>
+  <link rel="stylesheet" href="/styles.css?v=215" />
+  <script src="/vendor/xlsx.full.min.js?v=215" defer></script>
+  <script src="/icons.js?v=215" defer></script>
+  <script src="/app.js?v=215" defer></script>
 </head>
 <body data-page="registro" class="app-booting">
   <div class="stage">
@@ -64,6 +64,18 @@
         </header>
 
         <div class="harvest-scroll">
+          <section class="harvest-type-card">
+            <div>
+              <small>TIPO DE REGISTRO</small>
+              <span>Cada tipo conserva su propio lote y personal</span>
+            </div>
+            <input type="hidden" id="harvestType" value="suma-jarras" />
+            <button type="button" class="select-trigger harvest-type-trigger" id="btnHarvestType" aria-label="Seleccionar tipo de registro">
+              <span id="harvestTypeLabel">Suma de jarras</span>
+              <span class="chev" data-icon="chevronDown"></span>
+            </button>
+          </section>
+
           <section class="harvest-field-card">
             <div class="harvest-section-title">
               <div>
@@ -86,18 +98,6 @@
             </div>
           </section>
 
-          <section class="harvest-type-card">
-            <div>
-              <small>TIPO DE REGISTRO</small>
-              <span>Define el nombre del archivo Excel</span>
-            </div>
-            <input type="hidden" id="harvestType" value="suma-jarras" />
-            <button type="button" class="select-trigger harvest-type-trigger" id="btnHarvestType" aria-label="Seleccionar tipo de registro">
-              <span id="harvestTypeLabel">Suma de jarras</span>
-              <span class="chev" data-icon="chevronDown"></span>
-            </button>
-          </section>
-
           <section class="harvest-add-card">
             <div class="harvest-section-title">
               <div>
@@ -105,7 +105,7 @@
                 <h2>Agregar trabajador</h2>
               </div>
               <div class="harvest-title-actions">
-                <button type="button" class="harvest-copy-btn" id="btnCopyYesterdayWorkers" aria-label="Copiar trabajadores del día anterior" title="Copiar DNI de ayer">
+                <button type="button" class="harvest-copy-btn" id="btnCopyYesterdayWorkers" aria-label="Elegir trabajadores guardados" title="Elegir trabajadores guardados">
                   <span data-icon="clipboard"></span>
                 </button>
                 <button type="button" class="harvest-users-btn" id="btnManualWorker" aria-label="Agregar trabajador que no está en la base">
@@ -248,6 +248,7 @@
               <span data-icon="x"></span>
             </button>
           </div>
+          <div class="export-preview-types" id="exportPreviewTypes" hidden></div>
           <div class="export-preview-meta" id="exportPreviewMeta"></div>
           <div class="export-preview-table-wrap">
             <table class="export-preview-table">
@@ -306,6 +307,52 @@
           <button type="button" id="btnHistoryNext" aria-label="Siguiente">Siguiente</button>
         </div>
       </aside>
+
+      <div class="check-pick-backdrop" id="workerPick" hidden>
+        <section class="check-pick" role="dialog" aria-modal="true" aria-labelledby="workerPickTitle">
+          <div class="check-pick-head">
+            <div>
+              <small>PERSONAL GUARDADO</small>
+              <h2 id="workerPickTitle">Elegir trabajadores</h2>
+            </div>
+            <button type="button" id="btnCloseWorkerPick" aria-label="Cerrar">
+              <span data-icon="x"></span>
+            </button>
+          </div>
+          <p class="check-pick-copy">Cada trabajador que agregue queda aquí hasta cerrar sesión. Úselo en Suma, Resta o Descarte.</p>
+          <label class="check-pick-search">
+            <span data-icon="search" class="check-pick-search-ico"></span>
+            <input id="workerPickQuery" type="search" placeholder="Buscar por nombre o DNI" autocomplete="off" />
+          </label>
+          <label class="check-pick-all">
+            <input type="checkbox" id="workerPickAll" />
+            <span>Seleccionar todos</span>
+          </label>
+          <div class="check-pick-list" id="workerPickList"></div>
+          <button type="button" class="btn btn-primary btn-block" id="btnWorkerPickAdd">Agregar a este tipo</button>
+        </section>
+      </div>
+
+      <div class="check-pick-backdrop" id="readyFiles" hidden>
+        <section class="check-pick" role="dialog" aria-modal="true" aria-labelledby="readyFilesTitle">
+          <div class="check-pick-head">
+            <div>
+              <small>ARCHIVOS LISTOS</small>
+              <h2 id="readyFilesTitle">Suma, resta y descarte</h2>
+            </div>
+            <button type="button" id="btnCloseReadyFiles" aria-label="Cerrar">
+              <span data-icon="x"></span>
+            </button>
+          </div>
+          <p class="check-pick-copy" id="readyFilesCopy">Hay más de un Excel listo. Elija cuáles enviar o guardar.</p>
+          <label class="check-pick-all">
+            <input type="checkbox" id="readyFilesAll" checked />
+            <span>Seleccionar todos</span>
+          </label>
+          <div class="check-pick-list" id="readyFilesList"></div>
+          <button type="button" class="btn btn-primary btn-block" id="btnReadyFilesGo">Continuar</button>
+        </section>
+      </div>
 
       <div class="toast" id="toast" hidden></div>
     </div>

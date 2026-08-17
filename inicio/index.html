@@ -28,10 +28,10 @@
       }
     } catch (e) {}
   </script>
-  <link rel="stylesheet" href="/styles.css?v=205" />
-  <script src="/vendor/xlsx.full.min.js?v=205" defer></script>
-  <script src="/icons.js?v=205" defer></script>
-  <script src="/app.js?v=205" defer></script>
+  <link rel="stylesheet" href="/styles.css?v=215" />
+  <script src="/vendor/xlsx.full.min.js?v=215" defer></script>
+  <script src="/icons.js?v=215" defer></script>
+  <script src="/app.js?v=215" defer></script>
 </head>
 <body data-page="inicio" class="app-booting">
   <div class="stage">
@@ -183,6 +183,7 @@
               <span data-icon="x"></span>
             </button>
           </div>
+          <div class="export-preview-types" id="exportPreviewTypes" hidden></div>
           <div class="export-preview-meta" id="exportPreviewMeta"></div>
           <div class="export-preview-table-wrap">
             <table class="export-preview-table">
@@ -241,6 +242,27 @@
           <button type="button" id="btnHistoryNext" aria-label="Siguiente">Siguiente</button>
         </div>
       </aside>
+
+      <div class="check-pick-backdrop" id="readyFiles" hidden>
+        <section class="check-pick" role="dialog" aria-modal="true" aria-labelledby="readyFilesTitle">
+          <div class="check-pick-head">
+            <div>
+              <small>ARCHIVOS LISTOS</small>
+              <h2 id="readyFilesTitle">Suma, resta y descarte</h2>
+            </div>
+            <button type="button" id="btnCloseReadyFiles" aria-label="Cerrar">
+              <span data-icon="x"></span>
+            </button>
+          </div>
+          <p class="check-pick-copy" id="readyFilesCopy">Hay más de un Excel listo. Elija cuáles enviar o guardar.</p>
+          <label class="check-pick-all">
+            <input type="checkbox" id="readyFilesAll" checked />
+            <span>Seleccionar todos</span>
+          </label>
+          <div class="check-pick-list" id="readyFilesList"></div>
+          <button type="button" class="btn btn-primary btn-block" id="btnReadyFilesGo">Continuar</button>
+        </section>
+      </div>
 
       <div class="toast" id="toast" hidden></div>
     </div>

@@ -18,14 +18,15 @@
   const HARVEST_KEY = "qb-supervisores-harvest-v1";
   const HARVEST_HISTORY_KEY = "qb-supervisores-excel-history-v1";
   const SESSION_MANUAL_PERSONAS_KEY = "qb-supervisores-manual-personas-v1";
+  const SESSION_WORKERS_KEY = "qb-supervisores-session-workers-v1";
   const LOGOUT_FLAG_KEY = "qb-supervisores-logout-v1";
   const HISTORY_TTL_MS = 48 * 60 * 60 * 1000;
   const HISTORY_PAGE_SIZE = 8;
-  const APP_VERSION = "v205";
+  const APP_VERSION = "v215";
   const HARVEST_TYPES = [
-    { key: "suma-jarras", label: "Suma de jarras", observacion: "SUMAR JARRAS" },
-    { key: "descuento-jarras", label: "Descuento jarras", observacion: "DESCUENTO JARRAS" },
-    { key: "descarte-deshidratado", label: "Descarte - deshidratado", observacion: "DESCARTE - DESHIDRATADO" },
+    { key: "suma-jarras", label: "Suma de jarras", short: "Suma", observacion: "SUMAR JARRAS" },
+    { key: "descuento-jarras", label: "Descuento jarras", short: "Resta", observacion: "DESCUENTO JARRAS" },
+    { key: "descarte-deshidratado", label: "Descarte - deshidratado", short: "Descarte", observacion: "DESCARTE - DESHIDRATADO" },
   ];
   const DEFAULT_PIN = "";
   /** Contraseña en pausa: por ahora solo QR. Reactivar con true cuando toque. */
@@ -251,9 +252,7 @@
     jabas: "",
   });
 
-  const emptyHarvest = () => ({
-    fecha: todayISO(),
-    tipo: "suma-jarras",
+  const emptyHarvestTypeDraft = () => ({
     lote: "",
     codLote: "",
     modulo: "",
@@ -261,6 +260,34 @@
     variedad: "",
     workers: [],
   });
+
+  const emptyHarvestByType = () =>
+    HARVEST_TYPES.reduce((acc, item) => {
+      acc[item.key] = emptyHarvestTypeDraft();
+      return acc;
+    }, {});
+
+  const emptyHarvest = () => {
+    const harvest = {
+      fecha: todayISO(),
+      tipo: "suma-jarras",
+      lote: "",
+      codLote: "",
+      modulo: "",
+      turno: "",
+      variedad: "",
+      byType: emptyHarvestByType(),
+      workers: [],
+    };
+    const bucket = harvest.byType[harvest.tipo];
+    harvest.lote = bucket.lote;
+    harvest.codLote = bucket.codLote;
+    harvest.modulo = bucket.modulo;
+    harvest.turno = bucket.turno;
+    harvest.variedad = bucket.variedad;
+    harvest.workers = bucket.workers;
+    return harvest;
+  };
 
   const state = {
     session: emptySession(),
@@ -287,8 +314,12 @@
     thanksRedirectTimer: 0,
     activeExportSnapshot: null,
     activeExportSaved: false,
+    previewDraftSnapshot: null,
+    readyFilesAction: "share",
     historyPage: 0,
     sessionManualPersonas: /** @type {Record<string,{nombre:string,manual?:boolean}>} */ ({}),
+    /** Trabajadores agregados en esta sesión: viven hasta Cerrar sesión. */
+    sessionWorkers: /** @type {Record<string,{nombre:string,manual?:boolean}>} */ ({}),
     audioCtx: /** @type {AudioContext|null} */ (null),
   };
 
@@ -346,6 +377,7 @@
       const parsed = JSON.parse(localStorage.getItem(HARVEST_KEY) || "null");
       if (!parsed || typeof parsed !== "object") {
         state.harvest = emptyHarvest();
+        attachCurrentHarvestDraft();
         return;
       }
       const storedDate = String(parsed.fecha || "").slice(0, 10);
@@ -358,23 +390,16 @@
       state.harvest = {
         ...emptyHarvest(),
         ...parsed,
-        workers: Array.isArray(parsed.workers)
-          ? parsed.workers.map((w) => ({
-              id: w.id || uid(),
-              dni: String(w.dni || "").replace(/\D/g, ""),
-              nombre: String(w.nombre || "").trim().toUpperCase(),
-              manana: Math.max(0, num(w.manana)),
-              tarde: Math.max(0, num(w.tarde)),
-              manual: !!w.manual,
-            }))
-          : [],
       };
+      hydrateHarvestByType(parsed);
     } catch {
       state.harvest = emptyHarvest();
+      attachCurrentHarvestDraft();
     }
   }
 
   function saveHarvest() {
+    syncCurrentHarvestDraft();
     localStorage.setItem(
       HARVEST_KEY,
       JSON.stringify({ ...state.harvest, savedAt: new Date().toISOString() })
@@ -430,6 +455,99 @@
   function clearSessionManualPersonas() {
     state.sessionManualPersonas = {};
     sessionStorage.removeItem(SESSION_MANUAL_PERSONAS_KEY);
+  }
+
+  function sessionOwnerDni() {
+    const id = state.identity || getIdentity() || {};
+    return String(id.dni || "").replace(/\D/g, "");
+  }
+
+  /** Listado de personal de la sesión: se borra solo al cerrar sesión. */
+  function loadSessionWorkers() {
+    try {
+      const parsed = JSON.parse(
+        localStorage.getItem(SESSION_WORKERS_KEY) || "null"
+      );
+      const owner = sessionOwnerDni();
+      if (
+        !parsed ||
+        typeof parsed !== "object" ||
+        (owner && parsed.ownerDni && parsed.ownerDni !== owner)
+      ) {
+        state.sessionWorkers = {};
+        return;
+      }
+      const workers =
+        parsed.workers && typeof parsed.workers === "object"
+          ? parsed.workers
+          : {};
+      const clean = {};
+      Object.keys(workers).forEach((dni) => {
+        const key = String(dni || "").replace(/\D/g, "");
+        const nombre = String(workers[dni]?.nombre || "")
+          .trim()
+          .toUpperCase();
+        if (key.length === 8 && nombre.length >= 3) {
+          clean[key] = {
+            nombre,
+            manual: !!workers[dni]?.manual,
+          };
+        }
+      });
+      state.sessionWorkers = clean;
+    } catch {
+      state.sessionWorkers = {};
+    }
+  }
+
+  function saveSessionWorkers() {
+    const owner = sessionOwnerDni();
+    try {
+      localStorage.setItem(
+        SESSION_WORKERS_KEY,
+        JSON.stringify({
+          ownerDni: owner || "",
+          savedAt: new Date().toISOString(),
+          workers: state.sessionWorkers || {},
+        })
+      );
+    } catch {
+      /* sin espacio: el modal seguirá con lo que haya en memoria */
+    }
+  }
+
+  function clearSessionWorkers() {
+    state.sessionWorkers = {};
+    try {
+      localStorage.removeItem(SESSION_WORKERS_KEY);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function rememberSessionWorker(dni, nombre, { manual = false } = {}) {
+    const key = String(dni || "").replace(/\D/g, "");
+    const name = String(nombre || "")
+      .trim()
+      .replace(/\s+/g, " ")
+      .toUpperCase();
+    if (key.length !== 8 || name.length < 3) return;
+    const prev = state.sessionWorkers[key];
+    state.sessionWorkers[key] = {
+      nombre: name,
+      manual: !!(manual || prev?.manual),
+    };
+    saveSessionWorkers();
+  }
+
+  function seedSessionWorkersFromHarvest() {
+    HARVEST_TYPES.forEach((item) => {
+      harvestTypeBucket(item.key).workers.forEach((worker) => {
+        rememberSessionWorker(worker.dni, worker.nombre, {
+          manual: !!worker.manual,
+        });
+      });
+    });
   }
 
   function lookupPersona(dni) {
@@ -923,9 +1041,7 @@
     }
     if (ctx.kind === "harvestType") {
       if (!HARVEST_TYPES.some((item) => item.key === v)) return;
-      state.harvest.tipo = v;
-      saveHarvest();
-      renderHarvestType();
+      switchHarvestType(v);
       closePicker();
       toast(harvestTypeLabel(v));
       return;
@@ -1310,6 +1426,7 @@
     markLoggedOut();
     clearAuthenticatedSession();
     clearSessionManualPersonas();
+    clearSessionWorkers();
     state.harvest = emptyHarvest();
     try {
       localStorage.removeItem(HARVEST_KEY);
@@ -1921,6 +2038,9 @@
     state.pendingIdentity = null;
     sessionStorage.setItem(SESSION_KEY, "1");
     bindSessionToIdentity(identity.dni);
+    // Si entra otro supervisor, el listado anterior no se mezcla.
+    loadSessionWorkers();
+    seedSessionWorkersFromHarvest();
     toast(`Sesión · ${identity.nombre}`);
     // Vincular es opcional: abre Inicio; el supervisor puede completar la ficha cuando quiera
     if (!SESSION_FORM_ENABLED) {
@@ -2412,6 +2532,166 @@
     );
   }
 
+  function harvestTypeShort(value) {
+    return (
+      HARVEST_TYPES.find((item) => item.key === value)?.short ||
+      harvestTypeLabel(value)
+    );
+  }
+
+  function normalizeHarvestType(value) {
+    return HARVEST_TYPES.some((item) => item.key === value)
+      ? value
+      : HARVEST_TYPES[0].key;
+  }
+
+  function normalizeHarvestWorker(worker) {
+    return {
+      id: worker?.id || uid(),
+      dni: String(worker?.dni || "").replace(/\D/g, ""),
+      nombre: String(worker?.nombre || "")
+        .trim()
+        .toUpperCase(),
+      manana: Math.max(0, num(worker?.manana)),
+      tarde: Math.max(0, num(worker?.tarde)),
+      manual: !!worker?.manual,
+    };
+  }
+
+  function cloneHarvestTypeDraft(draft) {
+    const src = draft && typeof draft === "object" ? draft : {};
+    return {
+      lote: String(src.lote || ""),
+      codLote: String(src.codLote || ""),
+      modulo: String(src.modulo || ""),
+      turno: String(src.turno || ""),
+      variedad: String(src.variedad || ""),
+      workers: Array.isArray(src.workers)
+        ? src.workers.map(normalizeHarvestWorker)
+        : [],
+    };
+  }
+
+  function harvestTypeBucket(tipo) {
+    const key = normalizeHarvestType(tipo);
+    if (!state.harvest.byType || typeof state.harvest.byType !== "object") {
+      state.harvest.byType = emptyHarvestByType();
+    }
+    if (!state.harvest.byType[key]) {
+      state.harvest.byType[key] = emptyHarvestTypeDraft();
+    }
+    const bucket = state.harvest.byType[key];
+    ["lote", "codLote", "modulo", "turno", "variedad"].forEach((field) => {
+      if (typeof bucket[field] !== "string") bucket[field] = "";
+    });
+    if (!Array.isArray(bucket.workers)) bucket.workers = [];
+    return bucket;
+  }
+
+  function syncCurrentHarvestDraft() {
+    const key = normalizeHarvestType(state.harvest.tipo);
+    if (!state.harvest.byType || typeof state.harvest.byType !== "object") {
+      state.harvest.byType = emptyHarvestByType();
+    }
+    state.harvest.byType[key] = cloneHarvestTypeDraft({
+      lote: state.harvest.lote,
+      codLote: state.harvest.codLote,
+      modulo: state.harvest.modulo,
+      turno: state.harvest.turno,
+      variedad: state.harvest.variedad,
+      workers: state.harvest.workers,
+    });
+    state.harvest.workers = state.harvest.byType[key].workers;
+  }
+
+  function attachCurrentHarvestDraft() {
+    state.harvest.tipo = normalizeHarvestType(state.harvest.tipo);
+    const bucket = harvestTypeBucket(state.harvest.tipo);
+    state.harvest.lote = bucket.lote;
+    state.harvest.codLote = bucket.codLote;
+    state.harvest.modulo = bucket.modulo;
+    state.harvest.turno = bucket.turno;
+    state.harvest.variedad = bucket.variedad;
+    state.harvest.workers = bucket.workers;
+  }
+
+  function hydrateHarvestByType(parsed) {
+    const byType = emptyHarvestByType();
+    const source =
+      parsed?.byType && typeof parsed.byType === "object" ? parsed.byType : {};
+    const hasTypedShape = HARVEST_TYPES.some(
+      (item) => source[item.key] && typeof source[item.key] === "object"
+    );
+    HARVEST_TYPES.forEach((item) => {
+      byType[item.key] = cloneHarvestTypeDraft(source[item.key]);
+    });
+    const activeTipo = normalizeHarvestType(parsed?.tipo);
+    const legacy = Array.isArray(parsed?.workers) ? parsed.workers : [];
+    const hasTypedWorkers = HARVEST_TYPES.some(
+      (item) => byType[item.key].workers.length
+    );
+    if (legacy.length && !hasTypedWorkers) {
+      byType[activeTipo].workers = legacy.map(normalizeHarvestWorker);
+    }
+    // Solo migrar lote del formato viejo al tipo activo. Nunca copiarlo a los otros.
+    if (!hasTypedShape && parsed?.lote) {
+      byType[activeTipo].lote = String(parsed.lote || "");
+      byType[activeTipo].codLote = String(parsed.codLote || "");
+      byType[activeTipo].modulo = String(parsed.modulo || "");
+      byType[activeTipo].turno = String(parsed.turno || "");
+      byType[activeTipo].variedad = String(parsed.variedad || "");
+    }
+    state.harvest.tipo = activeTipo;
+    state.harvest.byType = byType;
+    attachCurrentHarvestDraft();
+  }
+
+  function clearHarvestWorkerForm() {
+    if ($("#harvestWorkerDni")) $("#harvestWorkerDni").value = "";
+    if ($("#harvestWorkerName")) $("#harvestWorkerName").value = "";
+    if ($("#harvestWorkerMsg")) $("#harvestWorkerMsg").textContent = "";
+  }
+
+  function switchHarvestType(tipo) {
+    const next = normalizeHarvestType(tipo);
+    if (state.harvest.tipo === next) {
+      attachCurrentHarvestDraft();
+      renderHarvest();
+      return;
+    }
+    syncCurrentHarvestDraft();
+    state.harvest.tipo = next;
+    attachCurrentHarvestDraft();
+    clearHarvestWorkerForm();
+    saveHarvest();
+    renderHarvest();
+  }
+
+  function clearCurrentHarvestWorkers() {
+    const bucket = harvestTypeBucket(state.harvest.tipo);
+    bucket.workers = [];
+    attachCurrentHarvestDraft();
+  }
+
+  function harvestOwnerMatches(item) {
+    const identity = state.identity || getIdentity() || {};
+    const supervisorDni = String(identity.dni || "").replace(/\D/g, "");
+    const owner = String(item?.supervisorDni || "").replace(/\D/g, "");
+    return !owner || !supervisorDni || owner === supervisorDni;
+  }
+
+  function todayReadySnapshots() {
+    const history = loadHarvestHistory().filter(
+      (item) => item.fecha === todayISO() && harvestOwnerMatches(item)
+    );
+    const latest = new Map();
+    history.forEach((item) => {
+      const tipo = normalizeHarvestType(item.tipo);
+      if (!latest.has(tipo)) latest.set(tipo, item);
+    });
+    return HARVEST_TYPES.map((item) => latest.get(item.key)).filter(Boolean);
+  }
+
   function harvestTypeLabel(value) {
     return (
       HARVEST_TYPES.find((item) => item.key === value)?.label ||
@@ -2460,19 +2740,21 @@
     if (!root) return;
     const workers = state.harvest.workers || [];
     if (!workers.length) {
-      root.innerHTML = `<div class="harvest-empty">${ico("users")}Agregue trabajadores por DNI para comenzar.</div>`;
+      root.innerHTML = `<div class="harvest-empty">${ico("users")}Agregue trabajadores para ${harvestTypeShort(state.harvest.tipo)}.</div>`;
     } else {
       root.innerHTML = workers
         .map((w, index) => {
-          const total = num(w.manana) + num(w.tarde);
+          const manana = num(w.manana);
+          const tarde = num(w.tarde);
+          const total = manana + tarde;
           return `
             <article class="harvest-worker-row" data-worker-id="${w.id}">
               <div class="harvest-worker-person">
                 <strong>${index + 1}. ${escapeHtml(w.nombre || "SIN NOMBRE")}</strong>
                 <span>DNI ${escapeHtml(w.dni)}</span>
               </div>
-              <input data-harvest-field="manana" type="number" inputmode="numeric" min="0" step="1" value="${num(w.manana)}" aria-label="Jarras mañana de ${escapeHtml(w.nombre)}" />
-              <input data-harvest-field="tarde" type="number" inputmode="numeric" min="0" step="1" value="${num(w.tarde)}" aria-label="Jarras tarde de ${escapeHtml(w.nombre)}" />
+              <input data-harvest-field="manana" type="number" inputmode="numeric" min="0" step="1" placeholder="00"${manana > 0 ? ` value="${manana}"` : ""} aria-label="Jarras mañana de ${escapeHtml(w.nombre)}" />
+              <input data-harvest-field="tarde" type="number" inputmode="numeric" min="0" step="1" placeholder="00"${tarde > 0 ? ` value="${tarde}"` : ""} aria-label="Jarras tarde de ${escapeHtml(w.nombre)}" />
               <strong class="harvest-worker-total">${fmt(total)}</strong>
               <button type="button" class="harvest-worker-remove" data-harvest-remove aria-label="Quitar trabajador">${ico("x")}</button>
             </article>`;
@@ -2526,19 +2808,36 @@
       );
     }
 
-    const total = harvestTotal();
-    const workers = state.harvest.workers || [];
+    const ready = todayReadySnapshots();
+    const readyTypes = new Set(
+      ready.map((item) => normalizeHarvestType(item.tipo))
+    );
+    const draftWorkers = HARVEST_TYPES.flatMap((item) => {
+      if (readyTypes.has(item.key)) return [];
+      return harvestTypeBucket(item.key).workers;
+    });
+    const workers = [
+      ...ready.flatMap((item) => item.workers || []),
+      ...draftWorkers,
+    ];
+    const total = workers.reduce(
+      (sum, worker) => sum + num(worker.manana) + num(worker.tarde),
+      0
+    );
+    const uniqueWorkers = new Set(
+      workers.map((worker) => String(worker.dni || "").replace(/\D/g, ""))
+    ).size;
     if ($("#homeTodayTotal")) {
       $("#homeTodayTotal").textContent = `${fmt(total)} ${total === 1 ? "jarra" : "jarras"}`;
     }
     if ($("#homeTodayWorkers")) {
-      $("#homeTodayWorkers").textContent = `${workers.length} ${
-        workers.length === 1 ? "trabajador" : "trabajadores"
+      $("#homeTodayWorkers").textContent = `${uniqueWorkers} ${
+        uniqueWorkers === 1 ? "trabajador" : "trabajadores"
       }`;
     }
     if ($("#homeTodayLote")) {
       $("#homeTodayLote").textContent = state.harvest.lote
-        ? harvestLoteCode(state.harvest)
+        ? `${harvestLoteCode(state.harvest)} · ${harvestTypeShort(state.harvest.tipo)}`
         : "Lote pendiente";
     }
 
@@ -2583,7 +2882,9 @@
               <button type="button" class="home-recent-item" data-home-action="excel">
                 <span class="home-recent-icon">${ico("clipboard")}</span>
                 <span class="home-recent-main">
-                  <strong>${escapeHtml(loteCode)}</strong>
+                  <strong>${escapeHtml(loteCode)} · ${escapeHtml(
+              harvestTypeShort(item.tipo)
+            )}</strong>
                   <small>${escapeHtml(dayLabel)} · ${escapeHtml(dayFull)} · ${(item.workers || []).length} trabajadores</small>
                 </span>
                 <span class="home-recent-total">${fmt(amount)}<small>jarras</small></span>
@@ -2818,7 +3119,7 @@
       id: uid(),
       savedAt: new Date().toISOString(),
       fecha: h.fecha || todayISO(),
-      tipo: h.tipo || HARVEST_TYPES[0].key,
+      tipo: normalizeHarvestType(h.tipo),
       lote: h.lote || "",
       codLote: h.codLote || "",
       modulo: h.modulo || "",
@@ -2972,6 +3273,7 @@
       return null;
     }
     const snapshot = makeHarvestSnapshot();
+    state.previewDraftSnapshot = snapshot;
     openExportPreview(snapshot, { saved: false });
     return snapshot;
   }
@@ -3012,12 +3314,21 @@
       buildHarvestSyncPayload(snapshot),
       snapshot.id
     );
-    toast(
-      navigator.onLine
-        ? "Registro guardado · enviando"
-        : "Registro guardado · pendiente de enviar"
-    );
+    if (
+      PAGE === "registro" &&
+      normalizeHarvestType(snapshot.tipo) ===
+        normalizeHarvestType(state.harvest.tipo)
+    ) {
+      clearCurrentHarvestWorkers();
+      saveHarvest();
+      renderHarvestWorkers();
+    }
+    if (state.previewDraftSnapshot?.id === snapshot.id) {
+      state.previewDraftSnapshot = snapshot;
+    }
+    toast("Se guardó correctamente");
     flushCloudDataQueue().catch(() => {});
+    renderExportPreviewTypes(snapshot);
     return snapshot;
   }
 
@@ -3034,12 +3345,52 @@
     }
   }
 
+  function previewSnapshotsMap(current) {
+    const map = {};
+    todayReadySnapshots().forEach((item) => {
+      map[normalizeHarvestType(item.tipo)] = item;
+    });
+    const draft = state.previewDraftSnapshot;
+    if (draft) map[normalizeHarvestType(draft.tipo)] = draft;
+    if (current) map[normalizeHarvestType(current.tipo)] = current;
+    return map;
+  }
+
+  function isSnapshotSaved(snapshot) {
+    if (!snapshot?.id) return false;
+    if (loadHarvestHistory().some((item) => item.id === snapshot.id)) {
+      return true;
+    }
+    if (state.previewDraftSnapshot?.id === snapshot.id && !state.activeExportSaved) {
+      return false;
+    }
+    return false;
+  }
+
+  function renderExportPreviewTypes(current) {
+    const root = $("#exportPreviewTypes");
+    if (!root) return;
+    const active = current || state.activeExportSnapshot;
+    const map = previewSnapshotsMap(active);
+    // Siempre visibles: así el supervisor ve qué archivos ya están listos.
+    root.hidden = false;
+    root.innerHTML = HARVEST_TYPES.map((item) => {
+      const snapshot = map[item.key];
+      const on = snapshot && snapshot.id === active?.id;
+      return `<button type="button" class="${on ? "is-on" : ""}" data-preview-type="${item.key}" ${
+        snapshot ? "" : "disabled"
+      }>${escapeHtml(item.short)}${snapshot ? " ✓" : ""}</button>`;
+    }).join("");
+  }
+
   function openExportPreview(snapshot, opts = {}) {
     if (!snapshot) return;
     state.activeExportSnapshot = snapshot;
     // Desde el historial ya está guardado; desde "Ver resumen" todavía no.
     state.activeExportSaved = opts.saved !== false;
+    if (!state.activeExportSaved) state.previewDraftSnapshot = snapshot;
     updateExportPreviewSavedUI();
+    renderExportPreviewTypes(snapshot);
     const rows = $("#exportPreviewRows");
     if (rows) {
       rows.innerHTML = harvestExcelRows(snapshot)
@@ -3061,7 +3412,7 @@
     const saved = new Date(snapshot.savedAt);
     const meta = $("#exportPreviewMeta");
     if (meta) {
-      meta.textContent = `${snapshot.fecha} · Lote ${
+      meta.textContent = `${harvestTypeShort(snapshot.tipo)} · ${snapshot.fecha} · Lote ${
         snapshot.codLote || snapshot.lote || "—"
       } · ${snapshot.workers.length} trabajador(es) · ${snapshot.supervisor}`;
       if (!Number.isNaN(saved.getTime())) {
@@ -3086,8 +3437,15 @@
     if (modal) modal.hidden = true;
   }
 
-  function downloadHarvestSnapshot(snapshot) {
+  function downloadHarvestSnapshot(snapshot, opts = {}) {
     if (!snapshot) return;
+    if (!opts.single) {
+      const ready = todayReadySnapshots();
+      if (ready.length > 1) {
+        openReadyFilesModal("download", ready);
+        return;
+      }
+    }
     try {
       const wb = buildHarvestWorkbook(snapshot);
       XLSX.writeFile(wb, harvestFileName(snapshot));
@@ -3119,17 +3477,26 @@
     window.open(`https://api.whatsapp.com/send?text=${encoded}`, "_blank");
   }
 
-  async function shareHarvestSnapshot(snapshot) {
+  async function shareHarvestSnapshot(snapshot, opts = {}) {
     if (!snapshot) {
       toast("No hay registro para compartir");
       return;
     }
     if (
+      !opts.single &&
       !state.activeExportSaved &&
       state.activeExportSnapshot?.id === snapshot.id
     ) {
       const saved = await commitHarvestSnapshot();
       if (!saved) return;
+      snapshot = saved;
+    }
+    if (!opts.single) {
+      const ready = todayReadySnapshots();
+      if (ready.length > 1) {
+        openReadyFilesModal("share", ready);
+        return;
+      }
     }
     if (typeof XLSX === "undefined") {
       toast("Espere a que cargue el Excel e intente otra vez");
@@ -3176,6 +3543,123 @@
     }
   }
 
+  function openReadyFilesModal(action, files) {
+    const sheet = $("#readyFiles");
+    const list = $("#readyFilesList");
+    const items = files?.length ? files : todayReadySnapshots();
+    if (!items.length) {
+      toast("Aún no hay archivos listos");
+      return;
+    }
+    state.readyFilesAction = action === "download" ? "download" : "share";
+    if (!sheet || !list) {
+      confirmReadyFilesAction(items);
+      return;
+    }
+    if ($("#readyFilesAll")) $("#readyFilesAll").checked = true;
+    const copy = $("#readyFilesCopy");
+    if (copy) {
+      copy.textContent =
+        items.length > 1
+          ? "Hay más de un Excel listo. Elija cuáles enviar o guardar."
+          : "Este archivo ya está listo para enviar o guardar.";
+    }
+    list.innerHTML = items
+      .map(
+        (item) => `<label class="check-pick-item">
+          <input type="checkbox" data-ready-id="${escapeHtml(item.id)}" checked />
+          <span>
+            <strong>${escapeHtml(harvestTypeShort(item.tipo))}</strong>
+            <small>${item.workers?.length || 0} trabajador(es) · ${fmt(
+          snapshotTotal(item)
+        )} jarras</small>
+          </span>
+        </label>`
+      )
+      .join("");
+    const go = $("#btnReadyFilesGo");
+    if (go) {
+      go.textContent =
+        state.readyFilesAction === "download"
+          ? "Guardar Excel"
+          : "Enviar por WhatsApp";
+    }
+    sheet.hidden = false;
+    sheet.removeAttribute("hidden");
+    hydrateIcons(sheet);
+  }
+
+  function closeReadyFiles() {
+    const sheet = $("#readyFiles");
+    if (!sheet) return;
+    sheet.hidden = true;
+    sheet.setAttribute("hidden", "");
+  }
+
+  function selectedReadySnapshots() {
+    const checked = $$("#readyFilesList [data-ready-id]:checked").map(
+      (input) => input.dataset.readyId
+    );
+    if (!checked.length) return [];
+    const all = todayReadySnapshots();
+    return all.filter((item) => checked.includes(item.id));
+  }
+
+  async function confirmReadyFiles() {
+    const selected = selectedReadySnapshots();
+    if (!selected.length) {
+      toast("Seleccione al menos un archivo");
+      return;
+    }
+    closeReadyFiles();
+    await confirmReadyFilesAction(selected);
+  }
+
+  async function confirmReadyFilesAction(selected) {
+    if (state.readyFilesAction === "download") {
+      selected.forEach((item) => downloadHarvestSnapshot(item, { single: true }));
+      return;
+    }
+    await shareHarvestSnapshots(selected);
+  }
+
+  async function shareHarvestSnapshots(snapshots) {
+    if (!snapshots?.length) return;
+    if (snapshots.length === 1) {
+      await shareHarvestSnapshot(snapshots[0], { single: true });
+      return;
+    }
+    if (typeof XLSX === "undefined") {
+      toast("Espere a que cargue el Excel e intente otra vez");
+      return;
+    }
+    let files = [];
+    try {
+      files = snapshots.map((item) => buildHarvestFile(item)).filter(Boolean);
+    } catch {
+      files = [];
+    }
+    const text = snapshots.map((item) => harvestShareText(item)).join("\n");
+    if (files.length && typeof navigator.share === "function") {
+      try {
+        await navigator.share({ files, text });
+        toast("Elija WhatsApp para enviar los Excel");
+        return;
+      } catch (err) {
+        if (err?.name === "AbortError") return;
+      }
+    }
+    snapshots.forEach((item) => downloadHarvestSnapshot(item, { single: true }));
+    try {
+      openWhatsAppWithText(
+        `${text}\n\nSi no llegaron los Excel, adjúntelos desde Descargas.`
+      );
+      toast("Abriendo WhatsApp · Excel descargados");
+    } catch {
+      toast("Excel descargados. Adjúntelos en WhatsApp");
+    }
+  }
+
   function renderHarvestHistory() {
     const root = $("#historyList");
     const pager = $("#historyPager");
@@ -3211,7 +3695,9 @@
           item.id
         )}">
           <div class="history-item-top">
-            <h3>${escapeHtml(harvestLoteCode(item) || "Sin lote")}</h3>
+            <h3>${escapeHtml(harvestLoteCode(item) || "Sin lote")} · ${escapeHtml(
+              harvestTypeShort(item.tipo)
+            )}</h3>
             <time>${escapeHtml(when)}</time>
           </div>
           <p>${item.workers?.length || 0} trabajador(es) · ${fmt(
@@ -3516,6 +4002,8 @@
     } else {
       rememberPersona(key, name);
     }
+    // Queda en el listado de la sesión para Suma / Resta / Descarte.
+    rememberSessionWorker(key, name, { manual: !!fromManual });
     state.harvest.workers.push({
       id: uid(),
       dni: key,
@@ -3530,61 +4018,128 @@
   }
 
   function copyYesterdayWorkers() {
-    const yesterday = new Date();
-    yesterday.setDate(yesterday.getDate() - 1);
-    const yesterdayIso = [
-      yesterday.getFullYear(),
-      String(yesterday.getMonth() + 1).padStart(2, "0"),
-      String(yesterday.getDate()).padStart(2, "0"),
-    ].join("-");
-    const identity = state.identity || getIdentity() || {};
-    const supervisorDni = String(identity.dni || "").replace(/\D/g, "");
-    const records = loadHarvestHistory().filter((item) => {
-      if (item.fecha !== yesterdayIso) return false;
-      const owner = String(item.supervisorDni || "").replace(/\D/g, "");
-      return !owner || !supervisorDni || owner === supervisorDni;
-    });
-    if (!records.length) {
-      toast("No hay trabajadores guardados del día anterior");
-      return;
-    }
+    openWorkerPick();
+  }
 
-    const existing = new Set(
-      (state.harvest.workers || []).map((worker) => worker.dni)
+  function localSavedWorkersPool() {
+    const current = new Set(
+      (state.harvest.workers || []).map((worker) =>
+        String(worker.dni || "").replace(/\D/g, "")
+      )
     );
-    const previous = new Map();
-    records.forEach((record) => {
-      (record.workers || []).forEach((worker) => {
-        const dni = String(worker.dni || "").replace(/\D/g, "");
-        const nombre = String(worker.nombre || "").trim().toUpperCase();
-        if (dni.length === 8 && nombre && !previous.has(dni)) {
-          previous.set(dni, nombre);
-        }
-      });
-    });
+    return Object.entries(state.sessionWorkers || {})
+      .map(([dni, info]) => {
+        const key = String(dni || "").replace(/\D/g, "");
+        const nombre = String(info?.nombre || "").trim().toUpperCase();
+        if (key.length !== 8 || !nombre || current.has(key)) return null;
+        return {
+          dni: key,
+          nombre,
+          source: info?.manual ? "Manual" : "Sesión",
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
+  }
 
-    let copied = 0;
-    previous.forEach((nombre, dni) => {
-      if (existing.has(dni)) return;
-      state.harvest.workers.push({
-        id: uid(),
-        dni,
-        nombre,
-        manana: 0,
-        tarde: 0,
-        manual: false,
-      });
-      existing.add(dni);
-      copied += 1;
-    });
-
-    if (!copied) {
-      toast("Los trabajadores de ayer ya están agregados");
+  function openWorkerPick() {
+    const sheet = $("#workerPick");
+    const list = $("#workerPickList");
+    if (!sheet || !list) {
+      toast("No se pudo abrir la lista");
       return;
     }
-    saveHarvest();
-    renderHarvestWorkers();
-    toast(`${copied} trabajador${copied === 1 ? "" : "es"} copiado${copied === 1 ? "" : "s"} de ayer`);
+    const pool = localSavedWorkersPool();
+    if (!pool.length) {
+      toast("Agregue trabajadores primero; quedarán aquí hasta cerrar sesión");
+      return;
+    }
+    if ($("#workerPickAll")) $("#workerPickAll").checked = false;
+    if ($("#workerPickQuery")) $("#workerPickQuery").value = "";
+    renderWorkerPickList(pool);
+    sheet.hidden = false;
+    sheet.removeAttribute("hidden");
+    hydrateIcons(sheet);
+    setTimeout(() => $("#workerPickQuery")?.focus(), 80);
+  }
+
+  function renderWorkerPickList(pool, query = "") {
+    const list = $("#workerPickList");
+    if (!list) return;
+    const q = String(query || "")
+      .trim()
+      .toUpperCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+    const filtered = !q
+      ? pool
+      : pool.filter((worker) => {
+          const nombre = String(worker.nombre || "")
+            .toUpperCase()
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "");
+          const dni = String(worker.dni || "");
+          return nombre.includes(q) || dni.includes(q.replace(/\D/g, "") || q);
+        });
+    if (!filtered.length) {
+      list.innerHTML =
+        '<div class="check-pick-empty">No hay coincidencias con esa búsqueda.</div>';
+      if ($("#workerPickAll")) $("#workerPickAll").checked = false;
+      return;
+    }
+    list.innerHTML = filtered
+      .map(
+        (worker) => `<label class="check-pick-item">
+          <input type="checkbox" data-pick-dni="${escapeHtml(worker.dni)}" />
+          <span>
+            <strong>${escapeHtml(worker.nombre)}</strong>
+            <small>DNI ${escapeHtml(worker.dni)}${
+          worker.source ? ` · ${escapeHtml(worker.source)}` : ""
+        }</small>
+          </span>
+        </label>`
+      )
+      .join("");
+    if ($("#workerPickAll")) $("#workerPickAll").checked = false;
+  }
+
+  function filterWorkerPickList() {
+    renderWorkerPickList(
+      localSavedWorkersPool(),
+      $("#workerPickQuery")?.value || ""
+    );
+  }
+
+  function closeWorkerPick() {
+    const sheet = $("#workerPick");
+    if (!sheet) return;
+    sheet.hidden = true;
+    sheet.setAttribute("hidden", "");
+  }
+
+  function applyWorkerPick() {
+    const selected = $$("#workerPickList [data-pick-dni]:checked");
+    if (!selected.length) {
+      toast("Seleccione al menos un trabajador");
+      return;
+    }
+    const pool = new Map(
+      localSavedWorkersPool().map((worker) => [worker.dni, worker])
+    );
+    let added = 0;
+    selected.forEach((input) => {
+      const worker = pool.get(input.dataset.pickDni);
+      if (!worker) return;
+      if (pushHarvestWorker(worker.dni, worker.nombre)) added += 1;
+    });
+    closeWorkerPick();
+    if (!added) {
+      toast("Esos trabajadores ya están en este tipo");
+      return;
+    }
+    toast(
+      `${added} trabajador${added === 1 ? "" : "es"} agregado${added === 1 ? "" : "s"} a ${harvestTypeShort(state.harvest.tipo)}`
+    );
   }
 
   function addHarvestWorker() {
@@ -3664,7 +4219,10 @@
     const worker = state.harvest.workers.find((w) => w.id === row?.dataset.workerId);
     if (!worker) return;
     const field = input.dataset.harvestField;
-    worker[field] = Math.max(0, num(input.value));
+    const raw = String(input.value || "").trim();
+    worker[field] = raw === "" ? 0 : Math.max(0, num(raw));
+    // Si quedó vacío o en cero, deja solo el placeholder "00".
+    if (!worker[field]) input.value = "";
     const totalEl = row.querySelector(".harvest-worker-total");
     if (totalEl) totalEl.textContent = fmt(num(worker.manana) + num(worker.tarde));
     if ($("#harvestGrandTotal")) $("#harvestGrandTotal").textContent = fmt(harvestTotal());
@@ -3840,12 +4398,20 @@
 
   function fieldRow(icon, label, field, value, opts = {}) {
     const type = opts.type || "text";
-    const ph = opts.placeholder || "";
     const extra = opts.extra || "";
+    const emptyQty =
+      type === "number" &&
+      (value === "" || value == null || String(value).trim() === "" || num(value) === 0);
+    const ph = opts.placeholder || (type === "number" ? "00" : "");
+    const valueAttr = emptyQty
+      ? ""
+      : value !== "" && value != null
+        ? ` value="${escapeHtml(value)}"`
+        : "";
     return `
       <label class="guia-field">
         <span class="gf-label">${ico(icon, "ico ico-sm")} ${label}</span>
-        <input data-field="${field}" type="${type}" value="${escapeHtml(value)}" placeholder="${escapeHtml(ph)}" autocomplete="off" ${extra} />
+        <input data-field="${field}" type="${type}"${valueAttr} placeholder="${escapeHtml(ph)}" autocomplete="off" ${extra} />
       </label>`;
   }
 
@@ -3887,8 +4453,8 @@
             <div class="qty-block">
               <div class="qty-head">Cantidad · se guarda y se suma</div>
               <div class="qty-row">
-                ${fieldRow("berry", "Jarras", "jarras", g.jarras, { type: "number", placeholder: "0", extra: 'inputmode="numeric" min="0" step="1" class="qty-input"' })}
-                ${fieldRow("package", "Jabas", "jabas", g.jabas, { type: "number", placeholder: "0", extra: 'inputmode="numeric" min="0" step="1" class="qty-input"' })}
+                ${fieldRow("berry", "Jarras", "jarras", g.jarras, { type: "number", placeholder: "00", extra: 'inputmode="numeric" min="0" step="1" class="qty-input"' })}
+                ${fieldRow("package", "Jabas", "jabas", g.jabas, { type: "number", placeholder: "00", extra: 'inputmode="numeric" min="0" step="1" class="qty-input"' })}
               </div>
             </div>
           </div>
@@ -3962,8 +4528,9 @@
     const field = el.dataset.field;
     if (field === "jarras" || field === "jabas") {
       const raw = String(el.value || "").replace(/[^\d.]/g, "");
-      el.value = raw;
-      guia[field] = raw === "" ? "" : num(raw);
+      const n = raw === "" ? 0 : num(raw);
+      guia[field] = n > 0 ? n : "";
+      if (!n) el.value = "";
     } else {
       guia[field] = el.value;
     }
@@ -4443,6 +5010,36 @@
       e.stopPropagation();
       shareHarvestSnapshot(state.activeExportSnapshot);
     });
+    on("#exportPreviewTypes", "click", (e) => {
+      const btn = e.target?.closest?.("[data-preview-type]");
+      if (!btn || btn.disabled) return;
+      const tipo = btn.dataset.previewType;
+      const snapshot = previewSnapshotsMap(state.activeExportSnapshot)[tipo];
+      if (!snapshot) return;
+      openExportPreview(snapshot, { saved: isSnapshotSaved(snapshot) });
+    });
+    on("#btnCopyYesterdayWorkers", "click", copyYesterdayWorkers);
+    on("#btnCloseWorkerPick", "click", closeWorkerPick);
+    on("#workerPick", "click", (e) => {
+      if (e.target?.id === "workerPick") closeWorkerPick();
+    });
+    on("#workerPickAll", "change", (e) => {
+      $$("#workerPickList [data-pick-dni]").forEach((input) => {
+        input.checked = !!e.target.checked;
+      });
+    });
+    on("#workerPickQuery", "input", filterWorkerPickList);
+    on("#btnWorkerPickAdd", "click", applyWorkerPick);
+    on("#btnCloseReadyFiles", "click", closeReadyFiles);
+    on("#readyFiles", "click", (e) => {
+      if (e.target?.id === "readyFiles") closeReadyFiles();
+    });
+    on("#readyFilesAll", "change", (e) => {
+      $$("#readyFilesList [data-ready-id]").forEach((input) => {
+        input.checked = !!e.target.checked;
+      });
+    });
+    on("#btnReadyFilesGo", "click", confirmReadyFiles);
     on("#btnCloseHistory", "click", closeHarvestHistory);
     on("#btnHistoryPrev", "click", () => {
       if (state.historyPage <= 0) return;
@@ -4466,9 +5063,9 @@
         closeHarvestHistory();
         openExportPreview(snapshot);
       } else if (action === "share") {
-        shareHarvestSnapshot(snapshot);
+        shareHarvestSnapshot(snapshot, { single: true });
       } else if (action === "download") {
-        downloadHarvestSnapshot(snapshot);
+        downloadHarvestSnapshot(snapshot, { single: true });
       }
     });
     on("#btnHarvestLogout", "click", () => {
@@ -4481,7 +5078,6 @@
     });
     on("#btnHarvestLote", "click", () => openPicker("harvestLote"));
     on("#btnHarvestType", "click", () => openPicker("harvestType"));
-    on("#btnCopyYesterdayWorkers", "click", copyYesterdayWorkers);
     on("#btnManualWorker", "click", (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -4783,11 +5379,17 @@
       loadStore();
       loadHarvest();
       loadSessionManualPersonas();
+      loadSessionWorkers();
+      // Todo trabajador ya cargado entra al listado de la sesión.
+      seedSessionWorkersFromHarvest();
       // Si había altas manuales en el registro del día, rehidratarlas en sesión
       (state.harvest.workers || []).forEach((w) => {
         if (w?.manual && w.dni && w.nombre) {
           rememberSessionPersona(w.dni, w.nombre);
         }
+      });
+      Object.entries(state.sessionWorkers || {}).forEach(([dni, info]) => {
+        if (info?.manual) rememberSessionPersona(dni, info.nombre);
       });
       state.guias = (state.guias || []).map((g) => ({
         ...emptyGuia(),
@@ -4931,7 +5533,7 @@
 
       if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
         try {
-          const reg = await navigator.serviceWorker.register("/sw.js?v=205", {
+          const reg = await navigator.serviceWorker.register("/sw.js?v=215", {
             scope: "/",
           });
           reg.update?.().catch(() => {});

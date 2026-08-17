@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <title>Q Berries · Supervisores de Cosecha</title>
+  <style>
+    @page { size: A4; margin: 16mm 16mm 18mm; }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      color: #142018;
+      font-family: "Segoe UI", Calibri, Arial, sans-serif;
+      background: #fff;
+    }
+    body { font-size: 11.2pt; line-height: 1.42; }
+    h1, h2, h3 { margin: 0; }
+    p { margin: 0 0 8px; }
+    .cover {
+      min-height: 250mm;
+      padding: 28px 8px 12px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .brand-bar {
+      height: 8px;
+      border-radius: 8px;
+      background: linear-gradient(90deg, #e00b29 0%, #ee9724 38%, #5ead51 72%, #b4c739 100%);
+      margin-bottom: 28px;
+    }
+    .kicker {
+      color: #2f7a36;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }
+    .cover h1 {
+      font-size: 34px;
+      line-height: 1.12;
+      color: #173b1f;
+      margin: 10px 0 12px;
+    }
+    .cover .lead {
+      font-size: 14.5px;
+      color: #4a5b4e;
+      max-width: 520px;
+    }
+    .logo-wrap {
+      width: 168px;
+      margin-bottom: 18px;
+    }
+    .logo-wrap img { width: 100%; height: auto; display: block; }
+    .meta-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 10px;
+      margin-top: 28px;
+    }
+    .meta-card, .card, .step, .type {
+      border: 1px solid #d9e4d6;
+      border-radius: 14px;
+      background: #f7fbf6;
+    }
+    .meta-card { padding: 12px 14px; }
+    .meta-card small, .card small, .type small {
+      display: block;
+      color: #2f7a36;
+      font-size: 9.5px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+    .meta-card strong { font-size: 13px; color: #173b1f; }
+    h2 {
+      font-size: 18px;
+      color: #173b1f;
+      margin: 0 0 8px;
+      padding-bottom: 6px;
+      border-bottom: 2px solid #5ead51;
+    }
+    h3 { font-size: 13px; color: #2f7a36; margin: 12px 0 6px; }
+    .section { page-break-inside: avoid; margin: 0 0 18px; }
+    .cards {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .card { padding: 12px 13px; background: #fff; }
+    .card p { margin: 0; color: #3f4e42; font-size: 11px; }
+    .steps { display: grid; gap: 8px; margin-top: 10px; }
+    .step {
+      display: grid;
+      grid-template-columns: 28px 1fr;
+      gap: 10px;
+      align-items: start;
+      padding: 10px 12px;
+      background: #fff;
+    }
+    .num {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: #2f7a36;
+      color: #fff;
+      font-weight: 800;
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .types {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .type { padding: 12px; background: #fff; }
+    .type strong { display: block; font-size: 14px; color: #173b1f; margin-bottom: 4px; }
+    .type p { margin: 0; font-size: 10.5px; color: #4a5b4e; }
+    ul { margin: 6px 0 0; padding-left: 18px; }
+    li { margin: 0 0 5px; }
+    .note {
+      margin-top: 10px;
+      padding: 10px 12px;
+      border-left: 4px solid #ee9724;
+      background: #fff8e8;
+      border-radius: 0 10px 10px 0;
+      font-size: 11px;
+    }
+    .ok {
+      border-left-color: #5ead51;
+      background: #eef8ec;
+    }
+    .alert {
+      border-left-color: #e00b29;
+      background: #fde8ea;
+      color: #5c121c;
+    }
+    .alert strong { color: #e00b29; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 8px;
+      font-size: 10.5px;
+    }
+    th, td {
+      border: 1px solid #d9e4d6;
+      padding: 7px 8px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { background: #eaf6e8; color: #2f7a36; font-size: 9.5px; letter-spacing: 0.04em; }
+    .footer {
+      margin-top: 16px;
+      padding-top: 8px;
+      border-top: 1px solid #d9e4d6;
+      color: #6a776e;
+      font-size: 9.5px;
+      display: flex;
+      justify-content: space-between;
+    }
+    .avoid { page-break-inside: avoid; }
+  </style>
+</head>
+<body>
+  <section class="cover">
+    <div>
+      <div class="brand-bar"></div>
+      <div class="logo-wrap">
+        <img src="../assets/logo-qberries.png" alt="Q Berries" />
+      </div>
+      <div class="kicker">Documento confidencial · Solo supervisores de cosecha</div>
+      <h1>App Supervisores<br/>Q Berries</h1>
+      <p class="lead">
+        Guía clara para saber qué hace la aplicación, cómo se usa en campo
+        y cómo se guarda cada registro de cosecha. Pensada para supervisores,
+        jefes de campo y el equipo de oficina.
+      </p>
+      <div class="meta-grid">
+        <div class="meta-card">
+          <small>Para quién</small>
+          <strong>Supervisores de cosecha</strong>
+        </div>
+        <div class="meta-card">
+          <small>Dónde se usa</small>
+          <strong>Celular · Android e iPhone</strong>
+        </div>
+        <div class="meta-card">
+          <small>Versión</small>
+          <strong>v215</strong>
+        </div>
+      </div>
+    </div>
+    <div class="note ok">
+      La app funciona en el campo aunque no haya internet. Los datos quedan en el celular
+      y se envían a las hojas de Google cuando hay señal.
+    </div>
+    <div class="note alert" style="margin-top:12px">
+      <strong>USO INTERNO. QUEDA PROHIBIDO COMPARTIR ESTE DOCUMENTO FUERA DE LA EMPRESA Q Berries.</strong><br/>
+      Este documento y la aplicación son exclusivos para <strong>Supervisores de Cosecha</strong>.
+      Queda prohibido reenviarlos, copiarlos o entregarlos a personas ajenas a la empresa.
+      Cada registro será monitoreado.
+    </div>
+  </section>
+
+  <section class="section">
+    <h2>1. Qué es esta aplicación</h2>
+    <p>
+      <strong>Q Berries Supervisores</strong> es la herramienta oficial para registrar
+      la cosecha del día desde el celular. Reemplaza el apunte suelto y deja un
+      archivo Excel listo para compartir, con trazabilidad por supervisor, lote y tipo de registro.
+    </p>
+    <div class="cards">
+      <div class="card">
+        <small>Objetivo</small>
+        <p>Registrar jarras por trabajador, por lote y por tipo (Suma, Resta o Descarte), y enviar el resumen a oficina.</p>
+      </div>
+      <div class="card">
+        <small>Resultado</small>
+        <p>Un Excel por tipo de registro, historial de 48 horas en el celular y carga automática a las hojas de datos.</p>
+      </div>
+      <div class="card">
+        <small>Seguridad</small>
+        <p>Solo ingresan supervisores de cosecha con carnet QR. La sesión queda en ese celular hasta que cierren sesión.</p>
+      </div>
+      <div class="card">
+        <small>Campo real</small>
+        <p>Diseñada para usarse con una mano, con o sin internet, y con datos que no se pierden al cambiar de pantalla.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <h2>2. Cómo se entra</h2>
+    <div class="steps">
+      <div class="step"><span class="num">1</span><div><strong>Escanear el carnet QR</strong><br/>Solo personal autorizado como Supervisor de Cosecha.</div></div>
+      <div class="step"><span class="num">2</span><div><strong>Queda la sesión en el celular</strong><br/>No hace falta volver a escanear hasta que toquen Cerrar sesión.</div></div>
+      <div class="step"><span class="num">3</span><div><strong>Vincular datos (una vez)</strong><br/>Celular, Grupo LIC, Grupo y Supervisor global. Eso identifica quién registra.</div></div>
+      <div class="step"><span class="num">4</span><div><strong>Empezar el día en Inicio o Registro</strong><br/>Ahí se elige el tipo, el lote y se agregan trabajadores.</div></div>
+    </div>
+  </section>
+
+  <section class="section">
+    <h2>3. Flujo del día en campo</h2>
+    <div class="types">
+      <div class="type">
+        <small>Paso A</small>
+        <strong>Tipo de registro</strong>
+        <p>Primero se elige Suma, Resta o Descarte. Cada uno es un archivo distinto.</p>
+      </div>
+      <div class="type">
+        <small>Paso B</small>
+        <strong>Lote</strong>
+        <p>Cada tipo puede tener su propio lote. Módulo, turno y variedad se completan solos.</p>
+      </div>
+      <div class="type">
+        <small>Paso C</small>
+        <strong>Personal y jarras</strong>
+        <p>Se agrega el DNI, aparecen nombres y se anotan jarras de mañana y tarde.</p>
+      </div>
+    </div>
+    <div class="note">
+      Al cambiar de tipo <strong>no se copia</strong> el lote, el módulo, el turno ni los DNI del tipo anterior.
+      Así Suma, Resta y Descarte no se mezclan. Lo único compartido es el listado de personal de la sesión.
+    </div>
+  </section>
+
+  <section class="section avoid">
+    <h2>4. Los tres tipos de registro</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Tipo</th>
+          <th>Para qué sirve</th>
+          <th>Qué queda guardado</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Suma de jarras</strong></td>
+          <td>Cosecha normal del día: lo que se suma al avance.</td>
+          <td>Excel propio + fila de resumen en DATA-MANUAL</td>
+        </tr>
+        <tr>
+          <td><strong>Descuento / Resta</strong></td>
+          <td>Ajustes que restan jarras (descuentos).</td>
+          <td>Excel propio, con su lote y sus trabajadores</td>
+        </tr>
+        <tr>
+          <td><strong>Descarte · deshidratado</strong></td>
+          <td>Fruta de descarte o deshidratado, aparte de la suma.</td>
+          <td>Excel propio, sin mezclarse con Suma ni Resta</td>
+        </tr>
+      </tbody>
+    </table>
+    <p style="margin-top:10px">
+      En la vista previa del Excel aparecen botones <strong>Suma / Resta / Descarte</strong>
+      para ver cada archivo. Los que ya están listos muestran una marca.
+    </p>
+  </section>
+
+  <section class="section">
+    <h2>5. Personal del día</h2>
+    <ul>
+      <li>Se escribe el <strong>DNI de 8 dígitos</strong>. Si está en la base, el nombre se completa solo.</li>
+      <li>Si no está en la base, se toca el ícono de usuarios y se registra a mano. Eso se reporta a <strong>TRABAJADORES-MANUALES</strong>.</li>
+      <li>El ícono de portapapeles abre <strong>Elegir trabajadores</strong>: listado de la sesión, con buscador, marcar todos o uno por uno.</li>
+      <li>Ese listado se mantiene <strong>hasta Cerrar sesión</strong>. Sirve para reutilizar DNI en Suma, Resta o Descarte.</li>
+      <li>Mañana y tarde se ven como <strong>00</strong> hasta que escriban una cantidad.</li>
+    </ul>
+  </section>
+
+  <section class="section">
+    <h2>6. Guardar, Excel y WhatsApp</h2>
+    <div class="steps">
+      <div class="step"><span class="num">1</span><div><strong>Ver resumen</strong><br/>Revisar trabajadores, jarras, lote y tipo antes de confirmar.</div></div>
+      <div class="step"><span class="num">2</span><div><strong>Guardar registro</strong><br/>La app debe decir “Se guardó correctamente” y limpia el control de jarras de ese tipo.</div></div>
+      <div class="step"><span class="num">3</span><div><strong>Compartir o descargar</strong><br/>Si hay más de un Excel listo, se abre un selector para enviar o guardar los que correspondan.</div></div>
+    </div>
+    <p style="margin-top:10px">El nombre del archivo incluye supervisor, fecha y tipo, por ejemplo:</p>
+    <p><strong>LEON ANTUNEZ CRISTOPHER PAOLO 17-08-2026 SUMA DE JARRAS.xlsx</strong></p>
+  </section>
+
+  <section class="section avoid">
+    <h2>7. Dónde quedan los datos</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Hoja</th>
+          <th>Qué guarda</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>DATA-SUPERVISORES</strong></td>
+          <td>Vínculo del supervisor: DNI, nombre, celular, grupos y supervisor global.</td>
+        </tr>
+        <tr>
+          <td><strong>TRABAJADORES-MANUALES</strong></td>
+          <td>Trabajadores que no estaban en la base y se registraron a mano.</td>
+        </tr>
+        <tr>
+          <td><strong>DATA-MANUAL</strong></td>
+          <td>Resumen de cada cosecha guardada: tipo, totales, trabajadores, lote y fecha.</td>
+        </tr>
+      </tbody>
+    </table>
+    <p style="margin-top:10px">
+      En el celular también queda un historial de Excel de las <strong>últimas 48 horas</strong>,
+      para volver a ver, descargar o compartir.
+    </p>
+  </section>
+
+  <section class="section">
+    <h2>8. Sin internet</h2>
+    <ul>
+      <li>Registrar, guardar y armar Excel funciona sin señal.</li>
+      <li>Al reconectar, la app envía sola lo pendiente (vínculo, cosecha y altas manuales).</li>
+      <li>La primera instalación y cada actualización sí necesitan internet.</li>
+    </ul>
+  </section>
+
+  <section class="section">
+    <h2>9. Cómo actualizar la app</h2>
+    <p>Cualquier cambio de la aplicación se confirma con la versión. No hace falta borrar datos.</p>
+    <div class="steps">
+      <div class="step"><span class="num">1</span><div>Cerrar la app por completo (no solo minimizar).</div></div>
+      <div class="step"><span class="num">2</span><div>Abrirla de nuevo con internet.</div></div>
+      <div class="step"><span class="num">3</span><div>Ir a <strong>Ayuda → engranaje (configuración)</strong>.</div></div>
+      <div class="step"><span class="num">4</span><div>Verificar: <strong>Versión de la app: v215</strong>. Si no aparece, tocar <strong>Actualizar app</strong>.</div></div>
+    </div>
+    <div class="note ok">
+      Los registros de cosecha, el historial y la sesión no se borran al actualizar.
+      Solo usen “Borrar caché” si el equipo de sistemas se lo pide.
+    </div>
+  </section>
+
+  <section class="section avoid">
+    <h2>10. Pantallas de la app</h2>
+    <table>
+      <thead>
+        <tr><th>Pestaña</th><th>Para qué</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>Inicio</strong></td><td>Resumen del día, accesos rápidos y actividad reciente.</td></tr>
+        <tr><td><strong>Registro</strong></td><td>Tipo, lote, trabajadores y jarras. Aquí se arma el Excel.</td></tr>
+        <tr><td><strong>Vincular</strong></td><td>Ficha del supervisor (celular, grupos y supervisor global).</td></tr>
+        <tr><td><strong>Excel</strong></td><td>Historial de archivos guardados (48 horas).</td></tr>
+        <tr><td><strong>Ayuda</strong></td><td>Guía rápida, versión, actualizar app e instalar en otro celular.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="section avoid">
+    <h2>11. Confidencialidad y control</h2>
+    <div class="note alert">
+      <strong>Prohibido compartir este documento fuera de la empresa Q Berries.</strong>
+      Es material interno de Q Berries, solo para Supervisores de Cosecha.
+    </div>
+    <ul>
+      <li>No reenviar el PDF, capturas ni el enlace de la app a personal que no sea supervisor de cosecha, ni a nadie externo.</li>
+      <li>El acceso es personal: cada supervisor entra con su propio carnet QR. No presten el celular desbloqueado ni la sesión.</li>
+      <li>Todo lo que se registre (lote, tipo, DNI, jarras, hora y supervisor) queda guardado y <strong>será monitoreado</strong>.</li>
+      <li>Cualquier uso indebido, dato inventado o filtración de información se revisará con el área responsable.</li>
+    </ul>
+    <p>
+      Prevengan todo, por favor. Este material es solo para Supervisores de Cosecha.
+      Oficina estará monitoreando cada registro que se guarde.
+    </p>
+  </section>
+
+  <div class="footer">
+    <span>Q Berries · Confidencial · Solo Supervisores de Cosecha</span>
+    <span>Prohibido compartir fuera de la empresa · v215</span>
+  </div>
+</body>
+</html>
