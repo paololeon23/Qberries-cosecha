@@ -21,7 +21,7 @@
   const LOGOUT_FLAG_KEY = "qb-supervisores-logout-v1";
   const HISTORY_TTL_MS = 48 * 60 * 60 * 1000;
   const HISTORY_PAGE_SIZE = 8;
-  const APP_VERSION = "v192";
+  const APP_VERSION = "v195";
   const HARVEST_TYPES = [
     { key: "suma-jarras", label: "Suma de jarras", observacion: "SUMAR JARRAS" },
     { key: "descuento-jarras", label: "Descuento jarras", observacion: "DESCUENTO JARRAS" },
@@ -4836,7 +4836,7 @@
 
       if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
         try {
-          const reg = await navigator.serviceWorker.register("/sw.js?v=192", {
+          const reg = await navigator.serviceWorker.register("/sw.js?v=195", {
             scope: "/",
           });
           reg.update?.().catch(() => {});

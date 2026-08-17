@@ -2,7 +2,7 @@
   "name": "QBerries Supervisores",
   "short_name": "QBerries",
   "description": "Acceso y registro diario de cosecha para supervisores QBerries.",
-  "start_url": "/index.html?v=192",
+  "start_url": "/index.html?v=195",
   "scope": "/",
   "display": "standalone",
   "background_color": "#ffffff",

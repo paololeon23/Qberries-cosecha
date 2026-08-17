@@ -2381,7 +2381,9 @@ body[data-page="scan"] .lock-screen {
   align-items: flex-end;
   height: auto;
   min-height: 0;
-  padding: 6px 8px var(--nav-safe-bottom);
+  /* El relleno de arriba crece hacia arriba (la barra está anclada abajo):
+   * los iconos no se mueven, solo dejan de tocar el borde. */
+  padding: 11px 8px var(--nav-safe-bottom);
   background: #ffffff;
   border-top: 1px solid var(--border);
   border-radius: 0;
@@ -2433,8 +2435,8 @@ body[data-page="scan"] .app-tabbar,
   transform: scale(0.96);
 }
 .app-tabbar .ico {
-  width: 24px;
-  height: 24px;
+  width: 21px;
+  height: 21px;
 }
 /* El icono va centrado en su pestaña aunque el texto sea más ancho. */
 .app-tabbar [data-icon]:not(.tab-main-circle) {
@@ -2452,7 +2454,7 @@ body[data-page="scan"] .app-tabbar,
   line-height: 1;
   letter-spacing: 0.02em;
 }
-/* Activo: solo color primary. Sin pill, sin fondo, sin badge. */
+/* Activo: color primary + línea verde arriba, en el borde de la barra. */
 .app-tabbar button.is-active,
 .app-tabbar button.active,
 .app-tabbar .nav-btn.active {
@@ -2460,7 +2462,16 @@ body[data-page="scan"] .app-tabbar,
 }
 .app-tabbar button.is-active::before,
 .app-tabbar button.active::before {
-  content: none;
+  content: "";
+  position: absolute;
+  top: -11px;
+  left: 50%;
+  width: 22px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--primary);
+  transform: translateX(-50%);
+  pointer-events: none;
 }
 
 /* Acción central (+): fuera del flujo, así no estira la barra y queda a la
@@ -2479,7 +2490,7 @@ body[data-page="scan"] .app-tabbar,
 .app-tabbar .tab-main .tab-main-circle {
   position: absolute;
   left: 50%;
-  bottom: 0;
+  bottom: 6px;
   display: grid;
   place-items: center;
   width: 50px;
