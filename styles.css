@@ -28,7 +28,7 @@
   --safe-t: env(safe-area-inset-top, 0px);
   /* Barra inferior tipo PWA. Del área segura del iPhone solo se reserva una
    * parte: lo justo para no pisar el gesto, sin dejar un bloque blanco. */
-  --nav-safe-bottom: max(4px, calc(env(safe-area-inset-bottom, 0px) * 0.3));
+  --nav-safe-bottom: max(2px, calc(env(safe-area-inset-bottom, 0px) * 0.12));
   --nav-bar-total: calc(56px + var(--nav-safe-bottom));
   --nav-h: 56px;
   --font: "Segoe UI", system-ui, -apple-system, sans-serif;
@@ -124,9 +124,17 @@ body::before {
   background: var(--bg);
   pointer-events: none;
 }
-/* Sin franja blanca suelta al pie: la barra misma pinta hasta el borde. */
+/* Respaldo: el pie de la pantalla siempre blanco, igual que la barra. */
 body:not([data-page="scan"]):not(.kb-open) .stage::after {
-  content: none;
+  content: "";
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: max(var(--safe-b), 56px);
+  z-index: 90;
+  background: var(--white);
+  pointer-events: none;
 }
 
 /*
@@ -2367,13 +2375,14 @@ body[data-page="scan"] .lock-screen {
   left: 0;
   width: 100%;
   max-width: 100%;
-  z-index: 900;
+  /* Debajo de hojas y modales (110–160): nunca tapa sus botones. */
+  z-index: 100;
   display: flex;
   justify-content: space-around;
   align-items: flex-end;
   height: auto;
   min-height: 0;
-  padding: 8px 4px var(--nav-safe-bottom);
+  padding: 6px 4px var(--nav-safe-bottom);
   background: var(--white);
   border-top: 1px solid var(--border);
   box-shadow: 0 -5px 20px rgba(0, 0, 0, 0.05);
@@ -2381,8 +2390,17 @@ body[data-page="scan"] .lock-screen {
   isolation: isolate;
   view-transition-name: tabbar;
 }
+/* Todo lo que quede por debajo de la barra también es blanco: se ve una sola
+ * pieza continua hasta el borde del celular, sin franja de otro color. */
 .app-tabbar::after {
-  content: none;
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  height: 160px;
+  background: var(--white);
+  pointer-events: none;
 }
 body[data-page="scan"] .app-tabbar,
 .app-tabbar[hidden] {
