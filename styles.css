@@ -26,9 +26,8 @@
   --radius-sm: 14px;
   --safe-b: env(safe-area-inset-bottom, 0px);
   --safe-t: env(safe-area-inset-top, 0px);
-  /* Mínimo relleno abajo: la barra queda pegada al borde. El área segura no se
-   * reserva aquí porque todo ese pie ya es blanco. */
-  --nav-safe-bottom: max(2px, calc(env(safe-area-inset-bottom, 0px) * 0.1));
+  /* Sin relleno abajo: los textos quedan pegados al borde inferior. */
+  --nav-safe-bottom: 0px;
   --nav-bar-total: calc(56px + var(--nav-safe-bottom));
   --nav-h: 56px;
   --font: "Segoe UI", system-ui, -apple-system, sans-serif;
@@ -2490,7 +2489,7 @@ body[data-page="scan"] .app-tabbar,
 .app-tabbar .tab-main .tab-main-circle {
   position: absolute;
   left: 50%;
-  bottom: 6px;
+  bottom: 2px;
   display: grid;
   place-items: center;
   width: 50px;
