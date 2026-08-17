@@ -2271,6 +2271,19 @@ body[data-page="scan"] .lock-screen {
   animation: rise 0.2s ease;
 }
 .history-sheet[hidden] { display: none !important; }
+
+/* Sin barra: el pie no puede quedar blanco huérfano. Coincide con la hoja. */
+html:has(.history-sheet:not([hidden])),
+body:has(.history-sheet:not([hidden])),
+body:has(.history-sheet:not([hidden]))::before {
+  background: #f3f7f1;
+}
+body:has(.history-sheet:not([hidden])) .app-tabbar,
+body:has(.help-sheet:not([hidden])) .app-tabbar,
+body:has(.app-tools-backdrop:not([hidden])) .app-tabbar {
+  visibility: hidden;
+  pointer-events: none;
+}
 .history-copy {
   margin: 8px 0 12px;
   color: var(--muted);
@@ -3028,7 +3041,8 @@ body[data-page="scan"] .app-tabbar,
   font-weight: 800;
 }
 .app-tools-backdrop {
-  position: absolute;
+  /* Fija: cubre también la franja del home indicator, sin dejarla en blanco. */
+  position: fixed;
   inset: 0;
   z-index: 3;
   display: grid;

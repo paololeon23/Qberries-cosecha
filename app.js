@@ -21,7 +21,7 @@
   const LOGOUT_FLAG_KEY = "qb-supervisores-logout-v1";
   const HISTORY_TTL_MS = 48 * 60 * 60 * 1000;
   const HISTORY_PAGE_SIZE = 8;
-  const APP_VERSION = "v197";
+  const APP_VERSION = "v201";
   const HARVEST_TYPES = [
     { key: "suma-jarras", label: "Suma de jarras", observacion: "SUMAR JARRAS" },
     { key: "descuento-jarras", label: "Descuento jarras", observacion: "DESCUENTO JARRAS" },
@@ -48,6 +48,54 @@
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
   let navigationLocked = false;
+  /** Evita que dos flush simultáneos sobrescriban ítems encolados durante el envío. */
+  let vinculoFlushTail = Promise.resolve();
+  let cloudFlushTail = Promise.resolve();
+
+  function runVinculoFlushExclusive(task) {
+    const next = vinculoFlushTail.then(task, task);
+    vinculoFlushTail = next.catch(() => {});
+    return next;
+  }
+
+  function runCloudFlushExclusive(task) {
+    const next = cloudFlushTail.then(task, task);
+    cloudFlushTail = next.catch(() => {});
+    return next;
+  }
+
+  function mergeVinculoQueueAfterFlush(snapshot, remain) {
+    const snapDnis = new Set(snapshot.map((x) => String(x.dni || "")));
+    const latest = loadVinculoQueue();
+    const addedWhileFlushing = latest.filter(
+      (x) => !snapDnis.has(String(x.dni || ""))
+    );
+    const merged = new Map();
+    for (const item of [...remain, ...addedWhileFlushing]) {
+      const dni = String(item.dni || "");
+      if (!dni) continue;
+      const prev = merged.get(dni);
+      const tNew = Date.parse(item.queuedAt || 0) || 0;
+      const tOld = prev ? Date.parse(prev.queuedAt || 0) || 0 : 0;
+      if (!prev || tNew >= tOld) merged.set(dni, item);
+    }
+    return [...merged.values()];
+  }
+
+  function mergeCloudQueueAfterFlush(snapshot, remain) {
+    const snapIds = new Set(snapshot.map((x) => String(x.id || "")));
+    const latest = loadCloudDataQueue();
+    const addedWhileFlushing = latest.filter(
+      (x) => !snapIds.has(String(x.id || ""))
+    );
+    const merged = new Map();
+    for (const item of [...remain, ...addedWhileFlushing]) {
+      const id = String(item.id || "");
+      if (!id) continue;
+      merged.set(id, item);
+    }
+    return [...merged.values()];
+  }
 
   function beginNavigation(target, replace = false) {
     if (navigationLocked) return;
@@ -275,6 +323,13 @@
       const parsed = JSON.parse(localStorage.getItem(HARVEST_KEY) || "null");
       if (!parsed || typeof parsed !== "object") {
         state.harvest = emptyHarvest();
+        return;
+      }
+      const storedDate = String(parsed.fecha || "").slice(0, 10);
+      const today = todayISO();
+      if (storedDate && storedDate !== today) {
+        state.harvest = emptyHarvest();
+        saveHarvest();
         return;
       }
       state.harvest = {
@@ -1503,46 +1558,49 @@
   }
 
   async function flushCloudDataQueue() {
-    if (!navigator.onLine) {
-      updateNetworkUI();
-      return { sent: 0, remain: loadCloudDataQueue().length };
-    }
-    if (!canUseCloudApi()) {
-      const ready = await ensureCloudReady_(3000);
-      if (!ready) {
+    return runCloudFlushExclusive(async () => {
+      if (!navigator.onLine) {
         updateNetworkUI();
         return { sent: 0, remain: loadCloudDataQueue().length };
       }
-    }
-    const queue = loadCloudDataQueue();
-    if (!queue.length) {
-      updateNetworkUI();
-      return { sent: 0, remain: 0 };
-    }
-    const remain = [];
-    let sent = 0;
-    for (const item of queue) {
-      try {
-        const response = await fetch(API.sync, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: item.action,
-            authToken: authenticatedToken(),
-            data: item.data,
-          }),
-        });
-        const result = await response.json().catch(() => ({}));
-        if (response.ok && result.ok === true) sent += 1;
-        else remain.push(item);
-      } catch {
-        remain.push(item);
+      if (!canUseCloudApi()) {
+        const ready = await ensureCloudReady_(3000);
+        if (!ready) {
+          updateNetworkUI();
+          return { sent: 0, remain: loadCloudDataQueue().length };
+        }
       }
-    }
-    saveCloudDataQueue(remain);
-    updateNetworkUI();
-    if (sent > 0 && !remain.length) toast("Datos enviados correctamente");
-    return { sent, remain: remain.length };
+      const queue = loadCloudDataQueue();
+      if (!queue.length) {
+        updateNetworkUI();
+        return { sent: 0, remain: 0 };
+      }
+      const remain = [];
+      let sent = 0;
+      for (const item of queue) {
+        try {
+          const response = await fetch(API.sync, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: item.action,
+              authToken: authenticatedToken(),
+              data: item.data,
+            }),
+          });
+          const result = await response.json().catch(() => ({}));
+          if (response.ok && result.ok === true) sent += 1;
+          else remain.push(item);
+        } catch {
+          remain.push(item);
+        }
+      }
+      saveCloudDataQueue(mergeCloudQueueAfterFlush(queue, remain));
+      updateNetworkUI();
+      const pending = loadCloudDataQueue().length;
+      if (sent > 0 && pending === 0) toast("Datos enviados correctamente");
+      return { sent, remain: pending };
+    });
   }
 
   /** Solo proxy Netlify (/.netlify/functions/…) */
@@ -1593,146 +1651,149 @@
   }
 
   async function flushVinculoQueue() {
-    state.online = navigator.onLine;
-    if (!state.online) {
-      updateNetworkUI();
-      return {
-        sent: 0,
-        remain: loadVinculoQueue().length,
-        reason: "offline",
-        alreadyRegistered: false,
-      };
-    }
-    if (!canUseCloudApi()) {
-      const ready = await ensureCloudReady_(3000);
-      if (!ready) {
+    return runVinculoFlushExclusive(async () => {
+      state.online = navigator.onLine;
+      if (!state.online) {
         updateNetworkUI();
         return {
           sent: 0,
           remain: loadVinculoQueue().length,
-          reason: "no-api",
+          reason: "offline",
           alreadyRegistered: false,
         };
       }
-    }
-    ensureSessionGate();
-    const q = loadVinculoQueue();
-    if (!q.length) {
-      updateNetworkUI();
-      return { sent: 0, remain: 0, reason: "empty", alreadyRegistered: false };
-    }
-    updateNetworkUI();
-    const remain = [];
-    let sent = 0;
-    let lastError = "";
-    let alreadyRegistered = false;
-    let lastMessage = "";
-    for (let i = 0; i < q.length; i++) {
-      const item = q[i];
-      const data = buildVinculoPayload(item);
-      if (
-        !data.dni ||
-        !/^9\d{8}$/.test(data.celular) ||
-        !isValidGrupoNum_(data.grupo) ||
-        !isValidGrupoLic_(data.grupoLic) ||
-        !data.supervisorGlobal
-      ) {
-        continue;
-      }
-      try {
-        const body = {
-          action: "registrarVinculo",
-          authToken: data.authToken || authenticatedToken(),
-          data,
-        };
-        const res = await fetch(API.sync, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
-        if (res.status === 405) {
-          state.cloudApi = false;
-          state.netlifyReady = false;
-          for (let j = i; j < q.length; j++) {
-            remain.push(buildVinculoPayload(q[j]));
-          }
-          lastError = "API no disponible (405)";
-          break;
+      if (!canUseCloudApi()) {
+        const ready = await ensureCloudReady_(3000);
+        if (!ready) {
+          updateNetworkUI();
+          return {
+            sent: 0,
+            remain: loadVinculoQueue().length,
+            reason: "no-api",
+            alreadyRegistered: false,
+          };
         }
-        const json = await res.json().catch(() => ({}));
-        const nested = json && typeof json.data === "object" ? json.data : null;
-        const nestedData =
-          nested && typeof nested.data === "object" ? nested.data : nested;
-        const ok = res.ok && (json.ok === true || nested?.ok === true);
-        if (ok) {
-          const msg = String(
-            json.message ||
-              nested?.message ||
-              nestedData?.message ||
-              ""
-          );
-          const wasRegistered = !!(
-            json.alreadyRegistered === true ||
-            nested?.alreadyRegistered === true ||
-            nestedData?.alreadyRegistered === true ||
-            /ya se tiene (este )?dni registrado/i.test(msg)
-          );
-          if (wasRegistered) alreadyRegistered = true;
-          lastMessage = wasRegistered
-            ? "Ya se tiene este DNI registrado"
-            : "Fue guardado correctamente";
-          markVinculoDone(
-            data.dni,
-            data.celular,
-            data.supervisorGlobal,
-            data.grupo,
-            data.grupoLic
-          );
-          sent += 1;
-        } else {
-          lastError =
-            json?.error ||
-            nested?.message ||
-            nested?.error ||
-            json?.message ||
-            "Error al guardar";
-          if (
-            json?.code === "UNAUTHORIZED" ||
-            nested?.code === "UNAUTHORIZED"
-          ) {
-            lastError = "UNAUTHORIZED · revise API_TOKEN en Netlify";
+      }
+      ensureSessionGate();
+      const q = loadVinculoQueue();
+      if (!q.length) {
+        updateNetworkUI();
+        return { sent: 0, remain: 0, reason: "empty", alreadyRegistered: false };
+      }
+      updateNetworkUI();
+      const remain = [];
+      let sent = 0;
+      let lastError = "";
+      let alreadyRegistered = false;
+      let lastMessage = "";
+      for (let i = 0; i < q.length; i++) {
+        const item = q[i];
+        const data = buildVinculoPayload(item);
+        if (
+          !data.dni ||
+          !/^9\d{8}$/.test(data.celular) ||
+          !isValidGrupoNum_(data.grupo) ||
+          !isValidGrupoLic_(data.grupoLic) ||
+          !data.supervisorGlobal
+        ) {
+          continue;
+        }
+        try {
+          const body = {
+            action: "registrarVinculo",
+            authToken: data.authToken || authenticatedToken(),
+            data,
+          };
+          const res = await fetch(API.sync, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          if (res.status === 405) {
+            state.cloudApi = false;
+            state.netlifyReady = false;
+            for (let j = i; j < q.length; j++) {
+              remain.push(buildVinculoPayload(q[j]));
+            }
+            lastError = "API no disponible (405)";
+            break;
           }
+          const json = await res.json().catch(() => ({}));
+          const nested = json && typeof json.data === "object" ? json.data : null;
+          const nestedData =
+            nested && typeof nested.data === "object" ? nested.data : nested;
+          const ok = res.ok && (json.ok === true || nested?.ok === true);
+          if (ok) {
+            const msg = String(
+              json.message ||
+                nested?.message ||
+                nestedData?.message ||
+                ""
+            );
+            const wasRegistered = !!(
+              json.alreadyRegistered === true ||
+              nested?.alreadyRegistered === true ||
+              nestedData?.alreadyRegistered === true ||
+              /ya se tiene (este )?dni registrado/i.test(msg)
+            );
+            if (wasRegistered) alreadyRegistered = true;
+            lastMessage = wasRegistered
+              ? "Ya se tiene este DNI registrado"
+              : "Fue guardado correctamente";
+            markVinculoDone(
+              data.dni,
+              data.celular,
+              data.supervisorGlobal,
+              data.grupo,
+              data.grupoLic
+            );
+            sent += 1;
+          } else {
+            lastError =
+              json?.error ||
+              nested?.message ||
+              nested?.error ||
+              json?.message ||
+              "Error al guardar";
+            if (
+              json?.code === "UNAUTHORIZED" ||
+              nested?.code === "UNAUTHORIZED"
+            ) {
+              lastError = "UNAUTHORIZED · revise API_TOKEN en Netlify";
+            }
+            remain.push({
+              ...data,
+              queuedAt: item.queuedAt || new Date().toISOString(),
+            });
+          }
+        } catch (err) {
+          lastError = String(err && err.message ? err.message : err);
           remain.push({
             ...data,
             queuedAt: item.queuedAt || new Date().toISOString(),
           });
         }
-      } catch (err) {
-        lastError = String(err && err.message ? err.message : err);
-        remain.push({
-          ...data,
-          queuedAt: item.queuedAt || new Date().toISOString(),
-        });
       }
-    }
-    saveVinculoQueue(remain);
-    updateNetworkUI();
-    if (sent > 0 && remain.length === 0) {
-      toast(
-        alreadyRegistered
-          ? "Ya se tiene este DNI registrado"
-          : "Fue guardado correctamente"
-      );
-    } else if (sent > 0 && remain.length) {
-      toast(`Enviado parcial · ${remain.length} pendiente(s)`);
-    }
-    return {
-      sent,
-      remain: remain.length,
-      reason: lastError || "ok",
-      alreadyRegistered,
-      message: lastMessage,
-    };
+      const mergedRemain = mergeVinculoQueueAfterFlush(q, remain);
+      saveVinculoQueue(mergedRemain);
+      updateNetworkUI();
+      if (sent > 0 && mergedRemain.length === 0) {
+        toast(
+          alreadyRegistered
+            ? "Ya se tiene este DNI registrado"
+            : "Fue guardado correctamente"
+        );
+      } else if (sent > 0 && mergedRemain.length) {
+        toast(`Enviado parcial · ${mergedRemain.length} pendiente(s)`);
+      }
+      return {
+        sent,
+        remain: mergedRemain.length,
+        reason: lastError || "ok",
+        alreadyRegistered,
+        message: lastMessage,
+      };
+    });
   }
 
   function showVinculoThanks(identity, opts = {}) {
@@ -3039,6 +3100,13 @@
     if (!snapshot) {
       toast("No hay registro para compartir");
       return;
+    }
+    if (
+      !state.activeExportSaved &&
+      state.activeExportSnapshot?.id === snapshot.id
+    ) {
+      const saved = await commitHarvestSnapshot();
+      if (!saved) return;
     }
     if (typeof XLSX === "undefined") {
       toast("Espere a que cargue el Excel e intente otra vez");
@@ -4836,7 +4904,7 @@
 
       if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
         try {
-          const reg = await navigator.serviceWorker.register("/sw.js?v=197", {
+          const reg = await navigator.serviceWorker.register("/sw.js?v=201", {
             scope: "/",
           });
           reg.update?.().catch(() => {});

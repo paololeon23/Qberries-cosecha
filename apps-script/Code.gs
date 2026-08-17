@@ -534,7 +534,7 @@
     function summaryRowExists_(sh, row) {
       if (!sh || sh.getLastRow() < 2) return false;
       var values = sh
-        .getRange(2, 1, sh.getLastRow() - 1, SUMMARY_HEADERS.length)
+        .getRange(2, 1, sh.getLastRow(), SUMMARY_HEADERS.length)
         .getDisplayValues();
       var expected = row.map(function (value) { return clean_(value); }).join('|');
       for (var i = 0; i < values.length; i++) {
@@ -606,7 +606,7 @@
       value = clean_(value);
       if (!sh || !value || sh.getLastRow() < 2) return -1;
       var values = sh
-        .getRange(2, column, sh.getLastRow() - 1, 1)
+        .getRange(2, column, sh.getLastRow(), 1)
         .getDisplayValues();
       for (var i = 0; i < values.length; i++) {
         if (clean_(values[i][0]) === value) return i + 2;
