@@ -2360,7 +2360,11 @@ body[data-page="scan"] .lock-screen {
   font-size: 0.66rem;
   font-weight: 800;
 }
-/* Barra inferior: fija al borde del celular, sin hueco blanco. */
+/* ——— BARRA INFERIOR CON BOTÓN CENTRAL FLOTANTE ———
+ * Fija al borde real del celular. La altura táctil (--nav-h) y el área segura
+ * del gesto de iOS se suman: el fondo blanco llega hasta el borde y los
+ * iconos nunca quedan debajo de la barra de inicio.
+ */
 .app-tabbar {
   position: fixed;
   left: 0;
@@ -2370,20 +2374,26 @@ body[data-page="scan"] .lock-screen {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
   align-items: center;
-  height: calc(var(--nav-h) + var(--safe-b));
-  padding: 2px 4px var(--safe-b);
+  height: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px));
+  padding: 0 4px;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
   border-top: 1px solid #e3ebe1;
   background: #ffffff;
   box-shadow: 0 -4px 14px rgba(30, 65, 35, 0.08);
+  /* El botón central sobresale de la barra: aquí nada puede recortarlo. */
+  overflow: visible;
+  /* Capa propia: el círculo se dibuja siempre encima del contenido. */
+  isolation: isolate;
   view-transition-name: tabbar;
 }
+/* Prolonga el blanco por debajo por si el sistema reserva más de lo previsto. */
 .app-tabbar::after {
   content: "";
   position: absolute;
   top: 100%;
   left: 0;
   right: 0;
-  height: max(24px, var(--safe-b));
+  height: max(24px, env(safe-area-inset-bottom, 0px));
   background: #ffffff;
   pointer-events: none;
 }
@@ -2399,14 +2409,17 @@ body[data-page="scan"] .app-tabbar,
   align-items: center;
   justify-content: center;
   gap: 2px;
-  min-height: 44px;
+  min-width: 0;
+  height: 100%;
   padding: 2px 2px 0;
   background: transparent;
   color: #79867b;
   cursor: pointer;
+  overflow: visible;
+  -webkit-tap-highlight-color: transparent;
   transition: color 0.15s ease, transform 0.12s ease;
 }
-.app-tabbar button:active { transform: scale(0.93); }
+.app-tabbar button:not(.tab-main):active { transform: scale(0.93); }
 .app-tabbar .ico { width: 20px; height: 20px; }
 .app-tabbar em {
   font-style: normal;
@@ -2428,20 +2441,29 @@ body[data-page="scan"] .app-tabbar,
   background: var(--qb-green-dark);
 }
 
-/* Acción principal, elevada al centro */
-.app-tabbar .tab-main { gap: 0; padding: 0; }
-.app-tabbar .tab-main .ico { width: 22px; height: 22px; }
+/* Acción principal: círculo elevado con transform (no altera el layout de la
+ * barra ni el reparto de las 5 columnas, y la zona táctil sube con él). */
+.app-tabbar .tab-main {
+  gap: 0;
+  padding: 0;
+  z-index: 1;
+}
+.app-tabbar .tab-main .ico { width: 24px; height: 24px; }
 .app-tabbar .tab-main .tab-main-circle {
   display: grid;
   place-items: center;
-  width: 48px;
-  height: 48px;
-  margin-top: -18px;
+  width: 52px;
+  height: 52px;
   border-radius: 50%;
   color: #fff;
   background: linear-gradient(145deg, #5ead51 0%, #2f7a36 100%);
-  border: 3px solid #fff;
-  box-shadow: 0 6px 14px rgba(47, 122, 54, 0.32);
+  border: 4px solid #fff;
+  box-shadow: 0 8px 18px rgba(47, 122, 54, 0.34);
+  transform: translateY(-16px);
+  transition: transform 0.12s ease;
+}
+.app-tabbar .tab-main:active .tab-main-circle {
+  transform: translateY(-16px) scale(0.94);
 }
 .app-tabbar .tab-main.is-active::before { content: none; }
 
@@ -3988,7 +4010,14 @@ body.kb-open .picker {
   .harvest-users-btn .ico,
   .harvest-copy-btn .ico { width: 19px; height: 19px; }
   .app-tabbar em { font-size: 0.55rem; }
-  .app-tabbar .tab-main .tab-main-circle { width: 44px; height: 44px; margin-top: -14px; }
+  .app-tabbar .tab-main .tab-main-circle {
+    width: 48px;
+    height: 48px;
+    transform: translateY(-14px);
+  }
+  .app-tabbar .tab-main:active .tab-main-circle {
+    transform: translateY(-14px) scale(0.94);
+  }
   .history-item-actions button { font-size: 0.62rem; padding: 0 4px; }
   .net-badge { font-size: 0.6rem; padding: 4px 7px; }
   .vin-grupo-pair { gap: 8px; }
@@ -4021,7 +4050,14 @@ body.kb-open .picker {
   .harvest-head { padding: max(8px, calc(4px + var(--safe-t))) 12px 8px; }
   .harvest-logo { width: 36px; height: 36px; max-width: 36px; flex-basis: 36px; }
   .export-preview { max-height: min(96dvh, 96%); }
-  .app-tabbar { height: calc(50px + var(--safe-b)); padding: 0 4px var(--safe-b); }
-  .app-tabbar .tab-main .tab-main-circle { width: 44px; height: 44px; margin-top: -14px; }
+  .app-tabbar { height: calc(50px + env(safe-area-inset-bottom, 0px)); }
+  .app-tabbar .tab-main .tab-main-circle {
+    width: 44px;
+    height: 44px;
+    transform: translateY(-10px);
+  }
+  .app-tabbar .tab-main:active .tab-main-circle {
+    transform: translateY(-10px) scale(0.94);
+  }
   .qr-frame { max-height: 190px; }
 }

@@ -21,7 +21,7 @@
   const LOGOUT_FLAG_KEY = "qb-supervisores-logout-v1";
   const HISTORY_TTL_MS = 48 * 60 * 60 * 1000;
   const HISTORY_PAGE_SIZE = 8;
-  const APP_VERSION = "v169";
+  const APP_VERSION = "v171";
   const HARVEST_TYPES = [
     { key: "suma-jarras", label: "Suma de jarras", observacion: "SUMAR JARRAS" },
     { key: "descuento-jarras", label: "Descuento jarras", observacion: "DESCUENTO JARRAS" },
@@ -3140,17 +3140,51 @@
       button.textContent = "Borrando…";
     }
     try {
+      // 1) Toda la Cache Storage de la PWA (todas las versiones).
       if ("caches" in window) {
         const keys = await caches.keys();
         await Promise.all(keys.map((key) => caches.delete(key)));
+        const leftover = await caches.keys();
+        await Promise.all(leftover.map((key) => caches.delete(key)));
       }
-      toast("Caché borrada · sus registros siguen guardados");
-      if (button) button.textContent = "Caché borrada";
+
+      // 2) Desregistrar todos los service workers (si no, vuelven a cachear).
+      if ("serviceWorker" in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map((reg) => reg.unregister()));
+      }
+
+      // 3) Bases IndexedDB del origen (caché interna del navegador).
+      if (typeof indexedDB !== "undefined" && indexedDB.databases) {
+        const dbs = await indexedDB.databases();
+        await Promise.all(
+          (dbs || []).map(
+            (db) =>
+              new Promise((resolve) => {
+                if (!db?.name) {
+                  resolve();
+                  return;
+                }
+                const req = indexedDB.deleteDatabase(db.name);
+                req.onsuccess = () => resolve();
+                req.onerror = () => resolve();
+                req.onblocked = () => resolve();
+              })
+          )
+        );
+      }
+
+      toast("Caché borrada por completo · recargando…");
+      // Recarga limpia: sin service worker y con URL nueva para saltar caché HTTP.
+      const url = new URL(location.href);
+      url.searchParams.set("_cb", String(Date.now()));
+      setTimeout(() => location.replace(url.href), 350);
     } catch {
       toast("No se pudo borrar la caché");
       if (button) {
         button.disabled = false;
         button.textContent = "Borrar caché";
+        hydrateIcons(button.parentElement || button);
       }
     }
   }
@@ -3161,14 +3195,20 @@
       button.textContent = "Actualizando…";
     }
     try {
+      if ("caches" in window) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map((key) => caches.delete(key)));
+      }
       if ("serviceWorker" in navigator) {
-        const registration = await navigator.serviceWorker.getRegistration("/");
-        await registration?.update();
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map((reg) => reg.unregister()));
       }
     } catch {
       /* la recarga de red sigue siendo el respaldo */
     }
-    location.reload();
+    const url = new URL(location.href);
+    url.searchParams.set("_cb", String(Date.now()));
+    location.replace(url.href);
   }
 
   function openAyuda() {
@@ -3205,7 +3245,7 @@
               </div>
               <button type="button" class="app-tools-close" aria-label="Cerrar">${ico("x")}</button>
             </div>
-            <p>Borre la caché y luego actualice para descargar la versión más reciente. Sus registros guardados no se eliminan.</p>
+            <p>Borre toda la caché de la app (archivos, service worker e IndexedDB) y luego actualice. Sus registros de cosecha, historial y sesión no se eliminan.</p>
             <button type="button" class="app-tools-cache">${ico("trash")} Borrar caché</button>
             <button type="button" class="app-tools-update">${ico("refresh")} Actualizar app</button>
             <small class="app-version">Versión de la app: ${APP_VERSION}</small>
@@ -4757,7 +4797,7 @@
 
       if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
         try {
-          const reg = await navigator.serviceWorker.register("/sw.js?v=169", {
+          const reg = await navigator.serviceWorker.register("/sw.js?v=171", {
             scope: "/",
           });
           reg.update?.().catch(() => {});
