@@ -26,8 +26,9 @@
   --radius-sm: 14px;
   --safe-b: env(safe-area-inset-bottom, 0px);
   --safe-t: env(safe-area-inset-top, 0px);
-  /* Safe area completa: el padding de la nav pinta de blanco el home indicator. */
-  --nav-safe-bottom: env(safe-area-inset-bottom, 0px);
+  /* Solo parte del área segura: lo justo para no pisar el gesto del iPhone.
+   * El resto ya es blanco, así que no hace falta reservarlo todo aquí. */
+  --nav-safe-bottom: max(8px, calc(env(safe-area-inset-bottom, 0px) * 0.5));
   --nav-bar-total: calc(56px + var(--nav-safe-bottom));
   --nav-h: 56px;
   --font: "Segoe UI", system-ui, -apple-system, sans-serif;
@@ -2393,8 +2394,7 @@ body[data-page="scan"] .lock-screen {
   align-items: flex-end;
   height: auto;
   min-height: 0;
-  /* El safe-area es padding de la nav: el home indicator queda sobre blanco. */
-  padding: 10px 8px calc(10px + env(safe-area-inset-bottom, 0px));
+  padding: 8px 8px var(--nav-safe-bottom);
   background: #ffffff;
   border-top: 1px solid var(--border);
   border-radius: 0;
