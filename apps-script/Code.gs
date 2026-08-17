@@ -1,7 +1,7 @@
     /**
     * ============================================================
-    * API · SUPERVISORES — Q Berries (DATA-SUPERVISORES)
-    * Spreadsheet exclusivo de vínculos QR (NO mezclar con Tarjeta/Pases)
+    * API · SUPERVISORES — Q Berries
+    * Cosecha, altas manuales y vínculos QR en hojas separadas
     * ============================================================
     *
     * SETUP
@@ -22,15 +22,21 @@
     *
     * ENDPOINTS
     *  POST { action: "registrarVinculo", data: {...}, token }
+    *  POST { action: "registrarCosecha", data: {...}, token }
+    *  POST { action: "registrarManual", data: {...}, token }
     *  GET/POST  action=listarVinculos [&dni=][&limit=]
     *  GET/POST  action=existeVinculo  &dni=
     *  GET/POST  action=ping
     *
-    * Hoja (fila 1):
+    * DATA-SUPERVISORES (fila 1):
     * DNI | NOMBRE | CELULAR | GRUPO LIC | GRUPO | NOMBRE SUPERVISOR GLOBAL | DNI INICIO SESION | ULTIMA HORA REGISTRO
+    * Hoja 1: registros de cosecha, una fila por trabajador
+    * Hoja 2: trabajadores agregados manualmente
     */
 
-    var SHEET_NAME = 'Hoja 1';
+    var SHEET_NAME = 'DATA-SUPERVISORES';
+    var HARVEST_SHEET_NAME = 'Hoja 1';
+    var MANUAL_SHEET_NAME = 'Hoja 2';
 
     /**
     * Token por defecto vacío a propósito (Netlify secrets scan).
@@ -49,6 +55,33 @@
       'NOMBRE SUPERVISOR GLOBAL',
       'DNI INICIO SESION',
       'ULTIMA HORA REGISTRO'
+    ];
+
+    var HARVEST_HEADERS = [
+      'ID REGISTRO',
+      'FECHA',
+      'HORA GUARDADO',
+      'TIPO',
+      'DNI TRABAJADOR',
+      'NOMBRE TRABAJADOR',
+      'MAÑANA',
+      'TARDE',
+      'TOTAL TRABAJADOR',
+      'TOTAL GENERAL',
+      'LOTE',
+      'VARIEDAD',
+      'OBSERVACION',
+      'DNI SUPERVISOR',
+      'NOMBRE SUPERVISOR'
+    ];
+
+    var MANUAL_HEADERS = [
+      'FECHA',
+      'HORA GUARDADO',
+      'DNI TRABAJADOR',
+      'NOMBRE TRABAJADOR',
+      'DNI SUPERVISOR',
+      'NOMBRE SUPERVISOR'
     ];
 
     var _jsonpCb = '';
@@ -111,6 +144,30 @@
             data: savedGet
           });
         }
+        if (action === 'registrarCosecha') {
+          var cosechaGet = parseDataParam_(p);
+          var savedCosechaGet = registrarCosecha_(cosechaGet);
+          return jsonOut_({
+            ok: true,
+            api: 'supervisores',
+            action: 'registrarCosecha',
+            created: !!savedCosechaGet.created,
+            duplicate: !!savedCosechaGet.duplicate,
+            data: savedCosechaGet
+          });
+        }
+        if (action === 'registrarManual') {
+          var manualGet = parseDataParam_(p);
+          var savedManualGet = registrarManual_(manualGet);
+          return jsonOut_({
+            ok: true,
+            api: 'supervisores',
+            action: 'registrarManual',
+            created: !!savedManualGet.created,
+            updated: !!savedManualGet.updated,
+            data: savedManualGet
+          });
+        }
         if (action === 'listarVinculos') {
           return jsonOut_(listarVinculos_(p));
         }
@@ -153,6 +210,9 @@
 
         var action = String(body.action || 'registrarVinculo').trim();
         var data = body.data || body.payload || body;
+        if (typeof data === 'string') {
+          try { data = JSON.parse(data); } catch (_) {}
+        }
 
         if (
           (!action || action === 'undefined' || action === 'null') &&
@@ -180,6 +240,28 @@
             alreadyRegistered: !!saved.alreadyRegistered,
             message: saved.message || '',
             data: saved
+          });
+        }
+        if (action === 'registrarCosecha') {
+          var savedCosecha = registrarCosecha_(data);
+          return jsonOut_({
+            ok: true,
+            api: 'supervisores',
+            action: 'registrarCosecha',
+            created: !!savedCosecha.created,
+            duplicate: !!savedCosecha.duplicate,
+            data: savedCosecha
+          });
+        }
+        if (action === 'registrarManual') {
+          var savedManual = registrarManual_(data);
+          return jsonOut_({
+            ok: true,
+            api: 'supervisores',
+            action: 'registrarManual',
+            created: !!savedManual.created,
+            updated: !!savedManual.updated,
+            data: savedManual
           });
         }
         if (action === 'listarVinculos') {
@@ -345,6 +427,129 @@
       }
     }
 
+    /**
+    * Hoja 1: una fila por trabajador del registro guardado.
+    * El ID evita duplicados cuando el celular reintenta una cola offline.
+    */
+    function registrarCosecha_(d) {
+      d = d || {};
+      var id = clean_(d.id);
+      var workers = Array.isArray(d.workers) ? d.workers : [];
+      var supervisorDni = digits_(d.supervisorDni);
+      var supervisorNombre = clean_(d.supervisorNombre).toUpperCase();
+      if (!id) throw new Error('Falta ID del registro');
+      if (!workers.length) throw new Error('Faltan trabajadores');
+      if (!supervisorDni) throw new Error('Falta DNI del supervisor');
+
+      var lock = LockService.getScriptLock();
+      var got = false;
+      try {
+        got = lock.tryLock(8000);
+        if (!got) throw new Error('El servidor está ocupado. Intente de nuevo.');
+        var sh = harvestSheet_();
+        if (findValueRow_(sh, 1, id) > 0) {
+          return { id: id, created: false, duplicate: true, rows: 0 };
+        }
+
+        var fecha = clean_(d.fecha) || Utilities.formatDate(
+          new Date(),
+          'America/Lima',
+          'yyyy-MM-dd'
+        );
+        var hora = formatHora_(d.horaGuardado);
+        var tipo = clean_(d.tipo).toUpperCase();
+        var observacion = clean_(d.observacion).toUpperCase();
+        var lote = clean_(d.lote).toUpperCase();
+        var variedad = clean_(d.variedad).toUpperCase();
+        var totalGeneral = number_(d.totalGeneral);
+        var rows = [];
+
+        for (var i = 0; i < workers.length; i++) {
+          var w = workers[i] || {};
+          var dni = digits_(w.dni);
+          var nombre = clean_(w.nombre).toUpperCase();
+          if (!dni || !nombre) continue;
+          var manana = number_(w.manana);
+          var tarde = number_(w.tarde);
+          var total = number_(w.total);
+          if (!total && (manana || tarde)) total = manana + tarde;
+          rows.push([
+            id,
+            fecha,
+            hora,
+            tipo,
+            dni,
+            nombre,
+            manana,
+            tarde,
+            total,
+            totalGeneral,
+            lote,
+            variedad,
+            observacion,
+            supervisorDni,
+            supervisorNombre
+          ]);
+        }
+        if (!rows.length) throw new Error('No hay trabajadores válidos');
+        sh.getRange(sh.getLastRow() + 1, 1, rows.length, HARVEST_HEADERS.length)
+          .setValues(rows);
+        return {
+          id: id,
+          created: true,
+          duplicate: false,
+          rows: rows.length,
+          totalGeneral: totalGeneral
+        };
+      } finally {
+        if (got) {
+          try { lock.releaseLock(); } catch (_) {}
+        }
+      }
+    }
+
+    /** Hoja 2: altas manuales reportadas desde el celular. */
+    function registrarManual_(d) {
+      d = d || {};
+      var dni = digits_(d.dni);
+      var nombre = clean_(d.nombre).toUpperCase();
+      if (dni.length !== 8) throw new Error('DNI manual inválido');
+      if (!nombre) throw new Error('Falta nombre del trabajador manual');
+
+      var lock = LockService.getScriptLock();
+      var got = false;
+      try {
+        got = lock.tryLock(8000);
+        if (!got) throw new Error('El servidor está ocupado. Intente de nuevo.');
+        var sh = manualSheet_();
+        var fecha = clean_(d.fecha) || Utilities.formatDate(
+          new Date(),
+          'America/Lima',
+          'yyyy-MM-dd'
+        );
+        var row = [
+          fecha,
+          formatHora_(d.horaGuardado),
+          dni,
+          nombre,
+          digits_(d.supervisorDni),
+          clean_(d.supervisorNombre).toUpperCase()
+        ];
+        var rowIndex = findValueRow_(sh, 3, dni);
+        if (rowIndex > 0) {
+          sh.getRange(rowIndex, 1, 1, MANUAL_HEADERS.length).setValues([row]);
+          return { dni: dni, created: false, updated: true };
+        }
+        sh.getRange(sh.getLastRow() + 1, 1, 1, MANUAL_HEADERS.length)
+          .setValues([row]);
+        return { dni: dni, created: true, updated: false };
+      } finally {
+        if (got) {
+          try { lock.releaseLock(); } catch (_) {}
+        }
+      }
+    }
+
     function findDniRow_(sh, dni, lastRow) {
     dni = digits_(dni);
     if (!dni || !sh) return -1;
@@ -358,6 +563,18 @@
     }
     return -1;
   }
+
+    function findValueRow_(sh, column, value) {
+      value = clean_(value);
+      if (!sh || !value || sh.getLastRow() < 2) return -1;
+      var values = sh
+        .getRange(2, column, sh.getLastRow() - 1, 1)
+        .getDisplayValues();
+      for (var i = 0; i < values.length; i++) {
+        if (clean_(values[i][0]) === value) return i + 2;
+      }
+      return -1;
+    }
 
     function existeVinculo_(dni) {
       dni = digits_(dni);
@@ -419,18 +636,89 @@
     /* -------------------- Sheet helpers -------------------- */
 
     var _shCache = null;
+    var _harvestShCache = null;
+    var _manualShCache = null;
 
     function sheet_() {
       if (_shCache) return _shCache;
       var ss = SpreadsheetApp.getActiveSpreadsheet();
       if (!ss) throw new Error('No hay spreadsheet activo. Abre DATA-SUPERVISORES.');
-
+      migrateLegacyVinculoSheet_(ss);
       var sh = ss.getSheetByName(SHEET_NAME);
-      if (!sh) sh = ss.getSheets()[0];
       if (!sh) sh = ss.insertSheet(SHEET_NAME);
       ensureHeaders_(sh);
       _shCache = sh;
       return sh;
+    }
+
+    function harvestSheet_() {
+      if (_harvestShCache) return _harvestShCache;
+      var ss = SpreadsheetApp.getActiveSpreadsheet();
+      if (!ss) throw new Error('No hay spreadsheet activo');
+      migrateLegacyVinculoSheet_(ss);
+      var sh = ss.getSheetByName(HARVEST_SHEET_NAME);
+      if (!sh) sh = ss.insertSheet(HARVEST_SHEET_NAME);
+      ensureTableHeaders_(sh, HARVEST_HEADERS);
+      _harvestShCache = sh;
+      return sh;
+    }
+
+    function manualSheet_() {
+      if (_manualShCache) return _manualShCache;
+      var ss = SpreadsheetApp.getActiveSpreadsheet();
+      if (!ss) throw new Error('No hay spreadsheet activo');
+      var sh = ss.getSheetByName(MANUAL_SHEET_NAME);
+      if (!sh) sh = ss.insertSheet(MANUAL_SHEET_NAME);
+      ensureTableHeaders_(sh, MANUAL_HEADERS);
+      _manualShCache = sh;
+      return sh;
+    }
+
+    /**
+    * La versión anterior usaba Hoja 1 para vínculos. Si detecta esos
+    * encabezados, la renombra para liberar Hoja 1 sin perder información.
+    */
+    function migrateLegacyVinculoSheet_(ss) {
+      if (ss.getSheetByName(SHEET_NAME)) return;
+      var legacy = ss.getSheetByName('Hoja 1');
+      if (!legacy || legacy.getLastColumn() < 3 || legacy.getLastRow() < 1) return;
+      var headers = legacy
+        .getRange(1, 1, 1, legacy.getLastColumn())
+        .getValues()[0]
+        .map(function (value) { return clean_(value).toUpperCase(); });
+      if (
+        headers[0] === 'DNI' &&
+        headers.indexOf('CELULAR') >= 0 &&
+        headers.indexOf('NOMBRE SUPERVISOR GLOBAL') >= 0
+      ) {
+        legacy.setName(SHEET_NAME);
+      }
+    }
+
+    function ensureTableHeaders_(sh, headers) {
+      var lastRow = sh.getLastRow();
+      var first = lastRow
+        ? clean_(sh.getRange(1, 1).getValue()).toUpperCase()
+        : '';
+      if (!lastRow || !first) {
+        sh.clear();
+        writeTableHeaders_(sh, headers);
+        return;
+      }
+      if (first !== headers[0]) {
+        throw new Error(
+          'La hoja "' + sh.getName() + '" tiene encabezados incompatibles'
+        );
+      }
+    }
+
+    function writeTableHeaders_(sh, headers) {
+      sh.getRange(1, 1, 1, headers.length).setValues([headers]);
+      sh.setFrozenRows(1);
+      sh.getRange(1, 1, 1, headers.length)
+        .setFontWeight('bold')
+        .setBackground('#5ead51')
+        .setFontColor('#ffffff');
     }
 
     function ensureHeaders_(sh) {
@@ -498,6 +786,28 @@
     }
 
     /* -------------------- Utils -------------------- */
+
+    function parseDataParam_(params) {
+      params = params || {};
+      if (params.data && typeof params.data === 'object') return params.data;
+      if (params.data) {
+        try {
+          return JSON.parse(String(params.data));
+        } catch (_) {}
+      }
+      return params;
+    }
+
+    function number_(value) {
+      var n = Number(value);
+      return isFinite(n) ? n : 0;
+    }
+
+    function formatHora_(value) {
+      var date = value ? new Date(value) : new Date();
+      if (isNaN(date.getTime())) date = new Date();
+      return Utilities.formatDate(date, 'America/Lima', 'hh:mm:ss a');
+    }
 
     function parseBody_(e) {
       if (!e || !e.postData || !e.postData.contents) return {};

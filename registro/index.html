@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no" />
+  <meta name="theme-color" content="#5ead51" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="description" content="Registro diario de cosecha QBerries" />
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="icon" href="/assets/icon-192.png" type="image/png" sizes="192x192" />
+  <link rel="apple-touch-icon" href="/assets/icon-192.png" />
+  <title>QBerries · Registro</title>
+  <link rel="stylesheet" href="/styles.css?v=153" />
+  <script src="/vendor/xlsx.full.min.js?v=153" defer></script>
+  <script src="/icons.js?v=153" defer></script>
+  <script src="/app.js?v=153" defer></script>
+</head>
+<body data-page="registro" class="app-booting">
+  <div class="stage">
+    <div class="phone" id="phone">
+      <span id="netPill" class="status-chip is-online" title="Estado de conexión">
+        <span class="status-dot"></span>
+        <span class="status-text">Con internet</span>
+      </span>
+
+      <main class="harvest-screen" id="harvestScreen">
+        <header class="harvest-head">
+          <div class="harvest-user">
+            <img class="hero-logo harvest-logo" src="/assets/logo-qberries.png" alt="QBerries" />
+            <div>
+              <small>QBERRIES · SUPERVISORES</small>
+              <h1>Hola, <span id="harvestSupervisor">Supervisor</span></h1>
+              <p id="harvestDate">Registro del día</p>
+            </div>
+          </div>
+          <div class="harvest-head-status">
+            <span class="net-badge is-online" data-net-online>
+              <span class="status-dot"></span>
+              <span class="net-online-text">Con internet</span>
+            </span>
+            <span class="net-badge is-queue" data-net-pending>
+              <span data-icon="upload"></span>
+              <span class="net-pending-text">0 pendientes</span>
+            </span>
+          </div>
+        </header>
+
+        <div class="harvest-scroll">
+          <section class="harvest-field-card">
+            <div class="harvest-section-title">
+              <div>
+                <small>UBICACIÓN DE COSECHA</small>
+                <h2>Seleccione el lote</h2>
+              </div>
+            </div>
+            <label class="harvest-lote-control">
+              <span>Lote</span>
+              <input type="hidden" id="harvestLote" value="" />
+              <button type="button" class="select-trigger harvest-lote-trigger" id="btnHarvestLote" aria-label="Seleccionar lote">
+                <span id="harvestLoteLabel" class="ph">Seleccionar lote</span>
+                <span class="chev" data-icon="search"></span>
+              </button>
+            </label>
+            <div class="harvest-location-grid">
+              <div><small>MODULO</small><strong id="harvestModulo">—</strong></div>
+              <div><small>TURNO</small><strong id="harvestTurno">—</strong></div>
+              <div><small>VARIEDAD</small><strong id="harvestVariedad">—</strong></div>
+            </div>
+          </section>
+
+          <section class="harvest-type-card">
+            <div>
+              <small>TIPO DE REGISTRO</small>
+              <span>Define el nombre del archivo Excel</span>
+            </div>
+            <input type="hidden" id="harvestType" value="suma-jarras" />
+            <button type="button" class="select-trigger harvest-type-trigger" id="btnHarvestType" aria-label="Seleccionar tipo de registro">
+              <span id="harvestTypeLabel">Suma de jarras</span>
+              <span class="chev" data-icon="chevronDown"></span>
+            </button>
+          </section>
+
+          <section class="harvest-add-card">
+            <div class="harvest-section-title">
+              <div>
+                <small>PERSONAL DEL DÍA</small>
+                <h2>Agregar trabajador</h2>
+              </div>
+              <div class="harvest-title-actions">
+                <button type="button" class="harvest-copy-btn" id="btnCopyYesterdayWorkers" aria-label="Copiar trabajadores del día anterior" title="Copiar DNI de ayer">
+                  <span data-icon="clipboard"></span>
+                </button>
+                <button type="button" class="harvest-users-btn" id="btnManualWorker" aria-label="Agregar trabajador que no está en la base">
+                  <span data-icon="users"></span>
+                </button>
+              </div>
+            </div>
+            <form id="harvestWorkerForm" class="harvest-worker-form">
+              <label>
+                <span>DNI</span>
+                <input id="harvestWorkerDni" inputmode="numeric" maxlength="8" placeholder="8 dígitos" autocomplete="off" />
+              </label>
+              <label class="harvest-worker-name">
+                <span>Nombres y apellidos</span>
+                <input id="harvestWorkerName" placeholder="Se completa con el DNI" autocomplete="off" disabled />
+              </label>
+              <button type="submit" aria-label="Agregar trabajador">
+                <span data-icon="plus"></span>
+              </button>
+            </form>
+            <p class="harvest-form-msg" id="harvestWorkerMsg"></p>
+            <p class="harvest-manual-hint">Si no está en la base, toque el ícono de usuarios. Se reportará a Data Manuales.</p>
+          </section>
+
+          <section class="harvest-register-card">
+            <div class="harvest-section-title">
+              <div>
+                <small>CONTROL DE JARRAS</small>
+                <h2>Registro por trabajador</h2>
+              </div>
+              <span class="harvest-count" id="harvestWorkerCount">0</span>
+            </div>
+            <div class="harvest-table-head">
+              <span>PERSONA</span><span>MAÑANA</span><span>TARDE</span><span>TOTAL</span><span class="harvest-head-action" aria-hidden="true"></span>
+            </div>
+            <div class="harvest-workers" id="harvestWorkers"></div>
+          </section>
+
+          <section class="harvest-total-card">
+            <div>
+              <small>TOTAL GENERAL DEL DÍA</small>
+              <strong id="harvestGrandTotal">0</strong>
+              <span>jarras registradas</span>
+            </div>
+            <span class="harvest-total-icon" data-icon="berry"></span>
+          </section>
+
+          <button type="button" class="harvest-save-btn" id="btnHarvestSave">
+            Ver resumen
+          </button>
+        </div>
+
+      </main>
+
+      <div class="picker-backdrop" id="picker" hidden>
+        <div class="picker" role="dialog" aria-modal="true" aria-labelledby="pickerTitle">
+          <div class="picker-head">
+            <h3 id="pickerTitle">Buscar lote</h3>
+            <button type="button" class="picker-x" id="pickerClose" aria-label="Cerrar">
+              <span data-icon="x"></span>
+            </button>
+          </div>
+          <div class="picker-search">
+            <span data-icon="search" class="picker-search-ico"></span>
+            <input id="pickerQuery" type="search" placeholder="Buscar lote..." autocomplete="off" />
+          </div>
+          <div class="picker-list" id="pickerList" role="listbox"></div>
+          <button type="button" class="picker-add" id="pickerAdd" hidden>Agregar uno</button>
+        </div>
+      </div>
+
+      <nav class="app-tabbar" id="appTabbar" aria-label="Navegación principal">
+        <button type="button" data-tab="inicio">
+          <span data-icon="home"></span><em>Inicio</em>
+        </button>
+        <button type="button" data-tab="registro" class="is-active">
+          <span data-icon="clipboard"></span><em>Registro</em>
+        </button>
+        <button type="button" data-tab="vincular" class="tab-main" aria-label="Vincular">
+          <span class="tab-main-circle" data-icon="plus"></span>
+        </button>
+        <button type="button" data-tab="excel">
+          <span data-icon="fileSpreadsheet"></span><em>Excel</em>
+        </button>
+        <button type="button" data-tab="ayuda">
+          <span data-icon="info"></span><em>Ayuda</em>
+        </button>
+      </nav>
+
+      <div class="modal-backdrop" id="modal" hidden>
+        <div class="modal" role="dialog" aria-modal="true">
+          <div class="modal-ico" data-icon="trash"></div>
+          <h3 id="modalTitle">Confirmar</h3>
+          <p id="modalBody">¿Continuar?</p>
+          <div class="modal-actions">
+            <button type="button" class="btn btn-ghost" id="modalCancel">Cancelar</button>
+            <button type="button" class="btn btn-danger" id="modalOk">Eliminar</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="manual-worker-backdrop" id="manualWorker" hidden>
+        <section class="manual-worker" role="dialog" aria-modal="true" aria-labelledby="manualWorkerTitle">
+          <div class="manual-worker-head">
+            <div>
+              <small>NO ESTÁ EN LA BASE</small>
+              <h2 id="manualWorkerTitle">Agregar trabajador</h2>
+            </div>
+            <button type="button" id="btnCloseManualWorker" aria-label="Cerrar">
+              <span data-icon="x"></span>
+            </button>
+          </div>
+          <p class="manual-worker-copy">
+            Ingrese el DNI (8 dígitos) y el nombre completo. Se guarda en el celular y se envía a Data Manuales cuando haya internet.
+          </p>
+          <form id="manualWorkerForm" class="manual-worker-form">
+            <label>
+              <span>DNI (8 dígitos)</span>
+              <input id="manualWorkerDni" inputmode="numeric" maxlength="8" placeholder="12345678" autocomplete="off" required />
+            </label>
+            <label>
+              <span>Nombres y apellidos</span>
+              <input id="manualWorkerName" type="text" maxlength="80" placeholder="Nombre completo" autocomplete="off" required />
+            </label>
+            <button type="submit" class="btn btn-primary btn-block">
+              Registrar
+            </button>
+          </form>
+        </section>
+      </div>
+
+      <div class="export-preview-backdrop" id="exportPreview" hidden>
+        <section class="export-preview" role="dialog" aria-modal="true" aria-labelledby="exportPreviewTitle">
+          <div class="export-preview-head">
+            <div>
+              <small id="exportPreviewKicker">RESUMEN DEL DÍA</small>
+              <h2 id="exportPreviewTitle">Vista previa del Excel</h2>
+            </div>
+            <button type="button" id="btnCloseExportPreview" aria-label="Cerrar">
+              <span data-icon="x"></span>
+            </button>
+          </div>
+          <div class="export-preview-meta" id="exportPreviewMeta"></div>
+          <div class="export-preview-table-wrap">
+            <table class="export-preview-table">
+              <thead>
+                <tr>
+                  <th>DNI</th>
+                  <th>NOMBRES Y APELLIDOS</th>
+                  <th>MAÑANA</th>
+                  <th>TARDE</th>
+                  <th>TOTAL-UNIDADES</th>
+                  <th>LOTE</th>
+                  <th>VARIEDAD</th>
+                  <th>OBSERVACION</th>
+                  <th>SUPERVISOR</th>
+                </tr>
+              </thead>
+              <tbody id="exportPreviewRows"></tbody>
+            </table>
+          </div>
+          <p class="export-preview-hint">Deslice la tabla hacia el lado para ver todas las columnas.</p>
+          <div class="export-preview-total">
+            <span>Total general</span>
+            <strong id="exportPreviewTotal">0</strong>
+          </div>
+          <div class="export-preview-actions">
+            <div class="export-preview-row">
+              <button type="button" class="save-harvest" id="btnCommitHarvest">
+                Guardar registro
+              </button>
+              <button type="button" class="share-whatsapp" id="btnShareHarvest">
+                <span data-icon="upload"></span> Compartir por WhatsApp
+              </button>
+            </div>
+            <button type="button" class="download-excel" id="btnDownloadHarvest">
+              <span data-icon="download"></span> Descargar Excel
+            </button>
+          </div>
+        </section>
+      </div>
+
+      <aside class="history-sheet" id="historySheet" hidden>
+        <div class="history-sheet-head">
+          <div>
+            <small>ÚLTIMAS 48 HORAS</small>
+            <h2>Historial de Excel</h2>
+          </div>
+          <button type="button" id="btnCloseHistory" aria-label="Cerrar">
+            <span data-icon="x"></span>
+          </button>
+        </div>
+        <p class="history-copy">Los registros se eliminan automáticamente después de 48 horas. Se muestran de 8 en 8.</p>
+        <div class="history-list" id="historyList"></div>
+        <div class="history-pager" id="historyPager" hidden>
+          <button type="button" id="btnHistoryPrev" aria-label="Anterior">Anterior</button>
+          <span id="historyPageLabel">1/1</span>
+          <button type="button" id="btnHistoryNext" aria-label="Siguiente">Siguiente</button>
+        </div>
+      </aside>
+
+      <div class="toast" id="toast" hidden></div>
+    </div>
+  </div>
+</body>
+</html>

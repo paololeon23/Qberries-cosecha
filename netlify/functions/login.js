@@ -1,6 +1,9 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
+
 /**
- * Valida contraseña contra LOGIN_PIN (env de Netlify).
- * POST { pin: "…" } → { ok: true }
+ * Valida QR/DNI + contraseña y devuelve un comprobante firmado.
+ * Pruebas: LOGIN_PIN=231223.
+ * Producción: SUPERVISOR_PINS={"70839380":"clave-personal", ...}
  */
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -21,22 +24,36 @@ export async function handler(event) {
     };
   }
 
-  const expected = String(process.env.LOGIN_PIN || "").trim();
-  if (!expected) {
+  const masterPin = String(process.env.LOGIN_PIN || "").trim();
+  const signingSecret = String(process.env.API_TOKEN || "").trim();
+  let supervisorPins = {};
+  try {
+    supervisorPins = JSON.parse(process.env.SUPERVISOR_PINS || "{}");
+  } catch {
+    return {
+      statusCode: 500,
+      headers: cors,
+      body: JSON.stringify({ ok: false, error: "SUPERVISOR_PINS no es JSON válido" }),
+    };
+  }
+
+  if ((!masterPin && !Object.keys(supervisorPins).length) || !signingSecret) {
     return {
       statusCode: 500,
       headers: cors,
       body: JSON.stringify({
         ok: false,
-        error: "LOGIN_PIN no configurado en Netlify",
+        error: "Falta LOGIN_PIN/SUPERVISOR_PINS o API_TOKEN en Netlify",
       }),
     };
   }
 
   let pin = "";
+  let dni = "";
   try {
     const body = JSON.parse(event.body || "{}");
     pin = String(body.pin || "").trim();
+    dni = String(body.dni || "").replace(/\D/g, "");
   } catch {
     return {
       statusCode: 400,
@@ -45,7 +62,31 @@ export async function handler(event) {
     };
   }
 
-  if (pin !== expected) {
+  if (!/^\d{8,12}$/.test(dni)) {
+    return {
+      statusCode: 400,
+      headers: cors,
+      body: JSON.stringify({ ok: false, error: "DNI inválido" }),
+    };
+  }
+
+  const hasPersonalPins = Object.keys(supervisorPins).length > 0;
+  const personalPin = String(supervisorPins[dni] || "").trim();
+  if (hasPersonalPins && !personalPin) {
+    return {
+      statusCode: 403,
+      headers: cors,
+      body: JSON.stringify({ ok: false, error: "Supervisor sin acceso configurado" }),
+    };
+  }
+  const expected = hasPersonalPins ? personalPin : masterPin;
+  const providedBuffer = Buffer.from(pin);
+  const expectedBuffer = Buffer.from(expected);
+  const valid =
+    providedBuffer.length === expectedBuffer.length &&
+    timingSafeEqual(providedBuffer, expectedBuffer);
+
+  if (!valid) {
     return {
       statusCode: 401,
       headers: cors,
@@ -53,9 +94,16 @@ export async function handler(event) {
     };
   }
 
+  const payload = Buffer.from(
+    JSON.stringify({ dni, issuedAt: Date.now(), version: 1 })
+  ).toString("base64url");
+  const signature = createHmac("sha256", signingSecret)
+    .update(payload)
+    .digest("base64url");
+
   return {
     statusCode: 200,
     headers: cors,
-    body: JSON.stringify({ ok: true }),
+    body: JSON.stringify({ ok: true, dni, token: `${payload}.${signature}` }),
   };
 };

@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no" />
+  <meta name="theme-color" content="#2f7a36" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="description" content="Panel de cosecha QBerries" />
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="icon" href="/assets/icon-192.png" type="image/png" sizes="192x192" />
+  <link rel="apple-touch-icon" href="/assets/icon-192.png" />
+  <title>QBerries · Inicio</title>
+  <link rel="stylesheet" href="/styles.css?v=153" />
+  <script src="/vendor/xlsx.full.min.js?v=153" defer></script>
+  <script src="/icons.js?v=153" defer></script>
+  <script src="/app.js?v=153" defer></script>
+</head>
+<body data-page="inicio" class="app-booting">
+  <div class="stage">
+    <div class="phone" id="phone">
+      <main class="home-dashboard" id="homeDashboard">
+        <header class="home-hero">
+          <div class="home-hero-top">
+            <div class="home-welcome">
+              <small>SUPERVISIÓN DE COSECHA</small>
+              <h1>Hola, <span id="homeSupervisor">Supervisor</span></h1>
+              <p id="homeDate">Resumen del día</p>
+            </div>
+            <button type="button" class="home-profile-btn" id="btnHomeProfile" aria-label="Mi perfil">
+              <span data-icon="user"></span>
+            </button>
+          </div>
+        </header>
+
+        <div class="home-scroll">
+          <section class="home-panel home-operations">
+            <div class="home-section-head">
+              <div>
+                <small>OPERACIONES</small>
+                <h2>¿Qué desea realizar?</h2>
+              </div>
+              <span class="home-online" data-net-online><span class="status-dot"></span><span class="net-online-text">Con internet</span></span>
+            </div>
+            <div class="home-action-grid">
+              <button type="button" data-home-action="registro">
+                <span class="home-action-icon is-green" data-icon="clipboard"></span>
+                <strong>Registrar cosecha</strong>
+              </button>
+              <button type="button" data-home-action="agregar">
+                <span class="home-action-icon is-blue" data-icon="users"></span>
+                <strong>Agregar personal</strong>
+              </button>
+              <button type="button" data-home-action="excel">
+                <span class="home-action-icon is-gold" data-icon="fileSpreadsheet"></span>
+                <strong>Excel del día</strong>
+              </button>
+              <button type="button" data-home-action="vincular">
+                <span class="home-action-icon is-berry" data-icon="link"></span>
+                <strong>Vincular datos</strong>
+              </button>
+            </div>
+          </section>
+
+          <section class="home-today-card">
+            <div class="home-today-copy">
+              <small>COSECHA DE HOY</small>
+              <h2 id="homeTodayTotal">0 jarras</h2>
+              <p><span id="homeTodayWorkers">0 trabajadores</span> · <span id="homeTodayLote">Lote pendiente</span></p>
+            </div>
+            <span class="home-berry" data-icon="berry"></span>
+            <button type="button" data-home-action="registro">Continuar registro <span data-icon="chevronDown"></span></button>
+          </section>
+
+          <section class="home-recent">
+            <div class="home-section-head">
+              <div>
+                <small>ACTIVIDAD RECIENTE</small>
+                <h2>Historial de cosecha</h2>
+              </div>
+              <button type="button" data-home-action="excel">Ver todo</button>
+            </div>
+            <div class="home-recent-list" id="homeRecentList"></div>
+          </section>
+
+          <aside class="home-tip">
+            <span data-icon="leaf"></span>
+            <div>
+              <strong>Trabajo confiable en campo</strong>
+              <p>Los registros quedan guardados en el celular aunque no tenga internet.</p>
+            </div>
+          </aside>
+        </div>
+      </main>
+
+      <nav class="app-tabbar" id="appTabbar" aria-label="Navegación principal">
+        <button type="button" data-tab="inicio" class="is-active">
+          <span data-icon="home"></span><em>Inicio</em>
+        </button>
+        <button type="button" data-tab="registro">
+          <span data-icon="clipboard"></span><em>Registro</em>
+        </button>
+        <button type="button" data-tab="vincular" class="tab-main" aria-label="Vincular">
+          <span class="tab-main-circle" data-icon="plus"></span>
+        </button>
+        <button type="button" data-tab="excel">
+          <span data-icon="fileSpreadsheet"></span><em>Excel</em>
+        </button>
+        <button type="button" data-tab="ayuda">
+          <span data-icon="info"></span><em>Ayuda</em>
+        </button>
+      </nav>
+
+      <div class="modal-backdrop" id="modal" hidden>
+        <div class="modal" role="dialog" aria-modal="true">
+          <div class="modal-ico" data-icon="logOut"></div>
+          <h3 id="modalTitle">Confirmar</h3>
+          <p id="modalBody">¿Continuar?</p>
+          <div class="modal-actions">
+            <button type="button" class="btn btn-ghost" id="modalCancel">Cancelar</button>
+            <button type="button" class="btn btn-danger" id="modalOk">Aceptar</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="profile-modal-backdrop" id="profileModal" hidden>
+        <section class="profile-modal" role="dialog" aria-modal="true" aria-labelledby="profileModalTitle">
+          <div class="profile-modal-head">
+            <div>
+              <small>MI PERFIL</small>
+              <h2 id="profileModalTitle">Supervisor</h2>
+            </div>
+            <button type="button" id="btnCloseProfile" aria-label="Cerrar">
+              <span data-icon="x"></span>
+            </button>
+          </div>
+          <div class="profile-modal-avatar" data-icon="user"></div>
+          <div class="profile-modal-rows">
+            <div class="profile-modal-row">
+              <span>DNI</span>
+              <strong id="profileDni">—</strong>
+            </div>
+            <div class="profile-modal-row">
+              <span>Cargo</span>
+              <strong id="profileCargo">—</strong>
+            </div>
+            <div class="profile-modal-row">
+              <span>Nombre</span>
+              <strong id="profileNombre">—</strong>
+            </div>
+          </div>
+          <button type="button" class="btn btn-danger btn-block" id="btnProfileLogout">
+            <span data-icon="logOut"></span> Cerrar sesión
+          </button>
+        </section>
+      </div>
+
+      <div class="export-preview-backdrop" id="exportPreview" hidden>
+        <section class="export-preview" role="dialog" aria-modal="true" aria-labelledby="exportPreviewTitle">
+          <div class="export-preview-head">
+            <div>
+              <small id="exportPreviewKicker">REGISTRO GUARDADO</small>
+              <h2 id="exportPreviewTitle">Vista previa del Excel</h2>
+            </div>
+            <button type="button" id="btnCloseExportPreview" aria-label="Cerrar">
+              <span data-icon="x"></span>
+            </button>
+          </div>
+          <div class="export-preview-meta" id="exportPreviewMeta"></div>
+          <div class="export-preview-table-wrap">
+            <table class="export-preview-table">
+              <thead>
+                <tr>
+                  <th>DNI</th>
+                  <th>NOMBRES Y APELLIDOS</th>
+                  <th>MAÑANA</th>
+                  <th>TARDE</th>
+                  <th>TOTAL-UNIDADES</th>
+                  <th>LOTE</th>
+                  <th>VARIEDAD</th>
+                  <th>OBSERVACION</th>
+                  <th>SUPERVISOR</th>
+                </tr>
+              </thead>
+              <tbody id="exportPreviewRows"></tbody>
+            </table>
+          </div>
+          <p class="export-preview-hint">Deslice la tabla hacia el lado para ver todas las columnas.</p>
+          <div class="export-preview-total">
+            <span>Total general</span>
+            <strong id="exportPreviewTotal">0</strong>
+          </div>
+          <div class="export-preview-actions">
+            <div class="export-preview-row">
+              <button type="button" class="save-harvest" id="btnCommitHarvest" hidden>
+                Guardar registro
+              </button>
+              <button type="button" class="share-whatsapp" id="btnShareHarvest">
+                <span data-icon="upload"></span> Compartir por WhatsApp
+              </button>
+            </div>
+            <button type="button" class="download-excel" id="btnDownloadHarvest">
+              <span data-icon="download"></span> Descargar Excel
+            </button>
+          </div>
+        </section>
+      </div>
+
+      <aside class="history-sheet" id="historySheet" hidden>
+        <div class="history-sheet-head">
+          <div>
+            <small>ÚLTIMAS 48 HORAS</small>
+            <h2>Historial de Excel</h2>
+          </div>
+          <button type="button" id="btnCloseHistory" aria-label="Cerrar">
+            <span data-icon="x"></span>
+          </button>
+        </div>
+        <p class="history-copy">Los registros se eliminan automáticamente después de 48 horas. Se muestran de 8 en 8.</p>
+        <div class="history-list" id="historyList"></div>
+        <div class="history-pager" id="historyPager" hidden>
+          <button type="button" id="btnHistoryPrev" aria-label="Anterior">Anterior</button>
+          <span id="historyPageLabel">1/1</span>
+          <button type="button" id="btnHistoryNext" aria-label="Siguiente">Siguiente</button>
+        </div>
+      </aside>
+
+      <div class="toast" id="toast" hidden></div>
+    </div>
+  </div>
+</body>
+</html>

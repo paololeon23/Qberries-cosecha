@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no" />
+  <meta name="theme-color" content="#5ead51" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="description" content="Vinculación de datos del supervisor QBerries" />
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="icon" href="/assets/icon-192.png" type="image/png" sizes="192x192" />
+  <link rel="apple-touch-icon" href="/assets/icon-192.png" />
+  <title>QBerries · Vincular datos</title>
+  <link rel="stylesheet" href="/styles.css?v=153" />
+  <script src="/icons.js?v=153" defer></script>
+  <script src="/app.js?v=153" defer></script>
+</head>
+<body data-page="vinculo" class="app-booting">
+  <div class="stage">
+    <div class="phone" id="phone">
+      <span id="netPill" class="status-chip is-online" title="Estado de conexión">
+        <span class="status-dot"></span>
+        <span class="status-text">Con internet</span>
+      </span>
+
+      <main class="vinculo-screen" id="vinculoScreen">
+        <header class="vinculo-head">
+          <div class="vinculo-user">
+            <img class="hero-logo vinculo-logo" src="/assets/logo-qberries.png" alt="QBerries" />
+            <div>
+              <small>QBERRIES · SUPERVISORES</small>
+              <h1>Vincular datos</h1>
+              <p id="vinHeroDni">Complete su ficha</p>
+            </div>
+          </div>
+          <div class="vinculo-head-status">
+            <span class="net-badge is-online" data-net-online>
+              <span class="status-dot"></span>
+              <span class="net-online-text">Con internet</span>
+            </span>
+            <span class="net-badge is-queue" data-net-pending>
+              <span data-icon="upload"></span>
+              <span class="net-pending-text">0 pendientes</span>
+            </span>
+          </div>
+        </header>
+
+        <div class="vinculo-scroll">
+          <div class="id-summary" aria-label="Datos del carnet">
+            <div class="id-summary-row">
+              <span>DNI</span>
+              <strong id="vinDniShow">—</strong>
+            </div>
+            <div class="id-summary-row">
+              <span>Nombre</span>
+              <strong id="vinNombreShow">—</strong>
+            </div>
+          </div>
+
+          <form class="session-form vinculo-form" id="vinculoForm">
+            <input id="vinDni" type="hidden" />
+            <input id="vinNombre" type="hidden" />
+            <p class="vinculo-optional">
+              Información adicional para la base de Sistemas. Puede completarla ahora
+              o continuar usando las pestañas.
+            </p>
+
+            <div class="form-block">
+              <label for="vinCelular">Celular
+                <input id="vinCelular" type="tel" inputmode="numeric" pattern="9[0-9]{8}" maxlength="9" placeholder="9XXXXXXXX" required autocomplete="tel" />
+              </label>
+              <p class="field-hint">9 dígitos · debe comenzar con 9</p>
+            </div>
+
+            <div class="form-block">
+              <div class="vin-grupo-pair">
+                <div class="vin-grupo-col">
+                  <span class="field-label">Grupo LIC</span>
+                  <input type="hidden" id="vinGrupoLic" value="" />
+                  <button type="button" class="select-trigger" id="btnVinGrupoLic" aria-label="Elegir Grupo LIC">
+                    <span id="vinGrupoLicLabel" class="ph">Elegir</span>
+                    <span class="chev" data-icon="search"></span>
+                  </button>
+                  <p class="field-hint">01–60 o No tengo</p>
+                </div>
+                <div class="vin-grupo-col">
+                  <span class="field-label">Grupo</span>
+                  <input type="hidden" id="vinGrupo" value="" />
+                  <button type="button" class="select-trigger" id="btnVinGrupo" aria-label="Elegir Grupo">
+                    <span id="vinGrupoLabel" class="ph">Elegir</span>
+                    <span class="chev" data-icon="search"></span>
+                  </button>
+                  <p class="field-hint">01–60 o No tengo</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-block">
+              <label for="vinEncargado">Supervisor global
+                <input id="vinEncargado" type="text" placeholder="Nombre completo" required autocomplete="off" maxlength="80" />
+              </label>
+              <p class="field-hint">Nombre del supervisor de ese grupo</p>
+            </div>
+
+            <button type="submit" class="btn btn-primary btn-block btn-lg">
+              Guardar
+            </button>
+
+            <aside class="trust-note" aria-label="Aviso de privacidad">
+              <span class="trust-note-ico" data-icon="shield"></span>
+              <div>
+                <strong>Gracias por un registro rápido y confiable</strong>
+                <p>Su información quedará guardada y asegurada dentro de la empresa.</p>
+              </div>
+            </aside>
+          </form>
+        </div>
+
+        <div class="thanks-card" id="vinculoThanks" hidden>
+          <span class="thanks-ico" data-icon="check"></span>
+          <h2>¡Gracias!</h2>
+          <p class="thanks-lead">Su registro quedó en el celular y se envía a la base de datos.</p>
+          <p class="thanks-sub">La información queda asegurada para uso interno de la empresa.</p>
+          <div class="thanks-meta">
+            <span id="thanksDni">—</span>
+            <span id="thanksNombre">—</span>
+          </div>
+          <p class="thanks-sync" id="thanksSyncStatus" hidden></p>
+          <button type="button" class="thanks-retry" id="btnThanksRescan">Escanear nuevamente</button>
+          <button type="button" class="thanks-continue" id="btnThanksContinue">Ir al inicio</button>
+        </div>
+      </main>
+
+      <div class="picker-backdrop" id="picker" hidden>
+        <div class="picker" role="dialog" aria-modal="true" aria-labelledby="pickerTitle">
+          <div class="picker-head">
+            <h3 id="pickerTitle">Buscar</h3>
+            <button type="button" class="picker-x" id="pickerClose" aria-label="Cerrar">
+              <span data-icon="x"></span>
+            </button>
+          </div>
+          <div class="picker-search">
+            <span data-icon="search" class="picker-search-ico"></span>
+            <input id="pickerQuery" type="search" placeholder="Buscar..." autocomplete="off" />
+          </div>
+          <div class="picker-list" id="pickerList" role="listbox"></div>
+          <button type="button" class="picker-add" id="pickerAdd">Agregar uno</button>
+        </div>
+      </div>
+
+      <nav class="app-tabbar" id="appTabbar" aria-label="Navegación principal">
+        <button type="button" data-tab="inicio">
+          <span data-icon="home"></span><em>Inicio</em>
+        </button>
+        <button type="button" data-tab="registro">
+          <span data-icon="clipboard"></span><em>Registro</em>
+        </button>
+        <button type="button" data-tab="vincular" class="tab-main is-active" aria-label="Vincular">
+          <span class="tab-main-circle" data-icon="plus"></span>
+        </button>
+        <button type="button" data-tab="excel">
+          <span data-icon="fileSpreadsheet"></span><em>Excel</em>
+        </button>
+        <button type="button" data-tab="ayuda">
+          <span data-icon="info"></span><em>Ayuda</em>
+        </button>
+      </nav>
+
+      <div class="toast" id="toast" hidden></div>
+    </div>
+  </div>
+</body>
+</html>

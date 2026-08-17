@@ -7,24 +7,19 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="mobile-web-app-capable" content="yes" />
-  <meta name="description" content="QBerries Supervisores — Guía interna de cosecha" />
-  <link rel="manifest" href="manifest.json" />
-  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
-  <link rel="icon" href="assets/favicon.png" type="image/png" sizes="64x64" />
-  <link rel="apple-touch-icon" href="assets/icon-192.png" />
-  <title>QBerries · Supervisores</title>
-  <link rel="stylesheet" href="styles.css?v=89" />
-  <script src="vendor/xlsx.full.min.js?v=89" defer></script>
-  <script src="vendor/jspdf.umd.min.js?v=89" defer></script>
-  <script src="vendor/jsQR.min.js?v=89" defer></script>
-  <script src="icons.js?v=89" defer></script>
-  <script src="app.js?v=89" defer></script>
+  <meta name="description" content="Acceso de supervisores QBerries mediante carnet QR" />
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="icon" href="/assets/icon-192.png" type="image/png" sizes="192x192" />
+  <link rel="apple-touch-icon" href="/assets/icon-192.png" sizes="192x192" />
+  <title>QBerries · Acceso</title>
+  <link rel="stylesheet" href="/styles.css?v=153" />
+  <script src="/vendor/jsQR.min.js?v=153" defer></script>
+  <script src="/icons.js?v=153" defer></script>
+  <script src="/app.js?v=153" defer></script>
 </head>
-<body>
+<body data-page="scan" class="app-booting">
   <div class="stage">
     <div class="phone" id="phone">
-      <div class="phone-notch" aria-hidden="true"></div>
-
       <span id="netPill" class="status-chip is-online" title="Estado de conexión">
         <span class="status-dot"></span>
         <span class="status-text">Con internet</span>
@@ -32,44 +27,49 @@
 
       <div class="lock-screen" id="lockScreen" hidden>
         <div class="lock-badge" id="netBadgeLock"></div>
-        <img class="lock-logo" src="assets/logo-qberries.png" alt="QBerries" />
-        <h1>Supervisores</h1>
-        <p>Contraseña desactivada · use QR</p>
+        <img class="lock-logo" src="/assets/logo-qberries.png" alt="QBerries" />
+        <span class="auth-step">SEGUNDO PASO</span>
+        <h1 id="loginTitle">Confirme su identidad</h1>
+        <p id="loginCopy">Escanee primero su carnet QR</p>
         <form class="login-form" id="loginForm" autocomplete="off" hidden>
           <div class="input-ico">
             <span data-icon="lock" class="field-ico"></span>
-            <input id="loginPass" type="password" name="password" placeholder="Contraseña" autocomplete="current-password" />
+            <input id="loginPass" type="password" name="password" placeholder="Contraseña personal" autocomplete="current-password" inputmode="numeric" maxlength="20" />
           </div>
           <button type="submit" class="btn btn-primary btn-block btn-lg" id="btnLogin">
-            <span data-icon="check"></span> Continuar
+            <span data-icon="shield"></span> Confirmar acceso
           </button>
+          <button type="button" class="auth-cancel" id="btnCancelLogin">Escanear otro carnet</button>
         </form>
         <p class="pin-msg" id="pinMsg"></p>
-        <p class="pin-hint" id="pinHint">Escanee su carnet QR para entrar</p>
+        <p class="pin-hint" id="pinHint">Ingrese su contraseña personal</p>
       </div>
 
-      <!-- Login: solo QR (visible al cargar: evita pantalla en blanco) -->
-      <div class="security-screen" id="securityScreen">
+      <main class="security-screen" id="securityScreen">
         <div class="hero-head">
           <div class="hero-head-left">
-            <img class="hero-logo" src="assets/logo-qberries.png" alt="QBerries" />
+            <img class="hero-logo" src="/assets/logo-qberries.png" alt="QBerries" />
             <div class="hero-head-copy">
               <span class="hero-brand">Q BERRIES</span>
               <h1>Escanear carnet</h1>
               <p>Solo Supervisores de Cosecha</p>
             </div>
           </div>
-          <div class="hero-status">
-            <span class="net-badge is-online" data-net-online>
-              <span class="status-dot"></span>
-              <span class="net-online-text">Con internet</span>
-            </span>
-            <span class="net-badge is-queue" data-net-pending>
-              <span data-icon="upload"></span>
-              <span class="net-pending-text">0 pendientes</span>
-            </span>
+          <div class="hero-aside">
+            <div class="hero-status">
+              <span class="net-badge is-online" data-net-online>
+                <span class="status-dot"></span>
+                <span class="net-online-text">Con internet</span>
+              </span>
+              <span class="net-badge is-queue" data-net-pending>
+                <span data-icon="upload"></span>
+                <span class="net-pending-text">0 pendientes</span>
+              </span>
+            </div>
+            <button type="button" class="hero-logout" id="btnSecBack" hidden>Cerrar sesión</button>
           </div>
         </div>
+
         <div class="sec-card">
           <p class="muted small" id="trabCount">Listo para escanear</p>
           <div class="qr-frame" id="qrFrame">
@@ -91,393 +91,40 @@
             <button type="button" class="btn btn-block" id="btnStopCam" hidden>Detener cámara</button>
           </div>
           <p class="sec-msg" id="secMsg"></p>
-          <button type="button" class="btn btn-block btn-ghost" id="btnSecBack" hidden>
-            Cerrar sesión
-          </button>
-        </div>
-      </div>
-
-      <!-- Vincular celular (una vez tras QR) -->
-      <div class="security-screen" id="vinculoScreen" hidden>
-        <div class="hero-head">
-          <div class="hero-head-left">
-            <img class="hero-logo" src="assets/logo-qberries.png" alt="QBerries" />
-            <div class="hero-head-copy">
-              <span class="hero-brand">Q BERRIES</span>
-              <h1>Vincular datos</h1>
-              <p>Complete celular y supervisor</p>
-              <strong class="hero-dni" id="vinHeroDni"></strong>
-            </div>
-          </div>
-          <div class="hero-status">
-            <span class="net-badge is-online" data-net-online>
-              <span class="status-dot"></span>
-              <span class="net-online-text">Con internet</span>
-            </span>
-            <span class="net-badge is-queue" data-net-pending>
-              <span data-icon="upload"></span>
-              <span class="net-pending-text">0 pendientes</span>
-            </span>
-          </div>
-        </div>
-        <div class="id-summary" aria-label="Datos del carnet">
-          <div class="id-summary-row">
-            <span>DNI</span>
-            <strong id="vinDniShow">—</strong>
-          </div>
-          <div class="id-summary-row">
-            <span>Nombre</span>
-            <strong id="vinNombreShow">—</strong>
-          </div>
-        </div>
-        <form class="session-form vinculo-form" id="vinculoForm">
-          <input id="vinDni" type="hidden" />
-          <input id="vinNombre" type="hidden" />
-
-          <div class="form-block">
-            <label for="vinCelular">Celular
-              <input id="vinCelular" type="tel" inputmode="numeric" pattern="9[0-9]{8}" maxlength="9" placeholder="9XXXXXXXX" required autocomplete="tel" />
-            </label>
-            <p class="field-hint">9 dígitos · debe comenzar con 9</p>
-          </div>
-
-          <div class="form-block">
-            <div class="vin-grupo-pair">
-              <div class="vin-grupo-col">
-                <span class="field-label">Grupo LIC</span>
-                <input type="hidden" id="vinGrupoLic" value="" />
-                <button type="button" class="select-trigger" id="btnVinGrupoLic" aria-label="Elegir Grupo LIC">
-                  <span id="vinGrupoLicLabel" class="ph">Elegir</span>
-                  <span class="chev" data-icon="search"></span>
-                </button>
-                <p class="field-hint">01–60 o No tengo</p>
-              </div>
-              <div class="vin-grupo-col">
-                <span class="field-label">Grupo</span>
-                <input type="hidden" id="vinGrupo" value="" />
-                <button type="button" class="select-trigger" id="btnVinGrupo" aria-label="Elegir Grupo">
-                  <span id="vinGrupoLabel" class="ph">Elegir</span>
-                  <span class="chev" data-icon="search"></span>
-                </button>
-                <p class="field-hint">01–60 o No tengo</p>
-              </div>
-            </div>
-          </div>
-
-          <div class="form-block">
-            <label for="vinEncargado">Supervisor global
-              <input id="vinEncargado" type="text" placeholder="Nombre completo" required autocomplete="off" maxlength="80" />
-            </label>
-            <p class="field-hint">Nombre del supervisor de ese grupo</p>
-          </div>
-
-          <button type="submit" class="btn btn-primary btn-block btn-lg">
-            <span data-icon="check"></span> Guardar
-          </button>
-
-          <aside class="trust-note" aria-label="Aviso de privacidad">
-            <span class="trust-note-ico" data-icon="shield"></span>
-            <div>
-              <strong>Gracias por un registro rápido y confiable</strong>
-              <p>Su información quedará guardada y asegurada dentro de la empresa.</p>
-            </div>
-          </aside>
-        </form>
-
-        <div class="thanks-card" id="vinculoThanks" hidden>
-          <span class="thanks-ico" data-icon="check"></span>
-          <h2>¡Gracias!</h2>
-          <p class="thanks-lead">Su registro quedó en el celular y se envía a la base de datos.</p>
-          <p class="thanks-sub">La información queda asegurada para uso interno de la empresa.</p>
-          <div class="thanks-meta">
-            <span id="thanksDni">—</span>
-            <span id="thanksNombre">—</span>
-          </div>
-          <p class="thanks-sync" id="thanksSyncStatus" hidden></p>
-          <button type="button" class="thanks-retry" id="btnThanksRescan">
-            Escanear nuevamente
-          </button>
-        </div>
-      </div>
-
-      <div class="session-screen" id="sessionScreen" hidden>
-        <div class="hero-head">
-          <div class="hero-head-left">
-            <img class="hero-logo" src="assets/logo-qberries.png" alt="QBerries" />
-            <div class="hero-head-copy">
-              <span class="hero-brand">Q BERRIES</span>
-              <h1>Datos de campo</h1>
-              <p>Una sola vez · sesión con QR</p>
-              <strong class="hero-dni" id="sesHeroDni"></strong>
-            </div>
-          </div>
-          <div class="hero-status">
-            <span class="net-badge is-online" data-net-online>
-              <span class="status-dot"></span>
-              <span class="net-online-text">Con internet</span>
-            </span>
-            <span class="net-badge is-queue" data-net-pending>
-              <span data-icon="upload"></span>
-              <span class="net-pending-text">0 pendientes</span>
-            </span>
-          </div>
-        </div>
-        <form class="session-form" id="sessionForm">
-          <label>Fundo
-            <input id="sesFundo" type="text" placeholder="Ej. Licapa" required autocomplete="off" />
-          </label>
-          <div class="pair">
-            <label>DNI supervisor
-              <input id="sesSupDni" type="text" inputmode="numeric" maxlength="12" placeholder="DNI" required autocomplete="off" />
-            </label>
-            <label>Nombre
-              <input id="sesSupNombre" type="text" placeholder="Al poner DNI" autocomplete="off" disabled />
-            </label>
-          </div>
-          <div class="pair">
-            <label>DNI javero
-              <input id="sesJavDni" type="text" inputmode="numeric" maxlength="12" placeholder="DNI" required autocomplete="off" />
-            </label>
-            <label>Nombre
-              <input id="sesJavNombre" type="text" placeholder="Al poner DNI" autocomplete="off" disabled />
-            </label>
-          </div>
-          <div class="session-date-row">
-            <div>
-              <small>Fecha de cosecha</small>
-              <p>Toque el círculo para cambiar</p>
-            </div>
-            <button type="button" class="rail-date" id="btnSesDate" aria-label="Elegir fecha">
-              <svg class="rail-ring" viewBox="0 0 72 72" aria-hidden="true">
-                <circle class="rail-ring-track" cx="36" cy="36" r="30" />
-                <circle class="rail-ring-prog" id="sesRingProg" cx="36" cy="36" r="30" />
-              </svg>
-              <span class="rail-date-inner">
-                <strong id="sesDay">—</strong>
-                <em id="sesMon">—</em>
-              </span>
-            </button>
-            <input type="date" id="sesFecha" class="date-ghost" tabindex="-1" aria-hidden="true" />
-          </div>
-          <button type="submit" class="btn btn-primary btn-block btn-lg">
-            <span data-icon="check"></span> Empezar registro
-          </button>
-
-          <aside class="trust-note" aria-label="Aviso">
-            <span class="trust-note-ico" data-icon="shield"></span>
-            <div>
-              <strong>Gracias por un registro rápido y confiable</strong>
-              <p>Sus datos quedan guardados de forma segura para uso interno de la empresa.</p>
-            </div>
-          </aside>
-        </form>
-      </div>
-
-      <div class="app" id="appRoot" hidden>
-        <header class="hero">
-          <div class="hero-top">
-            <div class="hero-title">
-              <span class="hero-label">Registro:</span>
-              <strong>Guías</strong>
-            </div>
-            <div class="status-box" id="netChip">
-              <span data-icon="wifi" id="netChipIco"></span>
-              <div>
-                <small id="kpiGuiasHero">GUÍAS: 0</small>
-                <em><i id="netDot"></i> <span id="netChipText">En línea</span></em>
-              </div>
-            </div>
-          </div>
-          <button type="button" class="hero-panel" id="btnEditSession">
-            <div>
-              <small>SESIÓN DE CAMPO</small>
-              <div class="hero-tags">
-                <span class="htag" id="sbFundo">—</span>
-                <span class="htag" id="sbSup">—</span>
-              </div>
-            </div>
-            <span data-icon="chevronDown" class="hero-chev"></span>
-          </button>
-        </header>
-
-        <div class="app-body">
-          <div class="app-scroll">
-            <section class="info-row">
-              <article class="info-card">
-                <div>
-                  <h3>Totales del día</h3>
-                  <p>Suma automática de todas las guías</p>
-                </div>
-                <div class="info-stats">
-                  <div><b id="kpiJarras">0</b><span>Jarras</span></div>
-                  <div><b id="kpiJabas">0</b><span>Jabas</span></div>
-                </div>
-              </article>
-            </section>
-
-            <div class="section-label">
-              <span>Guías registradas</span>
-              <strong id="kpiGuias">0</strong>
-            </div>
-
-            <main class="cards" id="cards"></main>
-            <p class="meta" id="metaLine">Listo para guardar / enviar</p>
-          </div>
-
-          <aside class="side-rail" aria-label="Acciones rápidas">
-            <button type="button" class="rail-btn rail-pdf" id="btnRailPdf" aria-label="Exportar PDF">
-              <span data-icon="fileText"></span>
-            </button>
-            <button type="button" class="rail-date" id="btnRailDate" aria-label="Fecha de cosecha">
-              <svg class="rail-ring" viewBox="0 0 72 72" aria-hidden="true">
-                <circle class="rail-ring-track" cx="36" cy="36" r="30" />
-                <circle class="rail-ring-prog" id="railRingProg" cx="36" cy="36" r="30" />
-              </svg>
-              <span class="rail-date-inner">
-                <strong id="railDay">—</strong>
-                <em id="railMon">—</em>
-              </span>
-            </button>
-            <button type="button" class="rail-btn rail-more" id="btnRailMore" aria-label="Más opciones">
-              <span data-icon="more"></span>
-            </button>
-            <input type="date" id="railFechaInput" class="date-ghost" tabindex="-1" aria-hidden="true" />
-          </aside>
         </div>
 
-        <button type="button" class="fab" id="btnAgregarGuia" aria-label="Nueva guía">
-          <span data-icon="plus"></span>
-        </button>
-
-        <nav class="bottom-nav">
-          <button type="button" class="nav-item active" data-panel="registro">
-            <span data-icon="clipboard"></span>
-            <em>Registro</em>
-          </button>
-          <button type="button" class="nav-item" data-panel="export">
-            <span data-icon="upload"></span>
-            <em>Exportar</em>
-          </button>
-          <button type="button" class="nav-item" data-panel="ajustes">
-            <span data-icon="settings"></span>
-            <em>Ajustes</em>
-          </button>
-          <button type="button" class="nav-item" id="btnMenu" data-panel="menu">
-            <span data-icon="menu"></span>
-            <em>Más</em>
-          </button>
-        </nav>
-      </div>
-
-      <div class="sheet" id="sheetExport" hidden>
-        <div class="sheet-handle"></div>
-        <h2>Exportar</h2>
-        <p class="muted">Envía o descarga lo registrado (con totales).</p>
-        <button type="button" class="btn btn-block btn-primary btn-row" id="btnSyncCloud">
-          <span data-icon="cloud"></span> Subir a la nube
-        </button>
-        <button type="button" class="btn btn-block btn-row" id="btnExportExcel">
-          <span data-icon="fileSpreadsheet"></span> Exportar Excel
-        </button>
-        <button type="button" class="btn btn-block btn-row" id="btnExportPdf">
-          <span data-icon="fileText"></span> Exportar PDF
-        </button>
-        <button type="button" class="btn btn-block btn-danger-outline btn-row" id="btnVaciar">
-          <span data-icon="trash"></span> Vaciar guías
-        </button>
-        <button type="button" class="btn btn-block btn-ghost" data-close-sheet>Cerrar</button>
-      </div>
-
-      <div class="sheet" id="sheetAjustes" hidden>
-        <div class="sheet-handle"></div>
-        <h2>Ajustes</h2>
-        <button type="button" class="btn btn-block btn-row" id="btnEditSession2">
-          <span data-icon="clipboard"></span> Editar sesión
-        </button>
-        <button type="button" class="btn btn-block btn-row" id="btnUpdPersonas">
-          <span data-icon="refresh"></span> Actualizar personas (Excel)
-        </button>
-        <button type="button" class="btn btn-block btn-row" id="btnCambiarPin" hidden>
-          <span data-icon="key"></span> Cambiar contraseña
-        </button>
-        <button type="button" class="btn btn-block btn-row" id="btnBloquear">
-          <span data-icon="scan"></span> Cerrar sesión (QR)
-        </button>
-        <p class="muted small" id="envHint">Netlify: LOGIN_PIN · API_TOKEN · APPS_SCRIPT_URL</p>
-        <p class="muted small" id="offlineHint">Modo offline activo</p>
-        <button type="button" class="btn btn-block btn-ghost" data-close-sheet>Cerrar</button>
-      </div>
-
-      <div class="sheet" id="sheetMenu" hidden>
-        <div class="sheet-handle"></div>
-        <h2>Más acciones</h2>
-        <button type="button" class="btn btn-block btn-row" id="btnMenuExcel">
-          <span data-icon="fileSpreadsheet"></span> Exportar Excel
-        </button>
-        <button type="button" class="btn btn-block btn-row" id="btnMenuPdf">
-          <span data-icon="fileText"></span> Exportar PDF
-        </button>
-        <button type="button" class="btn btn-block btn-danger-outline btn-row" id="btnMenuVaciar">
-          <span data-icon="trash"></span> Vaciar guías
-        </button>
-        <button type="button" class="btn btn-block btn-ghost" data-close-sheet>Cerrar</button>
-      </div>
-
-      <input type="file" id="filePersonas" accept=".xlsx,.xls,.csv" hidden />
-
-      <div class="modal-backdrop" id="modal" hidden>
-        <div class="modal" role="dialog" aria-modal="true">
-          <div class="modal-ico" data-icon="trash"></div>
-          <h3 id="modalTitle">Confirmar</h3>
-          <p id="modalBody">¿Continuar?</p>
-          <div class="modal-actions">
-            <button type="button" class="btn btn-ghost" id="modalCancel">Cancelar</button>
-            <button type="button" class="btn btn-danger" id="modalOk">Eliminar</button>
+        <aside class="app-info" aria-label="Información de la app">
+          <div class="app-info-head">
+            <div class="app-info-avatar" data-icon="user"></div>
+            <div class="app-info-title">
+              <strong>QBerries · Supervisores</strong>
+              <p>Escanee su carnet · datos seguros en la empresa</p>
+              <p class="app-info-help">Si aún no está registrado o tiene alguna duda, comuníquese con Operaciones.</p>
+            </div>
           </div>
-        </div>
-      </div>
+        </aside>
+      </main>
 
-      <div class="picker-backdrop" id="picker" hidden>
-        <div class="picker" role="dialog" aria-modal="true" aria-labelledby="pickerTitle">
-          <div class="picker-head">
-            <h3 id="pickerTitle">Buscar</h3>
-            <button type="button" class="picker-x" id="pickerClose" aria-label="Cerrar">
-              <span data-icon="x"></span>
-            </button>
-          </div>
-          <div class="picker-search">
-            <span data-icon="search" class="picker-search-ico"></span>
-            <input id="pickerQuery" type="search" placeholder="Buscar..." autocomplete="off" />
-          </div>
-          <div class="picker-list" id="pickerList" role="listbox"></div>
-          <button type="button" class="picker-add" id="pickerAdd">Agregar uno</button>
-        </div>
-      </div>
+      <nav class="app-tabbar" id="appTabbar" aria-label="Navegación principal">
+        <button type="button" data-tab="inicio">
+          <span data-icon="home"></span><em>Inicio</em>
+        </button>
+        <button type="button" data-tab="registro">
+          <span data-icon="clipboard"></span><em>Registro</em>
+        </button>
+        <button type="button" data-tab="vincular" class="tab-main" aria-label="Vincular">
+          <span class="tab-main-circle" data-icon="plus"></span>
+        </button>
+        <button type="button" data-tab="excel">
+          <span data-icon="fileSpreadsheet"></span><em>Excel</em>
+        </button>
+        <button type="button" data-tab="ayuda">
+          <span data-icon="info"></span><em>Ayuda</em>
+        </button>
+      </nav>
 
       <div class="toast" id="toast" hidden></div>
     </div>
   </div>
-  <script>
-    (function () {
-      function bootUi() {
-        var ids = ["securityScreen", "vinculoScreen", "sessionScreen", "appRoot", "lockScreen"];
-        var any = ids.some(function (id) {
-          var el = document.getElementById(id);
-          return el && !el.hidden;
-        });
-        if (!any) {
-          var sec = document.getElementById("securityScreen");
-          if (sec) sec.hidden = false;
-        }
-      }
-      if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", bootUi);
-      } else {
-        bootUi();
-      }
-      setTimeout(bootUi, 800);
-      setTimeout(bootUi, 2500);
-    })();
-  </script>
 </body>
 </html>

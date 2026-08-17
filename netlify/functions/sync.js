@@ -1,5 +1,7 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
+
 /**
- * Proxy seguro a Google Apps Script · Supervisores (vínculos).
+ * Proxy seguro a Google Apps Script · vínculos, cosecha y altas manuales.
  * Env Netlify: APPS_SCRIPT_URL + API_TOKEN
  * POST { action, data|payload, pin }
  * El celular hace POST a esta function; esta function hace GET a Apps Script (más rápido).
@@ -85,16 +87,44 @@ function json(statusCode, payload) {
   };
 }
 
-async function callAppsScript(scriptUrl, params) {
+function verifyAuthToken(token, expectedDni, secret) {
+  try {
+    const [payload, suppliedSignature] = String(token || "").split(".");
+    if (!payload || !suppliedSignature || !secret) return false;
+    const expectedSignature = createHmac("sha256", secret)
+      .update(payload)
+      .digest("base64url");
+    const supplied = Buffer.from(suppliedSignature);
+    const expected = Buffer.from(expectedSignature);
+    if (
+      supplied.length !== expected.length ||
+      !timingSafeEqual(supplied, expected)
+    ) {
+      return false;
+    }
+    const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    return digits(claims?.dni) === digits(expectedDni);
+  } catch {
+    return false;
+  }
+}
+
+async function callAppsScript(scriptUrl, params, method = "GET") {
   const u = new URL(String(scriptUrl).split("?")[0]);
-  Object.entries(params || {}).forEach(([k, v]) => {
-    if (v == null) return;
-    u.searchParams.set(k, String(v));
-  });
+  if (method === "GET") {
+    Object.entries(params || {}).forEach(([k, v]) => {
+      if (v == null) return;
+      u.searchParams.set(k, String(v));
+    });
+  }
   const res = await fetch(u.toString(), {
-    method: "GET",
+    method,
     redirect: "follow",
-    headers: { Accept: "application/json, text/javascript, */*" },
+    headers: {
+      Accept: "application/json, text/javascript, */*",
+      ...(method === "POST" ? { "Content-Type": "application/json" } : {}),
+    },
+    body: method === "POST" ? JSON.stringify(params || {}) : undefined,
   });
   const text = await res.text();
   let parsed = null;
@@ -148,6 +178,19 @@ export async function handler(event) {
     if (!data.dni || data.dni.length < 8) {
       return json(400, { ok: false, error: "DNI inválido" });
     }
+    // Contraseña en pausa: no exigir authToken (activar con REQUIRE_AUTH_TOKEN=1)
+    const requireAuth =
+      String(process.env.REQUIRE_AUTH_TOKEN || "").trim() === "1";
+    if (
+      requireAuth &&
+      !verifyAuthToken(body.authToken, data.dni, apiToken)
+    ) {
+      return json(401, {
+        ok: false,
+        code: "AUTH_REQUIRED",
+        error: "Sesión no válida. Escanee el carnet e ingrese su contraseña.",
+      });
+    }
     if (!/^9\d{8}$/.test(data.celular)) {
       return json(400, {
         ok: false,
@@ -165,6 +208,29 @@ export async function handler(event) {
     }
     if (!isValidGrupoNum(String(data.grupo || ""))) {
       return json(400, { ok: false, error: "Grupo inválido" });
+    }
+  }
+  if (action === "registrarCosecha") {
+    const workers = Array.isArray(data?.workers) ? data.workers : [];
+    if (!data?.id || !data?.fecha || !workers.length) {
+      return json(400, {
+        ok: false,
+        error: "Registro de cosecha incompleto",
+      });
+    }
+    if (!digits(data?.supervisorDni)) {
+      return json(400, {
+        ok: false,
+        error: "Falta DNI del supervisor",
+      });
+    }
+  }
+  if (action === "registrarManual") {
+    if (digits(data?.dni).length !== 8 || !cleanText(data?.nombre)) {
+      return json(400, {
+        ok: false,
+        error: "Trabajador manual incompleto",
+      });
     }
   }
 
@@ -189,6 +255,12 @@ export async function handler(event) {
             token: apiToken,
             dni: digits(rawData?.dni || data?.dni),
           }
+        : action === "registrarCosecha" || action === "registrarManual"
+          ? {
+              action,
+              token: apiToken,
+              data: JSON.stringify(data),
+            }
         : { action, token: apiToken };
 
   try {
@@ -209,7 +281,13 @@ export async function handler(event) {
       }
     }
 
-    const { res, text, parsed } = await callAppsScript(scriptUrl, params);
+    const usePost =
+      action === "registrarCosecha" || action === "registrarManual";
+    const { res, text, parsed } = await callAppsScript(
+      scriptUrl,
+      params,
+      usePost ? "POST" : "GET"
+    );
     const ok = !!(parsed && parsed.ok === true);
     if (!ok) {
       return json(502, {

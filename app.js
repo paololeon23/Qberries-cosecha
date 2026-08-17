@@ -6,6 +6,7 @@
   const SUPERVISORES_KEY = "qb-supervisores-cosecha-v1";
   const PERSONAS_META_KEY = "qb-trabajadores-meta-v1";
   const VINCULO_QUEUE_KEY = "qb-supervisores-vinculo-queue-v1";
+  const CLOUD_DATA_QUEUE_KEY = "qb-supervisores-data-queue-v1";
   const VINCULO_DONE_KEY = "qb-supervisores-vinculo-done-v1";
   const CUSTOM_CATALOG_KEY = "qb-supervisores-catalog-extra-v1";
   const PIN_KEY = "qb-supervisores-pin-v2";
@@ -13,11 +14,30 @@
   const SESSION_PIN_KEY = "qb-supervisores-session-pin";
   const IDENTITY_KEY = "qb-supervisores-identity";
   const IDENTITY_LS_KEY = "qb-supervisores-identity-ls";
+  const AUTH_SESSION_KEY = "qb-supervisores-auth-v1";
+  const HARVEST_KEY = "qb-supervisores-harvest-v1";
+  const HARVEST_HISTORY_KEY = "qb-supervisores-excel-history-v1";
+  const SESSION_MANUAL_PERSONAS_KEY = "qb-supervisores-manual-personas-v1";
+  const HISTORY_TTL_MS = 48 * 60 * 60 * 1000;
+  const HISTORY_PAGE_SIZE = 8;
+  const APP_VERSION = "v153";
+  const HARVEST_TYPES = [
+    { key: "suma-jarras", label: "Suma de jarras", observacion: "SUMAR JARRAS" },
+    { key: "descuento-jarras", label: "Descuento jarras", observacion: "DESCUENTO JARRAS" },
+    { key: "descarte-deshidratado", label: "Descarte - deshidratado", observacion: "DESCARTE - DESHIDRATADO" },
+  ];
   const DEFAULT_PIN = "";
-  /** Contraseña desactivada por ahora: acceso solo con QR */
+  /** Contraseña en pausa: por ahora solo QR. Reactivar con true cuando toque. */
   const PASSWORD_REQUIRED = false;
   /** Por ahora: tras vincular NO pasar a Datos de campo */
   const SESSION_FORM_ENABLED = false;
+  const PAGE = document.body?.dataset?.page || "scan";
+  const ROUTES = {
+    scan: "/index.html",
+    inicio: "/inicio/",
+    vinculo: "/vinculo/",
+    registro: "/registro/",
+  };
   const API = {
     login: "/.netlify/functions/login",
     sync: "/.netlify/functions/sync",
@@ -26,6 +46,24 @@
 
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+  let navigationLocked = false;
+
+  function beginNavigation(target, replace = false) {
+    if (navigationLocked) return;
+    navigationLocked = true;
+    document.body.classList.add("app-navigating");
+    if (replace) location.replace(target);
+    else location.assign(target);
+  }
+
+  function goTo(page, replace = false) {
+    const target = ROUTES[page] || ROUTES.scan;
+    if (navigationLocked) return;
+    const currentPath = location.pathname.replace(/index\.html$/, "");
+    const targetPath = new URL(target, location.origin).pathname.replace(/index\.html$/, "");
+    if (currentPath === targetPath && !location.search) return;
+    beginNavigation(target, replace);
+  }
 
   function todayISO() {
     const d = new Date();
@@ -89,9 +127,21 @@
     jabas: "",
   });
 
+  const emptyHarvest = () => ({
+    fecha: todayISO(),
+    tipo: "suma-jarras",
+    lote: "",
+    codLote: "",
+    modulo: "",
+    turno: "",
+    variedad: "",
+    workers: [],
+  });
+
   const state = {
     session: emptySession(),
     guias: /** @type {Guia[]} */ ([]),
+    harvest: emptyHarvest(),
     personas: /** @type {Record<string,{nombre:string,cargo?:string,celular?:string}>} */ ({}),
     supervisores: /** @type {Record<string,{nombre:string,cargo?:string,celular?:string}>} */ ({}),
     lotes: /** @type {{lote:string,codLote?:string,modulo:string,turno:string,variedad?:string}[]} */ ([]),
@@ -103,11 +153,18 @@
     /** true = /.netlify/functions disponibles */
     cloudApi: false,
     unlocking: false,
+    pendingIdentity: null,
     online: typeof navigator !== "undefined" ? navigator.onLine : true,
     camStream: /** @type {MediaStream|null} */ (null),
     camTimer: 0,
     lastScanDni: "",
     lastScanAt: 0,
+    thanksRedirect: false,
+    thanksRedirectTimer: 0,
+    activeExportSnapshot: null,
+    activeExportSaved: false,
+    historyPage: 0,
+    sessionManualPersonas: /** @type {Record<string,{nombre:string,manual?:boolean}>} */ ({}),
     audioCtx: /** @type {AudioContext|null} */ (null),
   };
 
@@ -157,6 +214,39 @@
     updateMeta();
   }
 
+  function loadHarvest() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(HARVEST_KEY) || "null");
+      if (!parsed || typeof parsed !== "object") {
+        state.harvest = emptyHarvest();
+        return;
+      }
+      state.harvest = {
+        ...emptyHarvest(),
+        ...parsed,
+        workers: Array.isArray(parsed.workers)
+          ? parsed.workers.map((w) => ({
+              id: w.id || uid(),
+              dni: String(w.dni || "").replace(/\D/g, ""),
+              nombre: String(w.nombre || "").trim().toUpperCase(),
+              manana: Math.max(0, num(w.manana)),
+              tarde: Math.max(0, num(w.tarde)),
+              manual: !!w.manual,
+            }))
+          : [],
+      };
+    } catch {
+      state.harvest = emptyHarvest();
+    }
+  }
+
+  function saveHarvest() {
+    localStorage.setItem(
+      HARVEST_KEY,
+      JSON.stringify({ ...state.harvest, savedAt: new Date().toISOString() })
+    );
+  }
+
   function savePersonas() {
     localStorage.setItem(PERSONAS_KEY, JSON.stringify(state.personas));
   }
@@ -172,9 +262,49 @@
     savePersonas();
   }
 
+  /** Altas manuales: solo en el celular hasta cerrar sesión */
+  function loadSessionManualPersonas() {
+    try {
+      const parsed = JSON.parse(
+        sessionStorage.getItem(SESSION_MANUAL_PERSONAS_KEY) || "{}"
+      );
+      state.sessionManualPersonas =
+        parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      state.sessionManualPersonas = {};
+    }
+  }
+
+  function saveSessionManualPersonas() {
+    sessionStorage.setItem(
+      SESSION_MANUAL_PERSONAS_KEY,
+      JSON.stringify(state.sessionManualPersonas || {})
+    );
+  }
+
+  function rememberSessionPersona(dni, nombre) {
+    const key = String(dni || "").replace(/\D/g, "");
+    const name = String(nombre || "")
+      .trim()
+      .replace(/\s+/g, " ")
+      .toUpperCase();
+    if (key.length !== 8 || name.length < 3) return;
+    state.sessionManualPersonas[key] = { nombre: name, manual: true };
+    saveSessionManualPersonas();
+  }
+
+  function clearSessionManualPersonas() {
+    state.sessionManualPersonas = {};
+    sessionStorage.removeItem(SESSION_MANUAL_PERSONAS_KEY);
+  }
+
   function lookupPersona(dni) {
     const key = String(dni || "").replace(/\D/g, "");
-    return state.personas[key] || null;
+    return (
+      state.sessionManualPersonas[key] ||
+      state.personas[key] ||
+      null
+    );
   }
 
   /** Solo supervisores de cosecha (Reporte Horas) pueden iniciar sesión */
@@ -259,8 +389,8 @@
     let baseLotes = [];
     try {
       const [gRes, lRes] = await Promise.all([
-        fetch("data/grupos-licapa.json", { cache: "force-cache" }),
-        fetch("data/lotes-licapa.json", { cache: "force-cache" }),
+        fetch("/data/grupos-licapa.json", { cache: "force-cache" }),
+        fetch("/data/lotes-licapa.json", { cache: "force-cache" }),
       ]);
       if (gRes.ok) baseGrupos = await gRes.json();
       if (lRes.ok) baseLotes = await lRes.json();
@@ -455,22 +585,35 @@
   }
 
   function openPicker(kind, guiaId) {
-    if (kind === "grupoLic" || kind === "grupoNum") {
+    if (
+      kind === "grupoLic" ||
+      kind === "grupoNum" ||
+      kind === "harvestLote" ||
+      kind === "harvestType"
+    ) {
       state.picker = { kind, guiaId: "" };
       const title = $("#pickerTitle");
       const query = $("#pickerQuery");
+      const search = query?.closest(".picker-search");
       const addBtn = $("#pickerAdd");
       if (title) {
-        title.textContent =
-          kind === "grupoLic" ? "Buscar Grupo LIC" : "Buscar Grupo";
+        title.textContent = kind === "grupoLic"
+          ? "Buscar Grupo LIC"
+          : kind === "grupoNum"
+            ? "Buscar Grupo"
+            : kind === "harvestType"
+              ? "Tipo de registro"
+              : "Buscar lote";
       }
       if (query) {
-        query.placeholder =
-          kind === "grupoLic"
+        query.placeholder = kind === "grupoLic"
             ? "Buscar Grupo LIC 01, 02…"
-            : "Buscar Grupo 01, 02…";
+            : kind === "grupoNum"
+              ? "Buscar Grupo 01, 02…"
+              : "Buscar lote...";
         query.value = "";
       }
+      if (search) search.hidden = kind === "harvestType";
       if (addBtn) addBtn.hidden = true;
       renderPickerList();
       const backdrop = $("#picker");
@@ -478,7 +621,7 @@
         backdrop.hidden = false;
         hydrateIcons(backdrop);
       }
-      setTimeout(() => query?.focus(), 60);
+      if (kind !== "harvestType") setTimeout(() => query?.focus(), 60);
       return;
     }
 
@@ -487,6 +630,7 @@
     state.picker = { kind, guiaId };
     const title = $("#pickerTitle");
     const query = $("#pickerQuery");
+    const search = query?.closest(".picker-search");
     const addBtn = $("#pickerAdd");
     if (title) {
       title.textContent = kind === "lote" ? "Buscar por lote" : "Buscar por grupo";
@@ -494,10 +638,11 @@
     if (query) {
       query.placeholder =
         kind === "lote"
-          ? "Buscar lote, módulo o turno..."
+          ? "Buscar lote..."
           : "Buscar grupo...";
       query.value = "";
     }
+    if (search) search.hidden = false;
     if (addBtn) {
       addBtn.hidden = false;
       addBtn.textContent = "Agregar uno";
@@ -543,6 +688,14 @@
         );
       });
     }
+    if (ctx.kind === "harvestType") {
+      return HARVEST_TYPES.map((item) => ({
+        key: item.key,
+        primary: item.label,
+        secondary: "",
+        raw: item,
+      }));
+    }
 
     if (ctx.kind === "grupo") {
       return state.grupos
@@ -557,12 +710,13 @@
     return state.lotes
       .filter((l) => {
         if (!q) return true;
-        const hay = `${l.lote} ${l.codLote || ""} ${l.modulo} ${l.turno} ${l.variedad || ""}`.toLowerCase();
-        return hay.includes(q);
+        const loteQuery = q.replace(/^lote\s*/i, "").trim();
+        const hay = `${l.lote} ${l.codLote || ""}`.toLowerCase();
+        return hay.includes(loteQuery);
       })
       .map((l) => ({
         key: l.lote,
-        primary: l.lote,
+        primary: `Lote ${l.lote}`,
         secondary: `${l.modulo || "—"} · T${l.turno || "—"} · ${l.variedad || l.codLote || ""}`.replace(/\s·\s$/, ""),
         raw: l,
       }));
@@ -577,6 +731,10 @@
       selected = $("#vinGrupoLic")?.value || "";
     } else if (state.picker?.kind === "grupoNum") {
       selected = $("#vinGrupo")?.value || "";
+    } else if (state.picker?.kind === "harvestLote") {
+      selected = state.harvest.lote || "";
+    } else if (state.picker?.kind === "harvestType") {
+      selected = state.harvest.tipo || "suma-jarras";
     } else if (state.picker && findGuia(state.picker.guiaId)) {
       selected =
         state.picker.kind === "lote"
@@ -621,6 +779,21 @@
       setVinGrupoUI(v);
       closePicker();
       toast(displayGrupo_(normGrupoNum_(v)));
+      return;
+    }
+    if (ctx.kind === "harvestLote") {
+      selectHarvestLote(v);
+      closePicker();
+      toast(`Lote ${v}`);
+      return;
+    }
+    if (ctx.kind === "harvestType") {
+      if (!HARVEST_TYPES.some((item) => item.key === v)) return;
+      state.harvest.tipo = v;
+      saveHarvest();
+      renderHarvestType();
+      closePicker();
+      toast(harvestTypeLabel(v));
       return;
     }
 
@@ -689,6 +862,44 @@
     }
   }
 
+  function authenticatedDni() {
+    try {
+      const auth = JSON.parse(localStorage.getItem(AUTH_SESSION_KEY) || "null");
+      return String(auth?.dni || "").replace(/\D/g, "");
+    } catch {
+      return "";
+    }
+  }
+
+  function authenticatedToken() {
+    try {
+      const auth = JSON.parse(localStorage.getItem(AUTH_SESSION_KEY) || "null");
+      return String(auth?.token || "");
+    } catch {
+      return "";
+    }
+  }
+
+  function saveAuthenticatedSession(identity, token) {
+    const dni = String(identity?.dni || "").replace(/\D/g, "");
+    if (!dni) return;
+    if (PASSWORD_REQUIRED && !token) return;
+    localStorage.setItem(
+      AUTH_SESSION_KEY,
+      JSON.stringify({
+        dni,
+        token: token || `qr:${dni}`,
+        authenticatedAt: new Date().toISOString(),
+      })
+    );
+  }
+
+  function clearAuthenticatedSession() {
+    localStorage.removeItem(AUTH_SESSION_KEY);
+    sessionStorage.removeItem(SESSION_KEY);
+    sessionStorage.removeItem(SESSION_PIN_KEY);
+  }
+
   function isVinculoComplete_(info) {
     if (!info) return false;
     const cel = String(info.celular || "").replace(/\D/g, "");
@@ -706,6 +917,9 @@
     const id = state.identity || getIdentity();
     if (!id?.dni) return false;
     const dni = String(id.dni).replace(/\D/g, "");
+    if (PASSWORD_REQUIRED) {
+      if (authenticatedDni() !== dni || !authenticatedToken()) return false;
+    }
     const persona = lookupSupervisor(dni);
     if (!persona) {
       // JSON aún no cargado → no borrar (evita salto a seguridad en refresh)
@@ -830,6 +1044,7 @@
       "#lockScreen",
       "#securityScreen",
       "#vinculoScreen",
+      "#harvestScreen",
       "#sessionScreen",
       "#appRoot",
     ].forEach((sel) => {
@@ -844,18 +1059,24 @@
     const force = !!opts.force;
     if (!force) {
       const saved = restoreIdentityFromVinculo_() || getIdentity();
-      if (saved?.dni) {
+      const savedDni = String(saved?.dni || "").replace(/\D/g, "");
+      if (
+        savedDni &&
+        (!PASSWORD_REQUIRED ||
+          (authenticatedDni() === savedDni && authenticatedToken()))
+      ) {
         state.identity = saved;
         setIdentity(saved);
-        if (!needsVinculo(saved)) {
-          showMainFlow();
-          return;
-        }
-        showVinculoScreen(saved);
+        // Vincular es opcional: con DNI ya puede usar Inicio / Registro
+        showMainFlow();
         return;
       }
     } else {
       setIdentity(null);
+    }
+    if (PAGE !== "scan") {
+      goTo("scan", true);
+      return;
     }
     hideAllScreens();
     const screen = $("#securityScreen");
@@ -872,7 +1093,38 @@
     if (overlay) overlay.hidden = false;
     if ($("#btnStartCam")) $("#btnStartCam").hidden = false;
     if ($("#btnStopCam")) $("#btnStopCam").hidden = true;
-    if ($("#btnSecBack")) $("#btnSecBack").hidden = false;
+    // Solo mostrar "Cerrar sesión" si ya hay sesión autenticada
+    if ($("#btnSecBack")) {
+      const hasSession = PASSWORD_REQUIRED
+        ? !!(authenticatedDni() && authenticatedToken())
+        : !!(getIdentity()?.dni || authenticatedDni());
+      $("#btnSecBack").hidden = !hasSession;
+    }
+  }
+
+  function showPasswordGate(identity) {
+    stopCamera();
+    state.pendingIdentity = identity;
+    hideAllScreens();
+    const screen = $("#lockScreen");
+    if (screen) screen.hidden = false;
+    const title = $("#loginTitle");
+    const copy = $("#loginCopy");
+    const hint = $("#pinHint");
+    const input = $("#loginPass");
+    const form = $("#loginForm");
+    const msg = $("#pinMsg");
+    if (title) title.textContent = "Confirme su identidad";
+    if (copy) copy.textContent = `${identity.nombre} · DNI ${identity.dni}`;
+    if (hint) hint.textContent = "Ingrese su contraseña personal";
+    if (form) form.hidden = false;
+    if (msg) msg.textContent = "";
+    if (input) {
+      input.value = "";
+      input.focus();
+    }
+    hydrateIcons(screen);
+    updateNetworkUI();
   }
 
   function ensureSessionGate() {
@@ -891,22 +1143,21 @@
 
   function lock() {
     stopCamera();
-    if (PASSWORD_REQUIRED) {
-      sessionStorage.removeItem(SESSION_KEY);
-      sessionStorage.removeItem(SESSION_PIN_KEY);
-      setIdentity(null);
-      const input = $("#loginPass");
-      if (input) input.value = "";
-      $("#pinMsg").textContent = "";
-      hideAllScreens();
-      $("#lockScreen").hidden = false;
-      input?.focus();
-      return;
+    state.pendingIdentity = null;
+    clearAuthenticatedSession();
+    clearSessionManualPersonas();
+    state.harvest = emptyHarvest();
+    try {
+      localStorage.removeItem(HARVEST_KEY);
+    } catch {
+      /* ignore */
     }
-    // Cambio de carnet: limpia identidad de sesión (el vínculo del DNI queda en el celular)
     setIdentity(null);
-    ensureSessionGate();
-    showSecurityLogin("Escanee su carnet QR", { force: true });
+    if (PAGE === "scan") {
+      showSecurityLogin("Escanee su carnet QR", { force: true });
+    } else {
+      goTo("scan", true);
+    }
   }
 
   function requireQrLogin() {
@@ -927,13 +1178,26 @@
     }
     const id = state.identity || getIdentity();
     bindSessionToIdentity(id.dni);
-    if (needsVinculo(id)) {
+    // El DNI habilita toda la app. Vincular es una ficha opcional de Sistemas.
+    if (PAGE === "vinculo") {
       showVinculoScreen(id);
       return;
     }
-    // Por ahora no entrar a Datos de campo / guías
+    if (PAGE === "registro") {
+      showHarvestHome(id);
+      return;
+    }
+    if (PAGE === "inicio") {
+      renderHomeDashboard();
+      return;
+    }
+    // Desde el escáner: abrir Inicio (vincular es opcional desde la pestaña +).
     if (!SESSION_FORM_ENABLED) {
-      showVinculoThanks(id, { alreadyRegistered: true });
+      goTo("inicio", true);
+      return;
+    }
+    if (needsVinculo(id)) {
+      goTo("vinculo", true);
       return;
     }
     if (!state.session.ready) {
@@ -1107,6 +1371,7 @@
       dniSesion,
       horaRegistro: hora,
       hora,
+      authToken: String(raw?.authToken || authenticatedToken()),
     };
   }
 
@@ -1122,6 +1387,76 @@
     next.push({ ...clean, queuedAt: new Date().toISOString() });
     saveVinculoQueue(next);
     updateNetworkUI();
+  }
+
+  function loadCloudDataQueue() {
+    try {
+      const q = JSON.parse(localStorage.getItem(CLOUD_DATA_QUEUE_KEY) || "[]");
+      return Array.isArray(q) ? q : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function saveCloudDataQueue(queue) {
+    localStorage.setItem(CLOUD_DATA_QUEUE_KEY, JSON.stringify(queue || []));
+  }
+
+  function enqueueCloudData(action, data, id) {
+    if (!action || !data) return;
+    const key = String(id || data.id || uid());
+    const queue = loadCloudDataQueue().filter((item) => item.id !== key);
+    queue.push({
+      id: key,
+      action,
+      data,
+      queuedAt: new Date().toISOString(),
+    });
+    saveCloudDataQueue(queue);
+    updateNetworkUI();
+  }
+
+  async function flushCloudDataQueue() {
+    if (!navigator.onLine) {
+      updateNetworkUI();
+      return { sent: 0, remain: loadCloudDataQueue().length };
+    }
+    if (!canUseCloudApi()) {
+      const ready = await ensureCloudReady_(3000);
+      if (!ready) {
+        updateNetworkUI();
+        return { sent: 0, remain: loadCloudDataQueue().length };
+      }
+    }
+    const queue = loadCloudDataQueue();
+    if (!queue.length) {
+      updateNetworkUI();
+      return { sent: 0, remain: 0 };
+    }
+    const remain = [];
+    let sent = 0;
+    for (const item of queue) {
+      try {
+        const response = await fetch(API.sync, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: item.action,
+            authToken: authenticatedToken(),
+            data: item.data,
+          }),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (response.ok && result.ok === true) sent += 1;
+        else remain.push(item);
+      } catch {
+        remain.push(item);
+      }
+    }
+    saveCloudDataQueue(remain);
+    updateNetworkUI();
+    if (sent > 0 && !remain.length) toast("Datos enviados correctamente");
+    return { sent, remain: remain.length };
   }
 
   /** Solo proxy Netlify (/.netlify/functions/…) */
@@ -1140,6 +1475,21 @@
     el.textContent = text;
     el.classList.remove("is-ok", "is-pending", "is-err");
     if (mode) el.classList.add(mode);
+    // Confirmado por el servidor: no retener al supervisor en "gracias"
+    if (mode === "is-ok" && state.thanksRedirect) scheduleRegistroRedirect(900);
+  }
+
+  /** Tras vincular, Inicio se abre solo (el envío sigue en segundo plano). */
+  function scheduleRegistroRedirect(ms = 2000) {
+    state.thanksRedirect = true;
+    clearTimeout(state.thanksRedirectTimer);
+    state.thanksRedirectTimer = setTimeout(() => goTo("inicio", true), ms);
+  }
+
+  function cancelRegistroRedirect() {
+    state.thanksRedirect = false;
+    clearTimeout(state.thanksRedirectTimer);
+    state.thanksRedirectTimer = 0;
   }
 
   /** Detecta Netlify rápido (timeout corto) y deja lista la API */
@@ -1186,7 +1536,6 @@
       return { sent: 0, remain: 0, reason: "empty", alreadyRegistered: false };
     }
     updateNetworkUI();
-    const pin = sessionPin() || getPin();
     const remain = [];
     let sent = 0;
     let lastError = "";
@@ -1207,7 +1556,7 @@
       try {
         const body = {
           action: "registrarVinculo",
-          pin,
+          authToken: data.authToken || authenticatedToken(),
           data,
         };
         const res = await fetch(API.sync, {
@@ -1356,6 +1705,10 @@
   }
 
   function showVinculoScreen(identity) {
+    if (PAGE !== "vinculo") {
+      goTo("vinculo");
+      return;
+    }
     stopCamera();
     hideAllScreens();
     const screen = $("#vinculoScreen");
@@ -1367,12 +1720,11 @@
     const thanks = $("#vinculoThanks");
     if (form) form.hidden = false;
     if (thanks) thanks.hidden = true;
-    const copy = screen?.querySelector(".hero-head-copy");
+    const copy = screen?.querySelector(".vinculo-user div");
     if (copy) {
       const h1 = copy.querySelector("h1");
-      const p = copy.querySelector("p");
       if (h1) h1.textContent = "Vincular datos";
-      if (p) p.textContent = "Complete celular y supervisor";
+      copy.querySelectorAll(":scope > p:not(#vinHeroDni)").forEach((p) => p.remove());
     }
     hydrateIcons(screen);
     const dni = identity.dni || "";
@@ -1392,17 +1744,22 @@
     setTimeout(() => $("#vinCelular")?.focus(), 80);
   }
 
-  function afterQrLogin(identity) {
+  function afterQrLogin(identity, authToken) {
     setIdentity(identity);
+    saveAuthenticatedSession(identity, authToken || authenticatedToken());
+    state.pendingIdentity = null;
+    sessionStorage.setItem(SESSION_KEY, "1");
     bindSessionToIdentity(identity.dni);
     toast(`Sesión · ${identity.nombre}`);
-    if (needsVinculo(identity)) {
-      showVinculoScreen(identity);
+    // Vincular es opcional: abre Inicio; el supervisor puede completar la ficha cuando quiera
+    if (!SESSION_FORM_ENABLED) {
+      stopCamera();
+      goTo("inicio");
       return;
     }
-    // ya vinculado en este celular: mostrar gracias (sin re-guardar en silencio)
-    if (!SESSION_FORM_ENABLED) {
-      showVinculoThanks(identity, { alreadyRegistered: true });
+    if (needsVinculo(identity)) {
+      stopCamera();
+      goTo("vinculo");
       return;
     }
     showMainFlow();
@@ -1528,7 +1885,11 @@
       $("#secCargo").textContent = ok.cargo || "SUPERVISOR DE COSECHA";
     }
     stopCamera();
-    afterQrLogin(ok);
+    if (PASSWORD_REQUIRED) {
+      showPasswordGate(ok);
+    } else {
+      afterQrLogin(ok, `qr:${ok.dni}`);
+    }
   }
 
   async function loadSupervisores() {
@@ -1564,7 +1925,7 @@
         }
         return;
       }
-      const res = await fetch("data/supervisores-cosecha.json", {
+      const res = await fetch("/data/supervisores-cosecha.json", {
         cache: "force-cache",
       });
       if (!res.ok) throw new Error("catalogo");
@@ -1603,13 +1964,6 @@
   }
 
   async function loadPersonas() {
-    // Flujo actual = solo vínculo QR → no cargar catálogo pesado
-    if (!SESSION_FORM_ENABLED) {
-      const el = $("#trabCount");
-      if (el) el.textContent = "Listo para escanear · solo Supervisores de Cosecha";
-      return;
-    }
-
     // 1) Cache local primero (rápido)
     try {
       const cached = localStorage.getItem(PERSONAS_KEY);
@@ -1647,29 +2001,65 @@
     };
     setCount("");
 
-    // 2) Bundle local (offline seed)
-    try {
-      const res = await fetch("data/trabajadores.json", { cache: "force-cache" });
-      const data = await res.json();
-      const byDni = data.byDni || data;
-      Object.entries(byDni).forEach(([dni, info]) => {
-        const key = String(dni).replace(/\D/g, "");
+    // 2) Catálogo offline completo (trabajadores) → seed mínimo (personas)
+    const mergePersonaBundle = (data) => {
+      const list = Array.isArray(data)
+        ? data
+        : Object.entries(data?.byDni || data || {});
+      let added = 0;
+      list.forEach((entry) => {
+        const dni = Array.isArray(entry) ? entry[0] : entry.dni;
+        const info = Array.isArray(entry) ? entry[1] : entry;
+        const key = String(dni || "").replace(/\D/g, "");
         if (!key) return;
         const nombre = (info.nombre || info || "").toString().toUpperCase();
         const cargo = (info.cargo || "").toString().toUpperCase();
-        const celular = String(info.celular || info.telefono || "").replace(/\D/g, "");
-        if (nombre) {
-          state.personas[key] = {
-            nombre,
-            cargo,
-            celular: celular || state.personas[key]?.celular || "",
-          };
-        }
+        const celular = String(info.celular || info.telefono || "").replace(
+          /\D/g,
+          ""
+        );
+        if (!nombre) return;
+        state.personas[key] = {
+          nombre,
+          cargo,
+          celular: celular || state.personas[key]?.celular || "",
+        };
+        added += 1;
       });
-      savePersonas();
-      setCount(" · local");
+      return added;
+    };
+
+    try {
+      const res = await fetch("/data/trabajadores.json", {
+        cache: "force-cache",
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const n = mergePersonaBundle(data);
+        if (n > 0) {
+          savePersonas();
+          setCount(" · local");
+        }
+      }
     } catch {
       /* ignore */
+    }
+
+    if (Object.keys(state.personas).length < 10) {
+      try {
+        const res = await fetch("/data/personas.json", {
+          cache: "force-cache",
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (mergePersonaBundle(data) > 0) {
+            savePersonas();
+            setCount(" · local");
+          }
+        }
+      } catch {
+        /* ignore */
+      }
     }
 
     // 3) Solo proxy Netlify
@@ -1844,8 +2234,1160 @@
     renderDateWidgets(s.fecha || todayISO());
   }
 
+  function harvestTotal() {
+    return (state.harvest.workers || []).reduce(
+      (sum, w) => sum + num(w.manana) + num(w.tarde),
+      0
+    );
+  }
+
+  function harvestTypeLabel(value) {
+    return (
+      HARVEST_TYPES.find((item) => item.key === value)?.label ||
+      HARVEST_TYPES[0].label
+    );
+  }
+
+  function harvestTypeObservacion(value) {
+    return (
+      HARVEST_TYPES.find((item) => item.key === value)?.observacion ||
+      HARVEST_TYPES[0].observacion
+    );
+  }
+
+  function renderHarvestType() {
+    const value = state.harvest.tipo || HARVEST_TYPES[0].key;
+    const input = $("#harvestType");
+    const label = $("#harvestTypeLabel");
+    if (input) input.value = value;
+    if (label) {
+      label.textContent = harvestTypeLabel(value);
+      label.classList.remove("ph");
+    }
+  }
+
+  function populateHarvestLotes() {
+    const input = $("#harvestLote");
+    const label = $("#harvestLoteLabel");
+    const selected = String(state.harvest.lote || "");
+    if (input) input.value = selected;
+    if (!label) return;
+    if (selected) {
+      const lote = findLote(selected);
+      label.textContent = lote
+        ? `Lote ${lote.lote} · ${lote.modulo || "—"} · T${lote.turno || "—"}`
+        : `Lote ${selected}`;
+      label.classList.remove("ph");
+    } else {
+      label.textContent = "Seleccionar lote";
+      label.classList.add("ph");
+    }
+  }
+
+  function renderHarvestWorkers() {
+    const root = $("#harvestWorkers");
+    if (!root) return;
+    const workers = state.harvest.workers || [];
+    if (!workers.length) {
+      root.innerHTML = `<div class="harvest-empty">${ico("users")}Agregue trabajadores por DNI para comenzar.</div>`;
+    } else {
+      root.innerHTML = workers
+        .map((w, index) => {
+          const total = num(w.manana) + num(w.tarde);
+          return `
+            <article class="harvest-worker-row" data-worker-id="${w.id}">
+              <div class="harvest-worker-person">
+                <strong>${index + 1}. ${escapeHtml(w.nombre || "SIN NOMBRE")}</strong>
+                <span>DNI ${escapeHtml(w.dni)}</span>
+              </div>
+              <input data-harvest-field="manana" type="number" inputmode="numeric" min="0" step="1" value="${num(w.manana)}" aria-label="Jarras mañana de ${escapeHtml(w.nombre)}" />
+              <input data-harvest-field="tarde" type="number" inputmode="numeric" min="0" step="1" value="${num(w.tarde)}" aria-label="Jarras tarde de ${escapeHtml(w.nombre)}" />
+              <strong class="harvest-worker-total">${fmt(total)}</strong>
+              <button type="button" class="harvest-worker-remove" data-harvest-remove aria-label="Quitar trabajador">${ico("x")}</button>
+            </article>`;
+        })
+        .join("");
+    }
+    if ($("#harvestWorkerCount")) {
+      $("#harvestWorkerCount").textContent = String(workers.length);
+    }
+    if ($("#harvestGrandTotal")) {
+      $("#harvestGrandTotal").textContent = fmt(harvestTotal());
+    }
+  }
+
+  function renderHarvest() {
+    const identity = state.identity || getIdentity() || {};
+    const firstName = String(identity.nombre || "Supervisor")
+      .trim()
+      .split(/\s+/)[0];
+    if ($("#harvestSupervisor")) $("#harvestSupervisor").textContent = firstName;
+    if ($("#harvestDate")) {
+      $("#harvestDate").textContent = new Date(
+        `${state.harvest.fecha || todayISO()}T12:00:00`
+      ).toLocaleDateString("es-PE", {
+        weekday: "long",
+        day: "2-digit",
+        month: "long",
+      });
+    }
+    populateHarvestLotes();
+    renderHarvestType();
+    if ($("#harvestModulo")) $("#harvestModulo").textContent = state.harvest.modulo || "—";
+    if ($("#harvestTurno")) $("#harvestTurno").textContent = state.harvest.turno || "—";
+    if ($("#harvestVariedad")) $("#harvestVariedad").textContent = state.harvest.variedad || "—";
+    renderHarvestWorkers();
+    hydrateIcons($("#harvestScreen"));
+    updateNetworkUI();
+  }
+
+  function renderHomeDashboard() {
+    if (PAGE !== "inicio") return;
+    const identity = state.identity || getIdentity() || {};
+    const firstName = String(identity.nombre || "Supervisor")
+      .trim()
+      .split(/\s+/)[0];
+    if ($("#homeSupervisor")) $("#homeSupervisor").textContent = firstName;
+    if ($("#homeDate")) {
+      $("#homeDate").textContent = new Date(`${todayISO()}T12:00:00`).toLocaleDateString(
+        "es-PE",
+        { weekday: "long", day: "2-digit", month: "long" }
+      );
+    }
+
+    const total = harvestTotal();
+    const workers = state.harvest.workers || [];
+    if ($("#homeTodayTotal")) {
+      $("#homeTodayTotal").textContent = `${fmt(total)} ${total === 1 ? "jarra" : "jarras"}`;
+    }
+    if ($("#homeTodayWorkers")) {
+      $("#homeTodayWorkers").textContent = `${workers.length} ${
+        workers.length === 1 ? "trabajador" : "trabajadores"
+      }`;
+    }
+    if ($("#homeTodayLote")) {
+      $("#homeTodayLote").textContent = state.harvest.lote
+        ? harvestLoteCode(state.harvest)
+        : "Lote pendiente";
+    }
+
+    const root = $("#homeRecentList");
+    if (root) {
+      const history = loadHarvestHistory().slice(0, 3);
+      if (!history.length) {
+        root.innerHTML = `
+          <div class="home-recent-empty">
+            ${ico("berry")}
+            <div><strong>Aún no hay registros guardados</strong><span>Su actividad de hoy y ayer aparecerá aquí.</span></div>
+          </div>`;
+      } else {
+        const yesterday = new Date();
+        yesterday.setDate(yesterday.getDate() - 1);
+        const yesterdayIso = [
+          yesterday.getFullYear(),
+          String(yesterday.getMonth() + 1).padStart(2, "0"),
+          String(yesterday.getDate()).padStart(2, "0"),
+        ].join("-");
+        root.innerHTML = history
+          .map((item) => {
+            const amount = snapshotTotal(item);
+            const loteCode = harvestLoteCode(item) || "Sin lote";
+            const dayLabel =
+              item.fecha === todayISO()
+                ? "Hoy"
+                : item.fecha === yesterdayIso
+                  ? "Ayer"
+                  : new Date(`${item.fecha || todayISO()}T12:00:00`).toLocaleDateString(
+                      "es-PE",
+                      { weekday: "short", day: "2-digit", month: "short" }
+                    );
+            const dayFull = new Date(
+              `${item.fecha || todayISO()}T12:00:00`
+            ).toLocaleDateString("es-PE", {
+              day: "2-digit",
+              month: "2-digit",
+              year: "numeric",
+            });
+            return `
+              <button type="button" class="home-recent-item" data-home-action="excel">
+                <span class="home-recent-icon">${ico("clipboard")}</span>
+                <span class="home-recent-main">
+                  <strong>${escapeHtml(loteCode)}</strong>
+                  <small>${escapeHtml(dayLabel)} · ${escapeHtml(dayFull)} · ${(item.workers || []).length} trabajadores</small>
+                </span>
+                <span class="home-recent-total">${fmt(amount)}<small>jarras</small></span>
+              </button>`;
+          })
+          .join("");
+      }
+    }
+    hydrateIcons($("#homeDashboard"));
+    updateNetworkUI();
+  }
+
+  function openProfileModal() {
+    const identity = state.identity || getIdentity() || {};
+    const sheet = $("#profileModal");
+    if (!sheet) return;
+    const nombre = String(identity.nombre || "Supervisor").trim().toUpperCase();
+    const cargo =
+      String(identity.cargo || "").trim() ||
+      lookupSupervisor(identity.dni)?.cargo ||
+      "SUPERVISOR DE COSECHA";
+    if ($("#profileModalTitle")) {
+      $("#profileModalTitle").textContent =
+        nombre.split(/\s+/)[0] || "Supervisor";
+    }
+    if ($("#profileDni")) {
+      $("#profileDni").textContent = identity.dni
+        ? String(identity.dni).replace(/\D/g, "")
+        : "—";
+    }
+    if ($("#profileCargo")) {
+      $("#profileCargo").textContent = String(cargo).toUpperCase();
+    }
+    if ($("#profileNombre")) {
+      $("#profileNombre").textContent = nombre || "—";
+    }
+    sheet.hidden = false;
+    sheet.removeAttribute("hidden");
+    sheet.style.display = "flex";
+    hydrateIcons(sheet);
+  }
+
+  function closeProfileModal() {
+    const sheet = $("#profileModal");
+    if (!sheet) return;
+    sheet.hidden = true;
+    sheet.setAttribute("hidden", "");
+    sheet.style.display = "none";
+  }
+
+  function onTabbarClick(tab) {
+    if (navigationLocked) return;
+    cancelRegistroRedirect();
+    if (tab === "ayuda") {
+      openAyuda();
+      return;
+    }
+    const id = state.identity || getIdentity();
+    if (!id?.dni || !hasQrLogin()) {
+      toast("Escanee su carnet para continuar");
+      if (PAGE !== "scan") goTo("scan");
+      return;
+    }
+    if (tab === "vincular") {
+      if (PAGE === "vinculo") return;
+      goTo("vinculo");
+      return;
+    }
+    if (tab === "inicio") {
+      if (PAGE !== "inicio") goTo("inicio");
+      else $(".home-scroll")?.scrollTo?.({ top: 0, behavior: "smooth" });
+      return;
+    }
+    if (tab === "registro") {
+      if (PAGE !== "registro") goTo("registro");
+      else $(".harvest-scroll")?.scrollTo?.({ top: 0, behavior: "smooth" });
+      return;
+    }
+    if (tab === "agregar") {
+      if (PAGE !== "registro") {
+        beginNavigation("/registro/?tab=agregar");
+        return;
+      }
+      const input = $("#harvestWorkerDni");
+      input?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+      setTimeout(() => input?.focus(), 220);
+      return;
+    }
+    if (tab === "excel") {
+      // Abrir historial en la misma pantalla (sin recargar) para evitar pestañeo.
+      if ($("#historySheet")) {
+        openHarvestHistory();
+        return;
+      }
+      beginNavigation("/inicio/?tab=excel");
+      return;
+    }
+  }
+
+  function openRequestedTab() {
+    let tab = "";
+    try {
+      tab = new URLSearchParams(location.search).get("tab") || "";
+    } catch {
+      return;
+    }
+    if (tab !== "agregar" && tab !== "excel") return;
+    try {
+      const clean =
+        PAGE === "inicio"
+          ? "/inicio/"
+          : PAGE === "registro"
+            ? "/registro/"
+            : location.pathname;
+      history.replaceState(null, "", clean);
+    } catch {
+      /* ignore */
+    }
+    if (tab === "excel" && $("#historySheet")) {
+      openHarvestHistory();
+      return;
+    }
+    if (PAGE === "registro") onTabbarClick(tab);
+  }
+
+  function loadHarvestHistory() {
+    let list = [];
+    try {
+      const parsed = JSON.parse(
+        localStorage.getItem(HARVEST_HISTORY_KEY) || "[]"
+      );
+      list = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      list = [];
+    }
+    const minTime = Date.now() - HISTORY_TTL_MS;
+    const fresh = list
+      .filter((item) => Date.parse(item?.savedAt || 0) >= minTime)
+      .sort((a, b) => Date.parse(b.savedAt) - Date.parse(a.savedAt))
+      .slice(0, 50);
+    try {
+      localStorage.setItem(HARVEST_HISTORY_KEY, JSON.stringify(fresh));
+    } catch {
+      /* almacenamiento lleno: conservar lo que ya existe */
+    }
+    return fresh;
+  }
+
+  function makeHarvestSnapshot() {
+    const id = state.identity || getIdentity() || {};
+    const h = state.harvest;
+    return {
+      id: uid(),
+      savedAt: new Date().toISOString(),
+      fecha: h.fecha || todayISO(),
+      tipo: h.tipo || HARVEST_TYPES[0].key,
+      lote: h.lote || "",
+      codLote: h.codLote || "",
+      modulo: h.modulo || "",
+      turno: h.turno || "",
+      variedad: h.variedad || "",
+      supervisor: id.nombre || "SUPERVISOR",
+      supervisorDni: id.dni || "",
+      workers: (h.workers || []).map((w) => ({
+        dni: w.dni,
+        nombre: w.nombre,
+        manana: num(w.manana),
+        tarde: num(w.tarde),
+      })),
+    };
+  }
+
+  function snapshotTotal(snapshot) {
+    return (snapshot?.workers || []).reduce(
+      (sum, w) => sum + num(w.manana) + num(w.tarde),
+      0
+    );
+  }
+
+  function buildHarvestSyncPayload(snapshot) {
+    return {
+      id: snapshot.id,
+      fecha: snapshot.fecha || todayISO(),
+      horaGuardado: snapshot.savedAt || new Date().toISOString(),
+      tipo: harvestTypeLabel(snapshot.tipo).toUpperCase(),
+      observacion: harvestTypeObservacion(snapshot.tipo),
+      totalGeneral: snapshotTotal(snapshot),
+      lote: harvestLoteCode(snapshot),
+      variedad: snapshot.variedad || "",
+      supervisorDni: String(snapshot.supervisorDni || "").replace(/\D/g, ""),
+      supervisorNombre: String(snapshot.supervisor || "").trim().toUpperCase(),
+      workers: (snapshot.workers || []).map((worker) => ({
+        dni: String(worker.dni || "").replace(/\D/g, ""),
+        nombre: String(worker.nombre || "").trim().toUpperCase(),
+        manana: num(worker.manana),
+        tarde: num(worker.tarde),
+        total: num(worker.manana) + num(worker.tarde),
+      })),
+    };
+  }
+
+  function harvestLoteCode(snapshot) {
+    const loteNum = String(snapshot?.lote || "")
+      .replace(/^Q/i, "")
+      .trim();
+    const turno = String(snapshot?.turno || "").replace(/^T/i, "").trim();
+    const modulo = String(snapshot?.modulo || "").trim().toUpperCase();
+    if (!loteNum) return snapshot?.codLote || "";
+    const parts = [`LT${loteNum}`];
+    if (turno) parts.push(`T${turno}`);
+    if (modulo) parts.push(modulo.startsWith("M") ? modulo : `M${modulo}`);
+    return parts.join("-");
+  }
+
+  function harvestExcelRows(snapshot) {
+    const lote = harvestLoteCode(snapshot);
+    const observacion = harvestTypeObservacion(snapshot.tipo);
+    return (snapshot.workers || []).map((w, index) => ({
+      DNI: w.dni,
+      "NOMBRES Y APELLIDOS": w.nombre,
+      "MAÑANA": num(w.manana),
+      TARDE: num(w.tarde),
+      "TOTAL-UNIDADES": num(w.manana) + num(w.tarde),
+      LOTE: lote,
+      VARIEDAD: snapshot.variedad || "",
+      OBSERVACION: observacion,
+      SUPERVISOR: index === 0 ? snapshot.supervisor || "" : "",
+    }));
+  }
+
+  /** Nombre pedido en campo: supervisor de cosecha + día */
+  function harvestFileName(snapshot) {
+    const supervisor = String(snapshot.supervisor || "SUPERVISOR")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^A-Za-z0-9 ]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toUpperCase();
+    const [y, m, d] = String(snapshot.fecha || todayISO()).split("-");
+    const dia = y && m && d ? `${d}-${m}-${y}` : todayISO();
+    const tipo = harvestTypeLabel(snapshot.tipo)
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^A-Za-z0-9 ]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toUpperCase();
+    return `${supervisor || "SUPERVISOR"} ${dia} ${tipo}.xlsx`;
+  }
+
+  function buildHarvestWorkbook(snapshot) {
+    if (typeof XLSX === "undefined") throw new Error("xlsx-unavailable");
+    const rows = harvestExcelRows(snapshot);
+    const ws = XLSX.utils.json_to_sheet(rows);
+    ws["!cols"] = [
+      { wch: 13 },
+      { wch: 32 },
+      { wch: 11 },
+      { wch: 11 },
+      { wch: 19 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 26 },
+    ];
+    if (rows.length) ws["!autofilter"] = { ref: `A1:I${rows.length + 1}` };
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Registro");
+    return wb;
+  }
+
+  function buildHarvestFile(snapshot) {
+    const wb = buildHarvestWorkbook(snapshot);
+    const bytes = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+    const name = harvestFileName(snapshot);
+    const type =
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    const blob = new Blob([new Uint8Array(bytes)], { type });
+    try {
+      return new File([blob], name, { type, lastModified: Date.now() });
+    } catch {
+      // Algunos navegadores antiguos no tienen File; el Blob igual sirve.
+      try {
+        Object.defineProperty(blob, "name", { value: name });
+      } catch {
+        /* ignore */
+      }
+      return blob;
+    }
+  }
+
+  /** Solo muestra el resumen: guardar ocurre dentro del modal */
+  function previewHarvestSummary() {
+    if (!state.harvest.lote) {
+      toast("Seleccione el lote antes de continuar");
+      $("#btnHarvestLote")?.focus();
+      return null;
+    }
+    if (!(state.harvest.workers || []).length) {
+      toast("Agregue al menos un trabajador");
+      $("#harvestWorkerDni")?.focus();
+      return null;
+    }
+    if (harvestTotal() <= 0) {
+      toast("Ingrese las jarras de mañana o tarde");
+      return null;
+    }
+    const snapshot = makeHarvestSnapshot();
+    openExportPreview(snapshot, { saved: false });
+    return snapshot;
+  }
+
+  /** Guarda en el historial (una sola vez por resumen) */
+  async function commitHarvestSnapshot() {
+    const snapshot = state.activeExportSnapshot;
+    if (!snapshot) return null;
+    if (state.activeExportSaved) {
+      toast("Este registro ya está guardado");
+      return snapshot;
+    }
+    const history = loadHarvestHistory();
+    if (history.some((item) => item.id === snapshot.id)) {
+      state.activeExportSaved = true;
+      updateExportPreviewSavedUI();
+      enqueueCloudData(
+        "registrarCosecha",
+        buildHarvestSyncPayload(snapshot),
+        snapshot.id
+      );
+      flushCloudDataQueue().catch(() => {});
+      return snapshot;
+    }
+    try {
+      localStorage.setItem(
+        HARVEST_HISTORY_KEY,
+        JSON.stringify([snapshot, ...history].slice(0, 50))
+      );
+    } catch {
+      toast("No hay espacio para guardar el historial");
+      return null;
+    }
+    state.activeExportSaved = true;
+    updateExportPreviewSavedUI();
+    enqueueCloudData(
+      "registrarCosecha",
+      buildHarvestSyncPayload(snapshot),
+      snapshot.id
+    );
+    toast(
+      navigator.onLine
+        ? "Registro guardado · enviando"
+        : "Registro guardado · pendiente de enviar"
+    );
+    flushCloudDataQueue().catch(() => {});
+    return snapshot;
+  }
+
+  function updateExportPreviewSavedUI() {
+    const saved = !!state.activeExportSaved;
+    const btn = $("#btnCommitHarvest");
+    const kicker = $("#exportPreviewKicker");
+    if (btn) {
+      btn.hidden = saved;
+      btn.disabled = saved;
+    }
+    if (kicker) {
+      kicker.textContent = saved ? "REGISTRO GUARDADO" : "RESUMEN DEL DÍA";
+    }
+  }
+
+  function openExportPreview(snapshot, opts = {}) {
+    if (!snapshot) return;
+    state.activeExportSnapshot = snapshot;
+    // Desde el historial ya está guardado; desde "Ver resumen" todavía no.
+    state.activeExportSaved = opts.saved !== false;
+    updateExportPreviewSavedUI();
+    const rows = $("#exportPreviewRows");
+    if (rows) {
+      rows.innerHTML = harvestExcelRows(snapshot)
+        .map(
+          (row) => `<tr>
+            <td>${escapeHtml(row.DNI)}</td>
+            <td>${escapeHtml(row["NOMBRES Y APELLIDOS"])}</td>
+            <td>${fmt(row["MAÑANA"])}</td>
+            <td>${fmt(row.TARDE)}</td>
+            <td>${fmt(row["TOTAL-UNIDADES"])}</td>
+            <td>${escapeHtml(row.LOTE)}</td>
+            <td>${escapeHtml(row.VARIEDAD)}</td>
+            <td>${escapeHtml(row.OBSERVACION)}</td>
+            <td>${escapeHtml(row.SUPERVISOR)}</td>
+          </tr>`
+        )
+        .join("");
+    }
+    const saved = new Date(snapshot.savedAt);
+    const meta = $("#exportPreviewMeta");
+    if (meta) {
+      meta.textContent = `${snapshot.fecha} · Lote ${
+        snapshot.codLote || snapshot.lote || "—"
+      } · ${snapshot.workers.length} trabajador(es) · ${snapshot.supervisor}`;
+      if (!Number.isNaN(saved.getTime())) {
+        meta.textContent += ` · ${saved.toLocaleTimeString("es-PE", {
+          hour: "2-digit",
+          minute: "2-digit",
+        })}`;
+      }
+    }
+    if ($("#exportPreviewTotal")) {
+      $("#exportPreviewTotal").textContent = `${fmt(
+        snapshotTotal(snapshot)
+      )} jarras`;
+    }
+    const modal = $("#exportPreview");
+    if (modal) modal.hidden = false;
+    hydrateIcons(modal);
+  }
+
+  function closeExportPreview() {
+    const modal = $("#exportPreview");
+    if (modal) modal.hidden = true;
+  }
+
+  function downloadHarvestSnapshot(snapshot) {
+    if (!snapshot) return;
+    try {
+      const wb = buildHarvestWorkbook(snapshot);
+      XLSX.writeFile(wb, harvestFileName(snapshot));
+      toast("Excel descargado");
+    } catch {
+      toast("No se pudo crear el Excel");
+    }
+  }
+
+  function harvestShareText(snapshot) {
+    return `QBerries · Cosecha ${snapshot.fecha} · Lote ${
+      harvestLoteCode(snapshot) || snapshot.codLote || snapshot.lote || "—"
+    } · ${snapshot.workers.length} trabajador(es) · ${snapshotTotal(
+      snapshot
+    )} jarras`;
+  }
+
+  function openWhatsAppWithText(text) {
+    const encoded = encodeURIComponent(text);
+    const ua = String(navigator.userAgent || "");
+    if (/Android/i.test(ua)) {
+      location.href = `intent://send?text=${encoded}#Intent;scheme=whatsapp;package=com.whatsapp;end`;
+      return;
+    }
+    if (/iPhone|iPad|iPod/i.test(ua)) {
+      location.href = `whatsapp://send?text=${encoded}`;
+      return;
+    }
+    window.open(`https://api.whatsapp.com/send?text=${encoded}`, "_blank");
+  }
+
+  async function shareHarvestSnapshot(snapshot) {
+    if (!snapshot) {
+      toast("No hay registro para compartir");
+      return;
+    }
+    if (typeof XLSX === "undefined") {
+      toast("Espere a que cargue el Excel e intente otra vez");
+      return;
+    }
+
+    let file = null;
+    try {
+      file = buildHarvestFile(snapshot);
+    } catch {
+      file = null;
+    }
+
+    const text = harvestShareText(snapshot);
+
+    // 1) Mejor opción en celular: menú nativo con el Excel adjunto.
+    if (file && typeof navigator.share === "function") {
+      const fileAttempts = [
+        { files: [file] },
+        { files: [file], text },
+        { files: [file], title: harvestFileName(snapshot), text },
+      ];
+      for (const shareData of fileAttempts) {
+        try {
+          await navigator.share(shareData);
+          toast("Elija WhatsApp para enviar el Excel");
+          return;
+        } catch (err) {
+          if (err?.name === "AbortError") return;
+        }
+      }
+    }
+
+    // 2) Si no se pudo adjuntar, abrir WhatsApp con el resumen.
+    //    El archivo se descarga aparte solo si el usuario toca Descargar Excel.
+    try {
+      openWhatsAppWithText(
+        `${text}\n\nDesde QBerries: si no llegó el Excel, toque Descargar Excel y adjúntelo en el chat.`
+      );
+      toast("Abriendo WhatsApp");
+      return;
+    } catch {
+      toast("No se pudo abrir WhatsApp. Use Descargar Excel");
+    }
+  }
+
+  function renderHarvestHistory() {
+    const root = $("#historyList");
+    const pager = $("#historyPager");
+    if (!root) return;
+    const history = loadHarvestHistory();
+    if (!history.length) {
+      state.historyPage = 0;
+      root.innerHTML =
+        '<div class="history-empty">Aún no hay archivos guardados en las últimas 48 horas.</div>';
+      if (pager) pager.hidden = true;
+      return;
+    }
+
+    const totalPages = Math.max(1, Math.ceil(history.length / HISTORY_PAGE_SIZE));
+    if (state.historyPage >= totalPages) state.historyPage = totalPages - 1;
+    if (state.historyPage < 0) state.historyPage = 0;
+    const page = state.historyPage;
+    const start = page * HISTORY_PAGE_SIZE;
+    const slice = history.slice(start, start + HISTORY_PAGE_SIZE);
+
+    root.innerHTML = slice
+      .map((item) => {
+        const saved = new Date(item.savedAt);
+        const when = Number.isNaN(saved.getTime())
+          ? ""
+          : saved.toLocaleString("es-PE", {
+              day: "2-digit",
+              month: "2-digit",
+              hour: "2-digit",
+              minute: "2-digit",
+            });
+        return `<article class="history-item" data-history-id="${escapeHtml(
+          item.id
+        )}">
+          <div class="history-item-top">
+            <h3>${escapeHtml(harvestLoteCode(item) || "Sin lote")}</h3>
+            <time>${escapeHtml(when)}</time>
+          </div>
+          <p>${item.workers?.length || 0} trabajador(es) · ${fmt(
+            snapshotTotal(item)
+          )} jarras · ${escapeHtml(item.variedad || "Sin variedad")}<br>${escapeHtml(
+            item.supervisor || ""
+          )}</p>
+          <div class="history-item-actions">
+            <button type="button" data-history-action="preview">Ver</button>
+            <button type="button" data-history-action="share">Compartir</button>
+            <button type="button" data-history-action="download">Descargar</button>
+          </div>
+        </article>`;
+      })
+      .join("");
+
+    if (pager) {
+      const from = start + 1;
+      const to = Math.min(start + HISTORY_PAGE_SIZE, history.length);
+      pager.hidden = false;
+      const label = $("#historyPageLabel");
+      const prev = $("#btnHistoryPrev");
+      const next = $("#btnHistoryNext");
+      if (label) {
+        label.textContent = `${from}–${to} de ${history.length} · pág. ${
+          page + 1
+        }/${totalPages}`;
+      }
+      if (prev) prev.disabled = page <= 0;
+      if (next) next.disabled = page >= totalPages - 1;
+    }
+  }
+
+  function historySnapshotById(id) {
+    return loadHarvestHistory().find((item) => item.id === id) || null;
+  }
+
+  function openHarvestHistory() {
+    state.historyPage = 0;
+    renderHarvestHistory();
+    const sheet = $("#historySheet");
+    if (sheet) sheet.hidden = false;
+    hydrateIcons(sheet);
+  }
+
+  function closeHarvestHistory() {
+    const sheet = $("#historySheet");
+    if (sheet) sheet.hidden = true;
+  }
+
+  async function clearAppCache(button) {
+    if (button) {
+      button.disabled = true;
+      button.textContent = "Borrando…";
+    }
+    try {
+      if ("caches" in window) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map((key) => caches.delete(key)));
+      }
+      toast("Caché borrada · sus registros siguen guardados");
+      if (button) button.textContent = "Caché borrada";
+    } catch {
+      toast("No se pudo borrar la caché");
+      if (button) {
+        button.disabled = false;
+        button.textContent = "Borrar caché";
+      }
+    }
+  }
+
+  async function updateApp(button) {
+    if (button) {
+      button.disabled = true;
+      button.textContent = "Actualizando…";
+    }
+    try {
+      if ("serviceWorker" in navigator) {
+        const registration = await navigator.serviceWorker.getRegistration("/");
+        await registration?.update();
+      }
+    } catch {
+      /* la recarga de red sigue siendo el respaldo */
+    }
+    location.reload();
+  }
+
+  function openAyuda() {
+    let sheet = $("#helpSheet");
+    if (!sheet) {
+      sheet = document.createElement("aside");
+      sheet.id = "helpSheet";
+      sheet.className = "help-sheet";
+      sheet.innerHTML = `
+        <div class="help-head">
+          <h2>Recomendaciones</h2>
+          <button type="button" class="help-settings" aria-label="Configuración de la app">
+            ${ico("settings")}
+          </button>
+        </div>
+        <p class="help-lead">Guía rápida para el registro en campo.</p>
+        <ul>
+          <li><strong>Vincular:</strong> registre una sola vez su celular, grupo y supervisor global.</li>
+          <li><strong>Inicio:</strong> elija el lote; el modulo, turno y variedad se completan solos.</li>
+          <li><strong>Agregar:</strong> escriba el DNI (8 dígitos) y el nombre aparece del listado.</li>
+          <li><strong>Sin base:</strong> toque usuarios, complete DNI y nombre; se guarda en Data Manuales cuando haya internet.</li>
+          <li><strong>Jarras:</strong> anote mañana y tarde por separado; el total se suma solo.</li>
+          <li><strong>Guardar:</strong> revise el resumen antes de compartirlo o descargarlo.</li>
+          <li><strong>Excel:</strong> consulte las últimas 48 horas y comparta el archivo por WhatsApp.</li>
+          <li><strong>Sin internet:</strong> todo queda guardado en el celular y sube al reconectar.</li>
+        </ul>
+        <button type="button" class="help-close">Entendido</button>
+        <div class="app-tools-backdrop" hidden>
+          <section class="app-tools-modal" role="dialog" aria-modal="true" aria-labelledby="appToolsTitle">
+            <div class="app-tools-head">
+              <div>
+                <small>MANTENIMIENTO</small>
+                <h3 id="appToolsTitle">Configuración de la app</h3>
+              </div>
+              <button type="button" class="app-tools-close" aria-label="Cerrar">${ico("x")}</button>
+            </div>
+            <p>Borre la caché y luego actualice para descargar la versión más reciente. Sus registros guardados no se eliminan.</p>
+            <button type="button" class="app-tools-cache">${ico("trash")} Borrar caché</button>
+            <button type="button" class="app-tools-update">${ico("refresh")} Actualizar app</button>
+            <small class="app-version">Versión de la app: ${APP_VERSION}</small>
+          </section>
+        </div>`;
+      ($("#phone") || document.body).appendChild(sheet);
+      sheet
+        .querySelector(".help-close")
+        ?.addEventListener("click", () => (sheet.hidden = true));
+      const tools = sheet.querySelector(".app-tools-backdrop");
+      sheet.querySelector(".help-settings")?.addEventListener("click", () => {
+        if (tools) tools.hidden = false;
+      });
+      sheet.querySelector(".app-tools-close")?.addEventListener("click", () => {
+        if (tools) tools.hidden = true;
+      });
+      tools?.addEventListener("click", (event) => {
+        if (event.target === tools) tools.hidden = true;
+      });
+      const cacheButton = sheet.querySelector(".app-tools-cache");
+      cacheButton?.addEventListener("click", () => clearAppCache(cacheButton));
+      const updateButton = sheet.querySelector(".app-tools-update");
+      updateButton?.addEventListener("click", () => updateApp(updateButton));
+    }
+    sheet.hidden = false;
+  }
+
+  function showHarvestHome(identity) {
+    if (PAGE !== "registro") {
+      goTo("registro");
+      return;
+    }
+    stopCamera();
+    if (identity?.dni) {
+      state.identity = identity;
+      setIdentity(identity);
+      bindSessionToIdentity(identity.dni);
+    }
+    hideAllScreens();
+    const screen = $("#harvestScreen");
+    if (screen) screen.hidden = false;
+    renderHarvest();
+    Promise.all([loadCatalogs(), loadPersonas()])
+      .then(renderHarvest)
+      .catch(() => renderHarvest());
+  }
+
+  function selectHarvestLote(value) {
+    const lote = findLote(value);
+    state.harvest.lote = lote?.lote || "";
+    state.harvest.codLote = lote?.codLote || "";
+    state.harvest.modulo = lote?.modulo || "";
+    state.harvest.turno = lote?.turno || "";
+    state.harvest.variedad = lote?.variedad || "";
+    saveHarvest();
+    renderHarvest();
+  }
+
+  function previewHarvestWorker() {
+    const dni = String($("#harvestWorkerDni")?.value || "").replace(/\D/g, "");
+    if ($("#harvestWorkerDni") && $("#harvestWorkerDni").value !== dni) {
+      $("#harvestWorkerDni").value = dni.slice(0, 8);
+    }
+    const persona = lookupPersona(dni) || lookupSupervisor(dni);
+    const name = $("#harvestWorkerName");
+    const msg = $("#harvestWorkerMsg");
+    if (name) name.value = persona?.nombre || "";
+    if (msg) {
+      msg.textContent =
+        dni.length === 8 && !persona
+          ? "DNI no está en la base · toque el ícono de usuarios"
+          : dni.length && dni.length < 8
+            ? "El DNI debe tener 8 dígitos"
+            : "";
+    }
+  }
+
+  function openManualWorker() {
+    const sheet = $("#manualWorker");
+    if (!sheet) {
+      toast("No se pudo abrir el registro");
+      return;
+    }
+    const typed = String($("#harvestWorkerDni")?.value || "")
+      .replace(/\D/g, "")
+      .slice(0, 8);
+    if ($("#manualWorkerDni")) $("#manualWorkerDni").value = typed;
+    if ($("#manualWorkerName")) {
+      $("#manualWorkerName").value = String(
+        $("#harvestWorkerName")?.value || ""
+      ).trim();
+    }
+    sheet.hidden = false;
+    sheet.removeAttribute("hidden");
+    sheet.style.display = "flex";
+    hydrateIcons(sheet);
+    setTimeout(() => {
+      const focusEl =
+        typed.length === 8 ? $("#manualWorkerName") : $("#manualWorkerDni");
+      focusEl?.focus();
+    }, 80);
+  }
+
+  function closeManualWorker() {
+    const sheet = $("#manualWorker");
+    if (!sheet) return;
+    sheet.hidden = true;
+    sheet.setAttribute("hidden", "");
+    sheet.style.display = "none";
+  }
+
+  function pushHarvestWorker(dni, nombre, { fromManual = false } = {}) {
+    const key = String(dni || "").replace(/\D/g, "");
+    const name = String(nombre || "")
+      .trim()
+      .replace(/\s+/g, " ")
+      .toUpperCase();
+    if (key.length !== 8) {
+      toast("El DNI debe tener exactamente 8 dígitos");
+      return false;
+    }
+    if (name.length < 3) {
+      toast("Ingrese el nombre completo");
+      return false;
+    }
+    if (state.harvest.workers.some((w) => w.dni === key)) {
+      toast("Este DNI ya está agregado");
+      return false;
+    }
+    if (fromManual) {
+      rememberSessionPersona(key, name);
+    } else {
+      rememberPersona(key, name);
+    }
+    state.harvest.workers.push({
+      id: uid(),
+      dni: key,
+      nombre: name,
+      manana: 0,
+      tarde: 0,
+      manual: !!fromManual,
+    });
+    saveHarvest();
+    renderHarvestWorkers();
+    return true;
+  }
+
+  function copyYesterdayWorkers() {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayIso = [
+      yesterday.getFullYear(),
+      String(yesterday.getMonth() + 1).padStart(2, "0"),
+      String(yesterday.getDate()).padStart(2, "0"),
+    ].join("-");
+    const identity = state.identity || getIdentity() || {};
+    const supervisorDni = String(identity.dni || "").replace(/\D/g, "");
+    const records = loadHarvestHistory().filter((item) => {
+      if (item.fecha !== yesterdayIso) return false;
+      const owner = String(item.supervisorDni || "").replace(/\D/g, "");
+      return !owner || !supervisorDni || owner === supervisorDni;
+    });
+    if (!records.length) {
+      toast("No hay trabajadores guardados del día anterior");
+      return;
+    }
+
+    const existing = new Set(
+      (state.harvest.workers || []).map((worker) => worker.dni)
+    );
+    const previous = new Map();
+    records.forEach((record) => {
+      (record.workers || []).forEach((worker) => {
+        const dni = String(worker.dni || "").replace(/\D/g, "");
+        const nombre = String(worker.nombre || "").trim().toUpperCase();
+        if (dni.length === 8 && nombre && !previous.has(dni)) {
+          previous.set(dni, nombre);
+        }
+      });
+    });
+
+    let copied = 0;
+    previous.forEach((nombre, dni) => {
+      if (existing.has(dni)) return;
+      state.harvest.workers.push({
+        id: uid(),
+        dni,
+        nombre,
+        manana: 0,
+        tarde: 0,
+        manual: false,
+      });
+      existing.add(dni);
+      copied += 1;
+    });
+
+    if (!copied) {
+      toast("Los trabajadores de ayer ya están agregados");
+      return;
+    }
+    saveHarvest();
+    renderHarvestWorkers();
+    toast(`${copied} trabajador${copied === 1 ? "" : "es"} copiado${copied === 1 ? "" : "s"} de ayer`);
+  }
+
+  function addHarvestWorker() {
+    const dni = String($("#harvestWorkerDni")?.value || "").replace(/\D/g, "");
+    const persona = lookupPersona(dni) || lookupSupervisor(dni);
+    const msg = $("#harvestWorkerMsg");
+    if (dni.length !== 8) {
+      if (msg) msg.textContent = "El DNI debe tener exactamente 8 dígitos";
+      return;
+    }
+    if (!persona?.nombre) {
+      if (msg) {
+        msg.textContent =
+          "DNI no está en la base · toque el ícono de usuarios";
+      }
+      openManualWorker();
+      return;
+    }
+    if (!pushHarvestWorker(dni, persona.nombre)) {
+      if (msg) msg.textContent = "Este DNI ya está agregado";
+      return;
+    }
+    if ($("#harvestWorkerDni")) $("#harvestWorkerDni").value = "";
+    if ($("#harvestWorkerName")) $("#harvestWorkerName").value = "";
+    if (msg) msg.textContent = "";
+    $("#harvestWorkerDni")?.focus();
+    toast("Trabajador agregado");
+  }
+
+  function saveManualWorker(e) {
+    e?.preventDefault?.();
+    const dni = String($("#manualWorkerDni")?.value || "")
+      .replace(/\D/g, "")
+      .slice(0, 8);
+    const nombre = String($("#manualWorkerName")?.value || "").trim();
+    if ($("#manualWorkerDni")) $("#manualWorkerDni").value = dni;
+    if (dni.length !== 8) {
+      toast("El DNI debe tener exactamente 8 dígitos");
+      $("#manualWorkerDni")?.focus();
+      return;
+    }
+    if (nombre.length < 3) {
+      toast("Ingrese el nombre completo");
+      $("#manualWorkerName")?.focus();
+      return;
+    }
+    if (!pushHarvestWorker(dni, nombre, { fromManual: true })) return;
+    if ($("#harvestWorkerDni")) $("#harvestWorkerDni").value = "";
+    if ($("#harvestWorkerName")) $("#harvestWorkerName").value = "";
+    if ($("#harvestWorkerMsg")) $("#harvestWorkerMsg").textContent = "";
+    closeManualWorker();
+    const identity = state.identity || getIdentity() || {};
+    enqueueCloudData(
+      "registrarManual",
+      {
+        fecha: todayISO(),
+        horaGuardado: new Date().toISOString(),
+        dni,
+        nombre: nombre.toUpperCase(),
+        supervisorDni: String(identity.dni || "").replace(/\D/g, ""),
+        supervisorNombre: String(identity.nombre || "").trim().toUpperCase(),
+      },
+      `manual:${dni}`
+    );
+    flushCloudDataQueue().catch(() => {});
+    toast(
+      navigator.onLine
+        ? "Trabajador guardado · enviando a Data Manuales"
+        : "Trabajador guardado · pendiente de sincronizar"
+    );
+  }
+
+  function onHarvestWorkersInput(e) {
+    const input = e.target.closest("[data-harvest-field]");
+    if (!input) return;
+    const row = input.closest("[data-worker-id]");
+    const worker = state.harvest.workers.find((w) => w.id === row?.dataset.workerId);
+    if (!worker) return;
+    const field = input.dataset.harvestField;
+    worker[field] = Math.max(0, num(input.value));
+    const totalEl = row.querySelector(".harvest-worker-total");
+    if (totalEl) totalEl.textContent = fmt(num(worker.manana) + num(worker.tarde));
+    if ($("#harvestGrandTotal")) $("#harvestGrandTotal").textContent = fmt(harvestTotal());
+    saveHarvest();
+  }
+
+  function onHarvestWorkersClick(e) {
+    const btn = e.target.closest("[data-harvest-remove]");
+    if (!btn) return;
+    const row = btn.closest("[data-worker-id]");
+    const worker = state.harvest.workers.find((w) => w.id === row?.dataset.workerId);
+    if (!worker) return;
+    confirmModal(
+      "Quitar trabajador",
+      `¿Quitar a ${worker.nombre} del registro de hoy?`,
+      () => {
+        state.harvest.workers = state.harvest.workers.filter(
+          (w) => w.id !== worker.id
+        );
+        saveHarvest();
+        renderHarvestWorkers();
+      }
+    );
+  }
+
   function toast(msg) {
     const el = $("#toast");
+    if (!el) return;
     el.textContent = msg;
     el.hidden = false;
     clearTimeout(toast._t);
@@ -1854,14 +3396,21 @@
     }, 2200);
   }
 
-  function confirmModal(title, body, onOk) {
-    $("#modalTitle").textContent = title;
-    $("#modalBody").textContent = body;
+  function confirmModal(title, body, onOk, okLabel = "Eliminar") {
+    const modal = $("#modal");
+    const modalTitle = $("#modalTitle");
+    const modalBody = $("#modalBody");
+    const modalOk = $("#modalOk");
+    if (!modal || !modalTitle || !modalBody) return;
+    modalTitle.textContent = title;
+    modalBody.textContent = body;
+    if (modalOk) modalOk.textContent = okLabel;
     state.pendingConfirm = onOk;
-    $("#modal").hidden = false;
+    modal.hidden = false;
   }
   function closeModal() {
-    $("#modal").hidden = true;
+    const modal = $("#modal");
+    if (modal) modal.hidden = true;
     state.pendingConfirm = null;
   }
   function closeSheets() {
@@ -1903,9 +3452,12 @@
     const fechaTxt = s.fecha
       ? s.fecha.split("-").reverse().join("/")
       : "—";
-    $("#metaLine").textContent = s.ready
-      ? `Fecha ${fechaTxt} · ${t.guias} guía(s) · ${fmt(t.jarras)} jarras + ${fmt(t.jabas)} jabas = ${fmt(t.cantidad)} · guardado`
-      : "Complete la sesión para registrar";
+    const meta = $("#metaLine");
+    if (meta) {
+      meta.textContent = s.ready
+        ? `Fecha ${fechaTxt} · ${t.guias} guía(s) · ${fmt(t.jarras)} jarras + ${fmt(t.jabas)} jabas = ${fmt(t.cantidad)} · guardado`
+        : "Complete la sesión para registrar";
+    }
   }
 
   function updateClock() {
@@ -1914,7 +3466,8 @@
 
   function updateNetworkUI() {
     state.online = navigator.onLine;
-    const pending = loadVinculoQueue().length;
+    const pending =
+      loadVinculoQueue().length + loadCloudDataQueue().length;
     const onlineLabel = state.online ? "Con internet" : "Sin internet";
     const pendingLabel = `${pending} pendiente${pending === 1 ? "" : "s"}`;
     let label = onlineLabel;
@@ -2017,13 +3570,13 @@
               <strong>Guía de cosecha</strong>
               <span>${escapeHtml(sub)}</span>
             </div>
-            <span class="tag-soft">${escapeHtml(g.modulo || "Mód")}</span>
+            <span class="tag-soft">${escapeHtml(g.modulo || "Mod")}</span>
             <button type="button" class="btn btn-sm btn-danger-outline" data-act="del-guia" aria-label="Quitar">${ico("trash")}</button>
           </div>
           <div class="guia-grid">
             ${selectTrigger("layers", "Grupo", "grupo", g.grupo, "Elegir grupo")}
             ${selectTrigger("tag", "Lote", "lote", g.lote, "Elegir lote")}
-            ${fieldRow("grid", "Módulo", "modulo", g.modulo, { placeholder: "Auto del lote" })}
+            ${fieldRow("grid", "Modulo", "modulo", g.modulo, { placeholder: "Auto del lote" })}
             ${fieldRow("hash", "Turno", "turno", g.turno, { placeholder: "Auto del lote" })}
             ${fieldRow("leaf", "Variedad", "variedad", g.variedad, { placeholder: "Sekoya Pop" })}
             <div class="qty-block">
@@ -2123,7 +3676,7 @@
     }
     const tag = article.querySelector(".tag-soft");
     if (tag && field === "modulo") {
-      tag.textContent = guia.modulo || "Mód";
+      tag.textContent = guia.modulo || "Mod";
     }
     updateKpis();
     updateMeta();
@@ -2303,14 +3856,18 @@
     );
   }
 
-  async function verifyPinRemote(pin) {
+  async function verifyPinRemote(pin, dni) {
     const res = await fetch(API.login, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pin }),
+      body: JSON.stringify({ pin, dni }),
     });
     const data = await res.json().catch(() => ({}));
-    return { ok: res.ok && data.ok === true, error: data.error };
+    return {
+      ok: res.ok && data.ok === true,
+      error: data.error,
+      token: String(data.token || ""),
+    };
   }
 
   async function detectNetlify(timeoutMs) {
@@ -2355,6 +3912,11 @@
   async function attemptLogin(pin) {
     if (state.unlocking) return;
     const password = String(pin || "").trim();
+    const identity = state.pendingIdentity;
+    if (!identity?.dni) {
+      lock();
+      return;
+    }
     if (!password) {
       const m = $("#pinMsg");
       if (m) m.textContent = "Ingrese la contraseña";
@@ -2366,38 +3928,23 @@
     const btn = $("#btnLogin");
     if (btn) btn.disabled = true;
     try {
-      // En local / file:// siempre validar contra PIN local primero
-      if (password === getPin()) {
-        unlock(password);
-        toast("Acceso correcto");
+      if (!navigator.onLine) {
+        if (msg) msg.textContent = "Necesita internet para validar el primer acceso";
         return;
       }
-      if (state.netlifyReady) {
-        const result = await verifyPinRemote(password);
-        if (result.ok) {
-          unlock(password);
-          toast("Acceso correcto");
-        } else {
-          if (msg) msg.textContent = result.error || "Contraseña incorrecta";
-          if ($("#loginPass")) {
-            $("#loginPass").value = "";
-            $("#loginPass").focus();
-          }
-        }
+      const result = await verifyPinRemote(password, identity.dni);
+      if (result.ok && result.token) {
+        afterQrLogin(identity, result.token);
+        toast("Identidad confirmada");
       } else {
-        if (msg) msg.textContent = "Contraseña incorrecta";
+        if (msg) msg.textContent = result.error || "Contraseña incorrecta";
         if ($("#loginPass")) {
           $("#loginPass").value = "";
           $("#loginPass").focus();
         }
       }
     } catch {
-      if (password === getPin()) {
-        unlock(password);
-        toast("Acceso local");
-      } else if (msg) {
-        msg.textContent = "Contraseña incorrecta";
-      }
+      if (msg) msg.textContent = "No se pudo validar. Revise su conexión";
     } finally {
       state.unlocking = false;
       if (btn) btn.disabled = false;
@@ -2455,7 +4002,7 @@
   function bind() {
     const scrollParent_ = (el) =>
       el?.closest?.(
-        ".picker-list, #vinculoScreen:not(.is-thanks), .session-screen, .security-screen, .app-scroll"
+        ".picker-list, #vinculoScreen:not(.is-thanks) .vinculo-scroll, #vinculoScreen:not(.is-thanks), .session-screen, .security-screen, .app-scroll, .harvest-scroll, .home-scroll, .export-preview, .history-sheet, .help-sheet"
       );
 
     document.addEventListener(
@@ -2468,6 +4015,8 @@
     );
 
     const lockOverscroll = (e) => {
+      // La tabla del Excel se desliza en horizontal: no bloquear el gesto
+      if (e.target?.closest?.(".export-preview-table-wrap")) return;
       // El listado del select (Grupo / Grupo LIC) debe poder deslizar
       const pickerList = e.target?.closest?.(".picker-list");
       if (pickerList) {
@@ -2537,6 +4086,7 @@
       lock();
     });
     on("#btnThanksRescan", "click", () => {
+      cancelRegistroRedirect();
       stopCamera();
       const screen = $("#vinculoScreen");
       if (screen) screen.classList.remove("is-thanks");
@@ -2544,6 +4094,115 @@
       if (thanks) thanks.hidden = true;
       lock();
     });
+    on("#btnThanksContinue", "click", () => {
+      cancelRegistroRedirect();
+      goTo("inicio");
+    });
+    on("#appTabbar", "click", (e) => {
+      const btn = e.target?.closest?.("[data-tab]");
+      if (btn) onTabbarClick(btn.dataset.tab);
+    });
+    on("#homeDashboard", "click", (e) => {
+      const button = e.target?.closest?.("[data-home-action]");
+      if (!button) return;
+      onTabbarClick(button.dataset.homeAction);
+    });
+    on("#btnHomeProfile", "click", openProfileModal);
+    on("#btnCloseProfile", "click", closeProfileModal);
+    on("#profileModal", "click", (e) => {
+      if (e.target?.id === "profileModal") closeProfileModal();
+    });
+    on("#btnProfileLogout", "click", () => {
+      closeProfileModal();
+      confirmModal(
+        "Cerrar sesión",
+        "¿Está seguro de cerrar sesión? Tendrá que escanear su carnet otra vez.",
+        () => lock(),
+        "Cerrar sesión"
+      );
+    });
+    on("#btnHarvestSave", "click", previewHarvestSummary);
+    on("#btnCommitHarvest", "click", commitHarvestSnapshot);
+    on("#btnCloseExportPreview", "click", closeExportPreview);
+    on("#exportPreview", "click", (e) => {
+      if (e.target?.id === "exportPreview") closeExportPreview();
+    });
+    on("#btnDownloadHarvest", "click", () =>
+      downloadHarvestSnapshot(state.activeExportSnapshot)
+    );
+    on("#btnShareHarvest", "click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      shareHarvestSnapshot(state.activeExportSnapshot);
+    });
+    on("#btnCloseHistory", "click", closeHarvestHistory);
+    on("#btnHistoryPrev", "click", () => {
+      if (state.historyPage <= 0) return;
+      state.historyPage -= 1;
+      renderHarvestHistory();
+      $("#historyList")?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    });
+    on("#btnHistoryNext", "click", () => {
+      state.historyPage += 1;
+      renderHarvestHistory();
+      $("#historyList")?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    });
+    on("#historyList", "click", (e) => {
+      const button = e.target?.closest?.("[data-history-action]");
+      const item = e.target?.closest?.("[data-history-id]");
+      if (!button || !item) return;
+      const snapshot = historySnapshotById(item.dataset.historyId);
+      if (!snapshot) return;
+      const action = button.dataset.historyAction;
+      if (action === "preview") {
+        closeHarvestHistory();
+        openExportPreview(snapshot);
+      } else if (action === "share") {
+        shareHarvestSnapshot(snapshot);
+      } else if (action === "download") {
+        downloadHarvestSnapshot(snapshot);
+      }
+    });
+    on("#btnHarvestLogout", "click", () => {
+      confirmModal(
+        "Cerrar sesión",
+        "¿Está seguro de cerrar sesión? Tendrá que escanear su carnet otra vez.",
+        () => lock(),
+        "Cerrar sesión"
+      );
+    });
+    on("#btnHarvestLote", "click", () => openPicker("harvestLote"));
+    on("#btnHarvestType", "click", () => openPicker("harvestType"));
+    on("#btnCopyYesterdayWorkers", "click", copyYesterdayWorkers);
+    on("#btnManualWorker", "click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openManualWorker();
+    });
+    // Respaldo: cualquier clic en el ícono de usuarios abre el modal
+    on("#harvestScreen", "click", (e) => {
+      const btn = e.target?.closest?.("#btnManualWorker, .harvest-users-btn");
+      if (!btn) return;
+      e.preventDefault();
+      openManualWorker();
+    });
+    on("#btnCloseManualWorker", "click", closeManualWorker);
+    on("#manualWorker", "click", (e) => {
+      if (e.target?.id === "manualWorker") closeManualWorker();
+    });
+    on("#manualWorkerForm", "submit", saveManualWorker);
+    on("#manualWorkerDni", "input", (e) => {
+      e.target.value = String(e.target.value || "")
+        .replace(/\D/g, "")
+        .slice(0, 8);
+    });
+    on("#harvestWorkerDni", "input", previewHarvestWorker);
+    on("#harvestWorkerForm", "submit", (e) => {
+      e.preventDefault();
+      addHarvestWorker();
+    });
+    on("#harvestWorkers", "input", onHarvestWorkersInput);
+    on("#harvestWorkers", "click", onHarvestWorkersClick);
     on("#btnStartCam", "click", () => startCamera());
     on("#btnStopCam", "click", stopCamera);
     on("#btnVinGrupoLic", "click", () => openPicker("grupoLic"));
@@ -2605,6 +4264,7 @@
         dni: id.dni,
         nombre: id.nombre || "",
       });
+      scheduleRegistroRedirect();
 
       // Sin internet: guarda local y sube al reconectar
       if (!navigator.onLine) {
@@ -2798,16 +4458,28 @@
       e.preventDefault();
       attemptLogin($("#loginPass")?.value);
     });
+    on("#btnCancelLogin", "click", () => {
+      state.pendingIdentity = null;
+      setIdentity(null);
+      showSecurityLogin("Escanee otro carnet", { force: true });
+    });
   }
 
   async function init() {
     try {
-      ensureSessionGate();
       hydrateIcons();
       closePicker();
       closeModal();
       closeSheets();
       loadStore();
+      loadHarvest();
+      loadSessionManualPersonas();
+      // Si había altas manuales en el registro del día, rehidratarlas en sesión
+      (state.harvest.workers || []).forEach((w) => {
+        if (w?.manual && w.dni && w.nombre) {
+          rememberSessionPersona(w.dni, w.nombre);
+        }
+      });
       state.guias = (state.guias || []).map((g) => ({
         ...emptyGuia(),
         ...g,
@@ -2818,44 +4490,57 @@
 
       // Pantalla YA (no dejar blanco mientras carga datos)
       restoreIdentityFromVinculo_();
-      ensureSessionGate();
       updateNetworkUI();
-      if (PASSWORD_REQUIRED && !isUnlocked()) {
-        hideAllScreens();
-        $("#lockScreen").hidden = false;
-      } else if (hasQrLogin()) {
+      if (hasQrLogin()) {
+        sessionStorage.setItem(SESSION_KEY, "1");
         showMainFlow();
       } else {
-        showSecurityLogin("");
+        clearAuthenticatedSession();
+        setIdentity(null);
+        showSecurityLogin("", { force: true });
       }
 
       bind();
+      openRequestedTab();
+      document.body.classList.remove("app-booting");
+      document.body.classList.add("app-ready");
       setInterval(updateClock, 30000);
 
       // Datos en segundo plano (no bloquean UI)
       if (navigator.onLine) {
-        detectNetlify(2500).catch(() => {
-          state.netlifyReady = false;
-          state.cloudApi = false;
-        });
+        detectNetlify(2500)
+          .then(() => {})
+          .catch(() => {
+            state.netlifyReady = false;
+            state.cloudApi = false;
+          });
       } else {
         state.netlifyReady = false;
         state.cloudApi = false;
       }
 
-      loadSupervisores()
-        .then(() => {
-          const el = $("#trabCount");
-          if (el && !SESSION_FORM_ENABLED) {
-            el.textContent = "Listo para escanear · solo Supervisores de Cosecha";
-          }
-          updateNetworkUI();
-        })
-        .catch(() => {});
+      if (PAGE === "scan") {
+        loadSupervisores()
+          .then(() => {
+            const el = $("#trabCount");
+            if (el && !SESSION_FORM_ENABLED) {
+              el.textContent =
+                "Listo para escanear · solo Supervisores de Cosecha";
+            }
+            updateNetworkUI();
+          })
+          .catch(() => {});
+      }
 
-      if (SESSION_FORM_ENABLED) {
-        loadPersonas().catch(() => {});
+      if (PAGE === "registro") {
         loadCatalogs().catch(() => {});
+        loadPersonas()
+          .then(() => {
+            if ($("#harvestScreen") && !$("#harvestScreen").hidden) {
+              renderHarvest();
+            }
+          })
+          .catch(() => {});
       }
 
       window.addEventListener("online", () => {
@@ -2863,7 +4548,12 @@
         updateNetworkUI();
         toast("Internet recuperado · subiendo…");
         ensureCloudReady_(2000)
-          .then((ok) => (ok ? flushVinculoQueue() : null))
+          .then(async (ok) => {
+            if (!ok) return null;
+            const result = await flushVinculoQueue();
+            await flushCloudDataQueue();
+            return result;
+          })
           .then((result) => {
             if (!result || result.sent <= 0) return;
             if (result.alreadyRegistered) {
@@ -2880,7 +4570,11 @@
       document.addEventListener("visibilitychange", () => {
         if (document.hidden || !navigator.onLine) return;
         ensureCloudReady_(2000)
-          .then((ok) => (ok ? flushVinculoQueue() : null))
+          .then((ok) =>
+            ok
+              ? Promise.all([flushVinculoQueue(), flushCloudDataQueue()])
+              : null
+          )
           .catch(() => {});
       });
       window.addEventListener("offline", () => {
@@ -2891,41 +4585,53 @@
 
       setInterval(() => {
         if (!navigator.onLine) return;
-        if (!loadVinculoQueue().length) return;
+        if (!loadVinculoQueue().length && !loadCloudDataQueue().length) return;
         ensureCloudReady_(2000)
-          .then((ok) => (ok ? flushVinculoQueue() : null))
+          .then((ok) =>
+            ok
+              ? Promise.all([flushVinculoQueue(), flushCloudDataQueue()])
+              : null
+          )
           .catch(() => {});
       }, 8000);
 
       if (canUseCloudApi()) {
         flushVinculoQueue().catch(() => {});
+        flushCloudDataQueue().catch(() => {});
       }
 
-      // Failsafe: si todo quedó oculto, mostrar escáner
+      // Failsafe por ruta: nunca mezclar pantallas de apartados distintos.
       setTimeout(() => {
-        const visible = [
-          "#securityScreen",
-          "#vinculoScreen",
-          "#sessionScreen",
-          "#appRoot",
-          "#lockScreen",
-        ].some((sel) => {
-          const el = $(sel);
-          return el && !el.hidden;
-        });
-        if (!visible) showSecurityLogin("");
+        const expected = {
+          scan: "#securityScreen",
+          inicio: "#homeDashboard",
+          vinculo: "#vinculoScreen",
+          registro: "#harvestScreen",
+        }[PAGE];
+        if (!expected) return;
+        const screen = $(expected);
+        if (!screen || screen.hidden) {
+          if (PAGE === "scan") showSecurityLogin("");
+          else if (PAGE === "inicio" && hasQrLogin()) renderHomeDashboard();
+          else if (PAGE === "registro" && hasQrLogin()) showHarvestHome(getIdentity());
+          else if (PAGE === "vinculo" && hasQrLogin()) showVinculoScreen(getIdentity());
+          else goTo("scan", true);
+        }
       }, 1200);
 
       if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
         try {
-          const reg = await navigator.serviceWorker.register("./sw.js?v=89");
+          const reg = await navigator.serviceWorker.register("/sw.js?v=153", {
+            scope: "/",
+          });
           reg.update?.().catch(() => {});
         } catch {
           /* ignore */
         }
       }
     } catch (err) {
-      showSecurityLogin("");
+      if (PAGE === "scan") showSecurityLogin("");
+      else goTo("scan", true);
       const msg = $("#secMsg") || $("#pinMsg");
       if (msg) msg.textContent = "Error al iniciar. Ctrl+F5 para recargar.";
     }

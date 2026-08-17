@@ -1,18 +1,26 @@
 # QBerries · Supervisores Cosecha
 
-Prototipo móvil (PWA) para registro de cosecha de arándanos: **Grupo → Trabajador → Lote → Guías (jarras/jabas)**.
+Prototipo móvil (PWA) para registro de cosecha de arándanos.
 
-## Variables de entorno (Netlify) — igual que qpack
+## Acceso (como app real)
+
+1. Escanea el carnet QR (solo Supervisores de Cosecha).
+2. Ingresa la contraseña personal (validada en Netlify, no en el celular).
+3. La sesión queda en ese dispositivo hasta **Cerrar sesión**.
+4. Guardar vínculos exige un token firmado de esa sesión.
+
+## Variables de entorno (Netlify)
 
 En **Site configuration → Environment variables** configure:
 
 | Variable | Uso |
 |----------|-----|
-| `LOGIN_PIN` | Contraseña de acceso (definir solo en Netlify) |
-| `API_TOKEN` | Token secreto hacia Apps Script (solo en Netlify) |
+| `LOGIN_PIN` | Contraseña de prueba compartida (ej. `231223`) |
+| `SUPERVISOR_PINS` | Opcional: `{"DNI":"clave",...}` una clave por supervisor |
+| `API_TOKEN` | Token secreto hacia Apps Script + firma de sesión |
 | `APPS_SCRIPT_URL` | URL del Web App de Google Apps Script |
 
-En Netlify, ponga `LOGIN_PIN` = la contraseña de la empresa. El cliente no lee el env: valida vía `/.netlify/functions/login`.
+Si configura `SUPERVISOR_PINS`, cada DNI usa su clave; si no, todos usan `LOGIN_PIN`. El cliente no lee estas variables: valida vía `/.netlify/functions/login`.
 
 Plantilla: `.env.example`
 
@@ -25,11 +33,11 @@ Plantilla: `.env.example`
 
 ## Local
 
-Abra `index.html`. Sin Functions, usa la misma contraseña por defecto.
+Abra la app con el servidor Netlify/local. El primer acceso con contraseña necesita internet (validación en servidor).
 
 ## Offline / PWA
 
 - Primera visita **con internet** instala la app en caché (Service Worker).
-- Después funciona **sin internet**: registro, KPIs, Excel/PDF locales.
+- Después funciona **sin internet** si ya hay sesión en el dispositivo.
 - Subir a la nube solo con conexión (Netlify + Apps Script).
 - En el celular: “Agregar a pantalla de inicio” para usarla como app.
