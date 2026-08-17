@@ -132,7 +132,7 @@ body:not([data-page="scan"]):not(.kb-open) .stage::after {
   right: 0;
   bottom: 0;
   height: max(var(--safe-b), 56px);
-  z-index: 90;
+  z-index: 96;
   background: var(--white);
   pointer-events: none;
 }
@@ -3854,8 +3854,11 @@ body[data-page="scan"] .app-tabbar,
  * el documento: si se encoge, iPhone pinta esa franja con su fondo del
  * sistema (se ve negra). El teclado solo se compensa con espacio interno.
  */
+/* El celular rellena lo que queda fuera del área de la app (bajo la barra de
+ * gestos) con el fondo del documento. En blanco, ese resto se ve como parte de
+ * la barra de pestañas y no como un hueco. */
 html {
-  background: var(--bg);
+  background: #ffffff;
   color-scheme: light;
 }
 html,

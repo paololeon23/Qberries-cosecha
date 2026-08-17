@@ -21,7 +21,7 @@
   const LOGOUT_FLAG_KEY = "qb-supervisores-logout-v1";
   const HISTORY_TTL_MS = 48 * 60 * 60 * 1000;
   const HISTORY_PAGE_SIZE = 8;
-  const APP_VERSION = "v179";
+  const APP_VERSION = "v181";
   const HARVEST_TYPES = [
     { key: "suma-jarras", label: "Suma de jarras", observacion: "SUMAR JARRAS" },
     { key: "descuento-jarras", label: "Descuento jarras", observacion: "DESCUENTO JARRAS" },
@@ -2605,7 +2605,7 @@
     });
   }
 
-  async function onTabbarClick(tab) {
+  function onTabbarClick(tab) {
     if (navigationLocked) return;
     cancelRegistroRedirect();
 
@@ -2620,7 +2620,6 @@
         return;
       }
       persistDraftBeforeNav();
-      await new Promise((resolve) => setTimeout(resolve, 150));
       beginNavigation("/inicio/?tab=excel");
       return;
     }
@@ -2641,10 +2640,9 @@
       return;
     }
 
-    // Guardar borrador local ANTES de cambiar de módulo (~150 ms).
+    // El borrador se guarda en localStorage (síncrono): al terminar esta línea
+    // ya está en disco, así que se navega en el mismo instante del toque.
     persistDraftBeforeNav();
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    if (navigationLocked) return;
 
     if (tab === "vincular") {
       goTo("vinculo");
@@ -4827,7 +4825,7 @@
 
       if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
         try {
-          const reg = await navigator.serviceWorker.register("/sw.js?v=179", {
+          const reg = await navigator.serviceWorker.register("/sw.js?v=181", {
             scope: "/",
           });
           reg.update?.().catch(() => {});
