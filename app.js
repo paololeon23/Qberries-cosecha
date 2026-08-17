@@ -22,7 +22,7 @@
   const LOGOUT_FLAG_KEY = "qb-supervisores-logout-v1";
   const HISTORY_TTL_MS = 48 * 60 * 60 * 1000;
   const HISTORY_PAGE_SIZE = 8;
-  const APP_VERSION = "v224";
+  const APP_VERSION = "v225";
   const HARVEST_TYPES = [
     { key: "suma-jarras", label: "Suma de jarras", short: "Suma", observacion: "SUMAR JARRAS" },
     { key: "descuento-jarras", label: "Descuento jarras", short: "Resta", observacion: "DESCUENTO JARRAS" },
@@ -4821,14 +4821,35 @@
       "touchstart",
       (e) => {
         const s = scrollParent_(e.target);
+        const tableWrap = e.target?.closest?.(".export-preview-table-wrap");
+        if (tableWrap && e.touches[0]) tableWrap._touchY = e.touches[0].clientY;
         if (s && e.touches[0]) s._touchY = e.touches[0].clientY;
       },
       { passive: true }
     );
 
     const lockOverscroll = (e) => {
-      // La tabla del Excel se desliza en horizontal: no bloquear el gesto
-      if (e.target?.closest?.(".export-preview-table-wrap")) return;
+      const tableWrap = e.target?.closest?.(".export-preview-table-wrap");
+      if (tableWrap) {
+        const canScrollY = tableWrap.scrollHeight > tableWrap.clientHeight + 1;
+        const canScrollX = tableWrap.scrollWidth > tableWrap.clientWidth + 1;
+        if (!canScrollY && !canScrollX) return;
+        if (canScrollY) {
+          const atTop = tableWrap.scrollTop <= 0;
+          const atBottom =
+            tableWrap.scrollTop + tableWrap.clientHeight >=
+            tableWrap.scrollHeight - 1;
+          let dy = 0;
+          if (e.type === "wheel") dy = e.deltaY;
+          else if (e.touches && e.touches[0]) {
+            dy =
+              (tableWrap._touchY || e.touches[0].clientY) -
+              e.touches[0].clientY;
+          }
+          if ((atTop && dy < 0) || (atBottom && dy > 0)) e.preventDefault();
+        }
+        return;
+      }
       // El listado del select (Grupo / Grupo LIC) debe poder deslizar
       const pickerList = e.target?.closest?.(".picker-list");
       if (pickerList) {
@@ -5477,7 +5498,7 @@
 
       if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
         try {
-          const reg = await navigator.serviceWorker.register("/sw.js?v=224", {
+          const reg = await navigator.serviceWorker.register("/sw.js?v=225", {
             scope: "/",
           });
           reg.update?.().catch(() => {});
