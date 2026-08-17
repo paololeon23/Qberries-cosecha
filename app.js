@@ -22,7 +22,7 @@
   const LOGOUT_FLAG_KEY = "qb-supervisores-logout-v1";
   const HISTORY_TTL_MS = 48 * 60 * 60 * 1000;
   const HISTORY_PAGE_SIZE = 8;
-  const APP_VERSION = "v225";
+  const APP_VERSION = "v227";
   const HARVEST_TYPES = [
     { key: "suma-jarras", label: "Suma de jarras", short: "Suma", observacion: "SUMAR JARRAS" },
     { key: "descuento-jarras", label: "Descuento jarras", short: "Resta", observacion: "DESCUENTO JARRAS" },
@@ -3225,12 +3225,14 @@
     return snapshot;
   }
 
-  /** Guarda en el historial (una sola vez por resumen) */
-  async function commitHarvestSnapshot() {
-    const snapshot = state.activeExportSnapshot;
+  function persistHarvestSnapshot(snapshot, opts = {}) {
     if (!snapshot) return null;
-    if (state.activeExportSaved) {
-      toast("Este registro ya está guardado");
+    const silent = !!opts.silent;
+    const skipReset = !!opts.skipReset;
+    if (
+      state.activeExportSaved &&
+      state.activeExportSnapshot?.id === snapshot.id
+    ) {
       return snapshot;
     }
     const history = loadHarvestHistory();
@@ -3242,7 +3244,7 @@
         buildHarvestSyncPayload(snapshot),
         snapshot.id
       );
-      resetHarvestTypeAfterSave(snapshot.tipo);
+      if (!skipReset) resetHarvestTypeAfterSave(snapshot.tipo);
       flushCloudDataQueue().catch(() => {});
       return snapshot;
     }
@@ -3252,7 +3254,7 @@
         JSON.stringify([snapshot, ...history].slice(0, 50))
       );
     } catch {
-      toast("No hay espacio para guardar el historial");
+      if (!silent) toast("No hay espacio para guardar el historial");
       return null;
     }
     state.activeExportSaved = true;
@@ -3262,14 +3264,25 @@
       buildHarvestSyncPayload(snapshot),
       snapshot.id
     );
-    resetHarvestTypeAfterSave(snapshot.tipo);
+    if (!skipReset) resetHarvestTypeAfterSave(snapshot.tipo);
     if (state.previewDraftSnapshot?.id === snapshot.id) {
       state.previewDraftSnapshot = snapshot;
     }
-    toast("Se guardó correctamente");
+    if (!silent) toast("Se guardó correctamente");
     flushCloudDataQueue().catch(() => {});
     renderExportPreviewTypes(snapshot);
     return snapshot;
+  }
+
+  /** Guarda en el historial (una sola vez por resumen) */
+  async function commitHarvestSnapshot() {
+    const snapshot = state.activeExportSnapshot;
+    if (!snapshot) return null;
+    if (state.activeExportSaved) {
+      toast("Este registro ya está guardado");
+      return snapshot;
+    }
+    return persistHarvestSnapshot(snapshot);
   }
 
   function updateExportPreviewSavedUI() {
@@ -3417,19 +3430,53 @@
     window.open(`https://api.whatsapp.com/send?text=${encoded}`, "_blank");
   }
 
+  function harvestShareFileVariants(snapshot) {
+    const primary = buildHarvestFile(snapshot);
+    if (!primary) return [];
+    const variants = [primary];
+    const bytes =
+      primary instanceof File || primary instanceof Blob
+        ? primary
+        : null;
+    if (!bytes) return variants;
+    const name = harvestFileName(snapshot);
+    const types = [
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "application/vnd.ms-excel",
+      "application/octet-stream",
+    ];
+    types.forEach((type) => {
+      if (primary.type === type) return;
+      try {
+        variants.push(new File([bytes], name, { type, lastModified: Date.now() }));
+      } catch {
+        /* ignore */
+      }
+    });
+    return variants;
+  }
+
+  async function openNativeShareWithFiles(files) {
+    if (!files?.length || typeof navigator.share !== "function") return false;
+    const attempts = [];
+    files.forEach((file) => {
+      attempts.push({ files: [file] });
+    });
+    for (const shareData of attempts) {
+      try {
+        await navigator.share(shareData);
+        return true;
+      } catch (err) {
+        if (err?.name === "AbortError") throw err;
+      }
+    }
+    return false;
+  }
+
   async function shareHarvestSnapshot(snapshot, opts = {}) {
     if (!snapshot) {
       toast("No hay registro para compartir");
       return;
-    }
-    if (
-      !opts.single &&
-      !state.activeExportSaved &&
-      state.activeExportSnapshot?.id === snapshot.id
-    ) {
-      const saved = await commitHarvestSnapshot();
-      if (!saved) return;
-      snapshot = saved;
     }
     if (!opts.single) {
       const ready = todayReadySnapshots();
@@ -3443,44 +3490,47 @@
       return;
     }
 
-    let file = null;
+    if (
+      !opts.single &&
+      !state.activeExportSaved &&
+      state.activeExportSnapshot?.id === snapshot.id
+    ) {
+      snapshot = persistHarvestSnapshot(snapshot, { silent: true }) || snapshot;
+    }
+
+    let files = [];
     try {
-      file = buildHarvestFile(snapshot);
+      files = harvestShareFileVariants(snapshot);
     } catch {
-      file = null;
+      files = [];
     }
-
-    const text = harvestShareText(snapshot);
-
-    // 1) Mejor opción en celular: menú nativo con el Excel adjunto.
-    if (file && typeof navigator.share === "function") {
-      const fileAttempts = [
-        { files: [file] },
-        { files: [file], text },
-        { files: [file], title: harvestFileName(snapshot), text },
-      ];
-      for (const shareData of fileAttempts) {
-        try {
-          await navigator.share(shareData);
-          toast("Elija WhatsApp para enviar el Excel");
-          return;
-        } catch (err) {
-          if (err?.name === "AbortError") return;
-        }
-      }
-    }
-
-    // 2) Si no se pudo adjuntar, abrir WhatsApp con el resumen.
-    //    El archivo se descarga aparte solo si el usuario toca Descargar Excel.
-    try {
-      openWhatsAppWithText(
-        `${text}\n\nDesde QBerries: si no llegó el Excel, toque Descargar Excel y adjúntelo en el chat.`
-      );
-      toast("Abriendo WhatsApp");
+    if (!files.length) {
+      toast("No se pudo crear el Excel");
       return;
-    } catch {
-      toast("No se pudo abrir WhatsApp. Use Descargar Excel");
     }
+
+    try {
+      const shared = await openNativeShareWithFiles(files);
+      if (shared) {
+        toast("Elija WhatsApp para enviar el Excel");
+        return;
+      }
+    } catch (err) {
+      if (err?.name === "AbortError") return;
+    }
+
+    downloadHarvestSnapshot(snapshot, { single: true });
+    try {
+      const shared = await openNativeShareWithFiles(files);
+      if (shared) {
+        toast("Elija WhatsApp para enviar el Excel");
+        return;
+      }
+    } catch (err) {
+      if (err?.name === "AbortError") return;
+    }
+
+    toast("Toque Compartir otra vez y elija WhatsApp con el Excel");
   }
 
   function openReadyFilesModal(action, files) {
@@ -3575,29 +3625,32 @@
     }
     let files = [];
     try {
-      files = snapshots.map((item) => buildHarvestFile(item)).filter(Boolean);
+      files = snapshots.flatMap((item) => harvestShareFileVariants(item));
     } catch {
       files = [];
     }
-    const text = snapshots.map((item) => harvestShareText(item)).join("\n");
-    if (files.length && typeof navigator.share === "function") {
+    if (files.length) {
       try {
-        await navigator.share({ files, text });
-        toast("Elija WhatsApp para enviar los Excel");
-        return;
+        const shared = await openNativeShareWithFiles(files);
+        if (shared) {
+          toast("Elija WhatsApp para enviar los Excel");
+          return;
+        }
       } catch (err) {
         if (err?.name === "AbortError") return;
       }
     }
     snapshots.forEach((item) => downloadHarvestSnapshot(item, { single: true }));
     try {
-      openWhatsAppWithText(
-        `${text}\n\nSi no llegaron los Excel, adjúntelos desde Descargas.`
-      );
-      toast("Abriendo WhatsApp · Excel descargados");
-    } catch {
-      toast("Excel descargados. Adjúntelos en WhatsApp");
+      const shared = await openNativeShareWithFiles(files);
+      if (shared) {
+        toast("Elija WhatsApp para enviar los Excel");
+        return;
+      }
+    } catch (err) {
+      if (err?.name === "AbortError") return;
     }
+    toast("Toque Compartir otra vez y elija WhatsApp con los Excel");
   }
 
   function renderHarvestHistory() {
@@ -4969,7 +5022,13 @@
     on("#btnShareHarvest", "click", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      shareHarvestSnapshot(state.activeExportSnapshot);
+      const snapshot = state.activeExportSnapshot;
+      if (!snapshot) return;
+      if (typeof XLSX === "undefined") {
+        toast("Espere a que cargue el Excel e intente otra vez");
+        return;
+      }
+      shareHarvestSnapshot(snapshot);
     });
     on("#exportPreviewTypes", "click", (e) => {
       const btn = e.target?.closest?.("[data-preview-type]");
@@ -5498,7 +5557,7 @@
 
       if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
         try {
-          const reg = await navigator.serviceWorker.register("/sw.js?v=225", {
+          const reg = await navigator.serviceWorker.register("/sw.js?v=227", {
             scope: "/",
           });
           reg.update?.().catch(() => {});
