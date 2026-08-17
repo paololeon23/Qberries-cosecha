@@ -23,7 +23,7 @@
   --radius-sm: 14px;
   --safe-b: env(safe-area-inset-bottom, 0px);
   --safe-t: env(safe-area-inset-top, 0px);
-  --nav-h: 58px;
+  --nav-h: 52px;
   --font: "Segoe UI", system-ui, -apple-system, sans-serif;
   /* Unidad proporcional: 1 = diseño de referencia (celular de 390 px de ancho).
    * En móvil se recalcula con el ancho real para que todo se vea igual. */
@@ -117,17 +117,9 @@ body::before {
   background: var(--bg);
   pointer-events: none;
 }
-/* Franja inferior blanca bajo la barra de pestañas (zona segura del iPhone). */
+/* Sin franja blanca suelta al pie: la barra misma pinta hasta el borde. */
 body:not([data-page="scan"]):not(.kb-open) .stage::after {
-  content: "";
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: var(--safe-b);
-  z-index: 99;
-  background: #ffffff;
-  pointer-events: none;
+  content: none;
 }
 
 /*
@@ -2360,11 +2352,7 @@ body[data-page="scan"] .lock-screen {
   font-size: 0.66rem;
   font-weight: 800;
 }
-/* ——— BARRA INFERIOR CON BOTÓN CENTRAL FLOTANTE ———
- * Fija al borde real del celular. La altura táctil (--nav-h) y el área segura
- * del gesto de iOS se suman: el fondo blanco llega hasta el borde y los
- * iconos nunca quedan debajo de la barra de inicio.
- */
+/* ——— BARRA INFERIOR: COMPACTA, PEGADA AL BORDE ——— */
 .app-tabbar {
   position: fixed;
   left: 0;
@@ -2373,29 +2361,26 @@ body[data-page="scan"] .lock-screen {
   z-index: 100;
   display: grid;
   grid-template-columns: repeat(5, 1fr);
-  align-items: center;
-  height: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px));
-  padding: 0 4px;
+  align-items: end;
+  /* Sin altura fija: solo el alto del icono + etiqueta + safe-area. */
+  height: auto;
+  min-height: 0;
+  padding: 6px 2px 0;
+  /* Único espacio bajo las etiquetas: el gesto del iPhone (0 en Android). */
   padding-bottom: env(safe-area-inset-bottom, 0px);
   border-top: 1px solid #e3ebe1;
   background: #ffffff;
-  box-shadow: 0 -4px 14px rgba(30, 65, 35, 0.08);
-  /* El botón central sobresale de la barra: aquí nada puede recortarlo. */
+  box-shadow:
+    0 -4px 14px rgba(30, 65, 35, 0.08),
+    /* Blanco continuo por debajo: no asoma el fondo de la app. */
+    0 80px 0 0 #ffffff;
   overflow: visible;
-  /* Capa propia: el círculo se dibuja siempre encima del contenido. */
   isolation: isolate;
   view-transition-name: tabbar;
 }
-/* Prolonga el blanco por debajo por si el sistema reserva más de lo previsto. */
+/* Sin franja extra debajo: el hueco marcado se elimina. */
 .app-tabbar::after {
-  content: "";
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
-  height: max(24px, env(safe-area-inset-bottom, 0px));
-  background: #ffffff;
-  pointer-events: none;
+  content: none;
 }
 body[data-page="scan"] .app-tabbar,
 .app-tabbar[hidden] {
@@ -2407,11 +2392,12 @@ body[data-page="scan"] .app-tabbar,
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 2px;
+  justify-content: flex-end;
+  gap: 1px;
   min-width: 0;
-  height: 100%;
-  padding: 2px 2px 0;
+  height: auto;
+  min-height: 0;
+  padding: 4px 2px 6px;
   background: transparent;
   color: #79867b;
   cursor: pointer;
@@ -2441,11 +2427,9 @@ body[data-page="scan"] .app-tabbar,
   background: var(--qb-green-dark);
 }
 
-/* Acción principal: círculo elevado con transform (no altera el layout de la
- * barra ni el reparto de las 5 columnas, y la zona táctil sube con él). */
 .app-tabbar .tab-main {
   gap: 0;
-  padding: 0;
+  padding: 0 2px 6px;
   z-index: 1;
 }
 .app-tabbar .tab-main .ico { width: 24px; height: 24px; }
@@ -2459,11 +2443,11 @@ body[data-page="scan"] .app-tabbar,
   background: linear-gradient(145deg, #5ead51 0%, #2f7a36 100%);
   border: 4px solid #fff;
   box-shadow: 0 8px 18px rgba(47, 122, 54, 0.34);
-  transform: translateY(-16px);
+  transform: translateY(-18px);
   transition: transform 0.12s ease;
 }
 .app-tabbar .tab-main:active .tab-main-circle {
-  transform: translateY(-16px) scale(0.94);
+  transform: translateY(-18px) scale(0.94);
 }
 .app-tabbar .tab-main.is-active::before { content: none; }
 
@@ -4013,10 +3997,10 @@ body.kb-open .picker {
   .app-tabbar .tab-main .tab-main-circle {
     width: 48px;
     height: 48px;
-    transform: translateY(-14px);
+    transform: translateY(-16px);
   }
   .app-tabbar .tab-main:active .tab-main-circle {
-    transform: translateY(-14px) scale(0.94);
+    transform: translateY(-16px) scale(0.94);
   }
   .history-item-actions button { font-size: 0.62rem; padding: 0 4px; }
   .net-badge { font-size: 0.6rem; padding: 4px 7px; }
@@ -4050,14 +4034,13 @@ body.kb-open .picker {
   .harvest-head { padding: max(8px, calc(4px + var(--safe-t))) 12px 8px; }
   .harvest-logo { width: 36px; height: 36px; max-width: 36px; flex-basis: 36px; }
   .export-preview { max-height: min(96dvh, 96%); }
-  .app-tabbar { height: calc(50px + env(safe-area-inset-bottom, 0px)); }
   .app-tabbar .tab-main .tab-main-circle {
     width: 44px;
     height: 44px;
-    transform: translateY(-10px);
+    transform: translateY(-12px);
   }
   .app-tabbar .tab-main:active .tab-main-circle {
-    transform: translateY(-10px) scale(0.94);
+    transform: translateY(-12px) scale(0.94);
   }
   .qr-frame { max-height: 190px; }
 }
