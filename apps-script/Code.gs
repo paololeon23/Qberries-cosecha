@@ -87,15 +87,15 @@
     ];
 
     var SUMMARY_HEADERS = [
+      'NOMBRE DEL SUPERVISOR',
+      'TIPO',
       'TOTAL TURNO DÍA',
       'TOTAL TURNO TARDE',
       'TOTAL DE TODO',
       'TOTAL DE TRABAJADORES',
-      'NOMBRE DEL SUPERVISOR',
+      'LOTE O LOTES',
       'DÍA',
-      'HORA DE GUARDADO',
-      'TIPO',
-      'LOTE O LOTES'
+      'HORA REGISTRO'
     ];
 
     var _jsonpCb = '';
@@ -501,15 +501,15 @@
         'yyyy-MM-dd'
       );
       var row = [
+        clean_(d.supervisorNombre).toUpperCase(),
+        summaryType_(d.tipo),
         totalDia,
         totalTarde,
         totalDia + totalTarde,
         totalTrabajadores,
-        clean_(d.supervisorNombre).toUpperCase(),
+        lotes.join(', '),
         fecha,
-        formatHora_(d.horaGuardado),
-        summaryType_(d.tipo),
-        lotes.join(', ')
+        formatHora_(d.horaGuardado)
       ];
 
       var sh = summarySheet_();

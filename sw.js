@@ -1,4 +1,4 @@
-const CACHE = "qb-supervisores-v158";
+const CACHE = "qb-supervisores-v168";
 const ASSETS = [
   "/",
   "/index.html",
@@ -84,18 +84,22 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // HTML / JS / CSS: red primero (evita pantalla en blanco con versión vieja)
+  // HTML / JS / CSS: se responde al instante desde caché y se actualiza detrás.
+  // Así cambiar de pestaña no espera a la red (se sentía como una recarga).
   if (req.mode === "navigate" || isAppShell(url)) {
     event.respondWith(
-      fetch(req)
-        .then((res) => {
-          if (res && res.ok && url.origin === self.location.origin) {
-            const copy = res.clone();
-            caches.open(CACHE).then((cache) => cache.put(req, copy));
-          }
-          return res;
-        })
-        .catch(() => caches.match(req, { ignoreSearch: true }))
+      caches.match(req, { ignoreSearch: true }).then((cached) => {
+        const network = fetch(req)
+          .then((res) => {
+            if (res && res.ok && url.origin === self.location.origin) {
+              const copy = res.clone();
+              caches.open(CACHE).then((cache) => cache.put(req, copy));
+            }
+            return res;
+          })
+          .catch(() => cached);
+        return cached || network;
+      })
     );
     return;
   }

@@ -21,7 +21,7 @@
   const LOGOUT_FLAG_KEY = "qb-supervisores-logout-v1";
   const HISTORY_TTL_MS = 48 * 60 * 60 * 1000;
   const HISTORY_PAGE_SIZE = 8;
-  const APP_VERSION = "v158";
+  const APP_VERSION = "v168";
   const HARVEST_TYPES = [
     { key: "suma-jarras", label: "Suma de jarras", observacion: "SUMAR JARRAS" },
     { key: "descuento-jarras", label: "Descuento jarras", observacion: "DESCUENTO JARRAS" },
@@ -77,12 +77,22 @@
 
     const apply = () => {
       const height = Math.round(vv ? vv.height : window.innerHeight);
+      const offsetTop = vv ? Math.round(vv.offsetTop) : 0;
       const keyboard = vv
-        ? Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop))
+        ? Math.max(0, Math.round(window.innerHeight - vv.height - offsetTop))
         : 0;
+      const open = keyboard > 120;
       root.style.setProperty("--app-h", `${height}px`);
       root.style.setProperty("--kb-h", `${keyboard}px`);
-      document.body?.classList.toggle("kb-open", keyboard > 120);
+      root.style.setProperty("--vv-top", `${offsetTop}px`);
+      document.body?.classList.toggle("kb-open", open);
+      // iPhone empuja toda la ventana hacia arriba para destapar el campo y
+      // debajo asoma el fondo del sistema (franja negra). Se devuelve a cero.
+      if (open && (window.scrollY || offsetTop)) {
+        window.scrollTo(0, 0);
+        if (root.scrollTop) root.scrollTop = 0;
+        if (document.body?.scrollTop) document.body.scrollTop = 0;
+      }
     };
 
     apply();
@@ -91,16 +101,21 @@
       vv.addEventListener("scroll", apply);
     }
     window.addEventListener("resize", apply);
+    window.addEventListener("scroll", apply, { passive: true });
     window.addEventListener("orientationchange", () => setTimeout(apply, 250));
     document.addEventListener("focusin", (e) => {
       const field = e.target?.closest?.("input, textarea, select");
       if (!field) return;
-      setTimeout(() => {
-        apply();
-        field.scrollIntoView({ block: "center", behavior: "smooth" });
-      }, 320);
+      [80, 260, 520].forEach((delay) =>
+        setTimeout(() => {
+          apply();
+          field.scrollIntoView({ block: "center", behavior: "smooth" });
+        }, delay)
+      );
     });
-    document.addEventListener("focusout", () => setTimeout(apply, 320));
+    document.addEventListener("focusout", () => {
+      [80, 320].forEach((delay) => setTimeout(apply, delay));
+    });
   }
 
   function todayISO() {
@@ -2543,6 +2558,14 @@
     else bar.setAttribute("hidden", "");
   }
 
+  function markTabPressed(tab) {
+    const bar = $("#appTabbar");
+    if (!bar || !tab || tab === "ayuda") return;
+    $$("[data-tab]", bar).forEach((btn) => {
+      btn.classList.toggle("is-active", btn.dataset.tab === tab);
+    });
+  }
+
   function currentTab() {
     const help = $("#helpSheet");
     if (help && !help.hidden) return "ayuda";
@@ -4208,7 +4231,10 @@
     });
     on("#appTabbar", "click", (e) => {
       const btn = e.target?.closest?.("[data-tab]");
-      if (btn) onTabbarClick(btn.dataset.tab);
+      if (!btn) return;
+      // Se marca al instante: la pestaña responde aunque la página tarde en abrir.
+      markTabPressed(btn.dataset.tab);
+      onTabbarClick(btn.dataset.tab);
     });
     on("#homeDashboard", "click", (e) => {
       const button = e.target?.closest?.("[data-home-action]");
@@ -4731,7 +4757,7 @@
 
       if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
         try {
-          const reg = await navigator.serviceWorker.register("/sw.js?v=158", {
+          const reg = await navigator.serviceWorker.register("/sw.js?v=168", {
             scope: "/",
           });
           reg.update?.().catch(() => {});
@@ -4747,9 +4773,21 @@
     }
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", init);
-  } else {
+  function startWhenVisible() {
+    // Páginas pre-renderizadas: no arrancar hasta que el usuario entre, para no
+    // duplicar envíos ni abrir la cámara antes de tiempo.
+    if (document.prerendering) {
+      document.addEventListener("prerenderingchange", startWhenVisible, {
+        once: true,
+      });
+      return;
+    }
     init();
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", startWhenVisible);
+  } else {
+    startWhenVisible();
   }
 })();

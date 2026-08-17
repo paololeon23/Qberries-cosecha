@@ -25,6 +25,9 @@
   --safe-t: env(safe-area-inset-top, 0px);
   --nav-h: 78px;
   --font: "Segoe UI", system-ui, -apple-system, sans-serif;
+  /* Unidad proporcional: 1 = diseño de referencia (celular de 390 px de ancho).
+   * En móvil se recalcula con el ancho real para que todo se vea igual. */
+  --u: 1px;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -41,21 +44,26 @@ html { resize: none; }
 body {
   font-family: var(--font);
   color: var(--ink);
-  background: #0a0a0a;
+  /* Mismo tono que la app: si algo queda descubierto no se ve una franja negra. */
+  background: var(--bg);
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
   resize: none;
   cursor: default;
 }
 
-/* Evita mostrar una pantalla antes de validar la sesión. */
-body.app-booting .phone {
+/*
+ * Solo se oculta la pantalla mientras se valida cuando NO hay sesión guardada.
+ * Con sesión, la app aparece de inmediato: cambiar de pestaña no debe verse
+ * como una recarga.
+ */
+html:not(.has-session) body.app-booting .phone {
   visibility: hidden;
 }
 body.app-booting {
   background: var(--bg);
 }
-body.app-booting::after {
+html:not(.has-session) body.app-booting::after {
   content: "";
   position: fixed;
   z-index: 9999;
@@ -95,6 +103,50 @@ img {
   max-width: 100%;
   height: auto;
   object-fit: contain;
+}
+
+/*
+ * Capa de respaldo: cubre siempre toda la pantalla del celular, incluso la
+ * franja de la barra de inicio, para que nunca asome un fondo oscuro.
+ */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: var(--bg);
+  pointer-events: none;
+}
+/* Franja inferior blanca bajo la barra de pestañas (zona segura del iPhone). */
+body:not([data-page="scan"]):not(.kb-open) .stage::after {
+  content: "";
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: var(--safe-b);
+  z-index: 99;
+  background: #ffffff;
+  pointer-events: none;
+}
+
+/*
+ * Cambio de pestaña sin parpadeo: el navegador mantiene la pantalla anterior
+ * y funde hacia la nueva, como en una app instalada.
+ */
+@view-transition {
+  navigation: auto;
+}
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 0.16s;
+  animation-timing-function: ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation: none;
+  }
 }
 
 .stage {
@@ -2210,7 +2262,7 @@ body[data-page="scan"] .lock-screen {
   inset: 0;
   z-index: 135;
   overflow-y: auto;
-  padding: max(16px, var(--safe-t)) 14px calc(82px + var(--safe-b));
+  padding: max(16px, var(--safe-t)) 14px calc(20px + var(--safe-b));
   background: #f3f7f1;
   animation: rise 0.2s ease;
 }
@@ -2318,11 +2370,27 @@ body[data-page="scan"] .lock-screen {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
   align-items: end;
-  padding: 6px 6px max(8px, var(--safe-b));
+  /* Pegada al borde: el fondo blanco llega hasta la barra de inicio del iPhone. */
+  padding: 6px 6px calc(8px + var(--safe-b));
   border-top: 1px solid #e3ebe1;
-  background: rgba(255, 255, 255, 0.98);
-  backdrop-filter: blur(12px);
+  background: #ffffff;
   box-shadow: 0 -6px 18px rgba(30, 65, 35, 0.1);
+  /* Se mantiene fija al cambiar de pestaña: no parpadea con la transición. */
+  view-transition-name: tabbar;
+}
+/*
+ * Prolonga el blanco por debajo de la barra: aunque el sistema reserve más
+ * espacio del previsto, nunca queda una franja de otro color al final.
+ */
+.app-tabbar::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  height: 140px;
+  background: #ffffff;
+  pointer-events: none;
 }
 /* En escanear carnet no hay navegación: es el inicio del acceso. */
 body[data-page="scan"] .app-tabbar,
@@ -2534,7 +2602,10 @@ body[data-page="scan"] .app-tabbar,
   background: transparent;
   font: inherit;
   text-align: center;
+  transition: transform 0.1s ease;
 }
+.home-action-grid button:active { transform: scale(0.94); }
+.home-action-grid button:active .home-action-icon { filter: brightness(0.96); }
 .home-action-grid strong {
   display: block;
   margin-top: 7px;
@@ -2834,9 +2905,10 @@ body[data-page="scan"] .app-tabbar,
   right: 0;
   bottom: 0;
   z-index: 125;
-  max-height: 78%;
+  max-height: 82%;
   overflow-y: auto;
-  padding: 14px 16px calc(78px + var(--safe-b));
+  /* La hoja tapa la barra de pestañas: solo reserva la zona segura del iPhone. */
+  padding: 14px 16px calc(16px + var(--safe-b));
   background: #fff;
   border-radius: 22px 22px 0 0;
   box-shadow: 0 -16px 40px rgba(12, 40, 20, 0.22);
@@ -3723,36 +3795,79 @@ body[data-page="scan"] .app-tabbar,
 /* ——— TECLADO DEL CELULAR: SIN HUECOS ——— */
 
 /*
- * --app-h lo calcula la app con la ventana visible real (visualViewport).
- * Así, al abrir el teclado en iPhone o Android, la pantalla se recorta
- * exactamente hasta donde empieza el teclado en lugar de dejar un vacío.
+ * La app SIEMPRE ocupa toda la pantalla, con o sin teclado. Nunca se encoge
+ * el documento: si se encoge, iPhone pinta esa franja con su fondo del
+ * sistema (se ve negra). El teclado solo se compensa con espacio interno.
  */
+html {
+  background: var(--bg);
+  color-scheme: light;
+}
 html,
 body,
-.stage,
-.phone {
-  height: var(--app-h, 100dvh);
-  max-height: var(--app-h, 100dvh);
+.stage {
+  height: 100dvh;
+  min-height: 100dvh;
+  max-height: 100dvh;
 }
-@media (max-width: 899px) {
-  html,
-  body,
-  .stage,
-  .phone {
-    height: var(--app-h, 100dvh);
-    max-height: var(--app-h, 100dvh);
-  }
+.phone {
+  height: 100%;
+  min-height: 100%;
+  max-height: 100%;
+  background: var(--bg);
 }
 
-/* Mientras se escribe, la barra de pestañas estorba: se oculta. */
+/*
+ * iPhone hace zoom automático al tocar un campo con letra menor a 16px y la
+ * pantalla queda descuadrada. Con 16px el comportamiento es idéntico al de
+ * Android y no hay saltos.
+ */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+@media (max-width: 899px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+  .harvest-worker-row input,
+  .harvest-worker-form input,
+  .manual-worker-form input,
+  .picker-search input {
+    font-size: 16px;
+  }
+  .harvest-worker-row input { padding: 4px 2px; }
+}
+
+/*
+ * Con el teclado abierto la app se recorta al alto visible y se ancla a la
+ * ventana visible (--vv-top). Así el iPhone no puede levantar la ventana y
+ * dejar la franja negra del sistema debajo.
+ */
+body.kb-open,
+body.kb-open .stage {
+  height: var(--app-h, 100dvh);
+  min-height: 0;
+  max-height: var(--app-h, 100dvh);
+}
+body.kb-open .stage {
+  position: fixed;
+  top: var(--vv-top, 0px);
+  left: 0;
+  right: 0;
+  width: 100%;
+}
+
+/* Mientras se escribe: sin barra de pestañas y con aire para ver el campo. */
 body.kb-open .app-tabbar {
   display: none;
 }
-body.kb-open .harvest-scroll {
-  padding-bottom: 18px;
-}
+body.kb-open .harvest-scroll,
 body.kb-open .home-scroll,
-body.kb-open .vinculo-scroll {
+body.kb-open .vinculo-scroll,
+body.kb-open .security-screen {
   padding-bottom: 20px;
 }
 body.kb-open .export-preview,
@@ -3810,18 +3925,43 @@ body.kb-open .picker {
   font-size: clamp(0.95rem, 4.2vw, 1.08rem);
 }
 
-/* Teléfonos comunes (iPhone SE/12 mini, Android de 6"). */
-@media (max-width: 400px) {
-  .harvest-scroll { padding: 11px 11px calc(88px + var(--safe-b)); }
+/* Todos los celulares ven el MISMO diseño, solo que escalado a su ancho.
+ * La referencia es una pantalla de 390 px (iPhone 12/13/14/15). Un celular de
+ * 360 px lo ve al 92 % y uno de 430 px al 110 %, sin saltos ni recortes. */
+@media (max-width: 899px) {
+  :root { --u: clamp(0.85px, calc(100vw / 390), 1.12px); }
+  .harvest-scroll {
+    padding: calc(11 * var(--u)) calc(11 * var(--u)) calc(88px + var(--safe-b));
+  }
   .harvest-field-card,
   .harvest-add-card,
-  .harvest-register-card { padding: 13px 12px; }
-  .home-scroll { padding: 0 13px calc(94px + var(--safe-b)); }
-  .home-hero { padding: calc(18px + var(--safe-t)) 15px 32px; }
-  .home-panel { padding: 15px 12px 14px; }
-  .home-today-card { padding: 15px 58px 46px 15px; }
-  .export-preview { padding: 13px 12px calc(15px + var(--safe-b)); }
-  .vinculo-scroll { padding: 11px 12px calc(94px + var(--safe-b)); }
+  .harvest-register-card { padding: calc(13 * var(--u)) calc(12 * var(--u)); }
+  .home-scroll { padding: 0 calc(13 * var(--u)) calc(94px + var(--safe-b)); }
+  .home-hero {
+    padding: calc(18 * var(--u) + var(--safe-t)) calc(15 * var(--u)) calc(32 * var(--u));
+  }
+  .home-panel {
+    padding: calc(15 * var(--u)) calc(12 * var(--u)) calc(14 * var(--u));
+  }
+  .home-today-card {
+    margin-top: calc(14 * var(--u));
+    padding: calc(15 * var(--u)) calc(58 * var(--u)) calc(46 * var(--u)) calc(15 * var(--u));
+  }
+  .export-preview {
+    padding: calc(13 * var(--u)) calc(12 * var(--u)) calc(15px + var(--safe-b));
+  }
+  .vinculo-scroll {
+    padding: calc(11 * var(--u)) calc(12 * var(--u)) calc(94px + var(--safe-b));
+  }
+  .home-action-grid { gap: calc(9 * var(--u)); margin-top: calc(16 * var(--u)); }
+  .home-action-icon {
+    width: calc(52 * var(--u));
+    height: calc(52 * var(--u));
+    border-radius: calc(16 * var(--u));
+  }
+  .home-action-icon .ico { width: calc(23 * var(--u)); height: calc(23 * var(--u)); }
+  .home-action-grid strong { font-size: calc(10.4 * var(--u)); }
+  .home-recent { margin-top: calc(19 * var(--u)); }
 }
 @media (min-width: 361px) and (max-width: 400px) {
   .harvest-worker-form { grid-template-columns: 0.85fr 1.25fr 42px; }
@@ -3839,10 +3979,6 @@ body.kb-open .picker {
   .harvest-copy-btn { width: 38px; height: 38px; border-radius: 12px; }
   .harvest-users-btn .ico,
   .harvest-copy-btn .ico { width: 19px; height: 19px; }
-  .home-action-grid { gap: 7px; }
-  .home-action-icon { width: 46px; height: 46px; border-radius: 14px; }
-  .home-action-icon .ico { width: 20px; height: 20px; }
-  .home-action-grid strong { font-size: 0.6rem; }
   .app-tabbar em { font-size: 0.55rem; }
   .app-tabbar .tab-main .tab-main-circle { width: 50px; height: 50px; margin-top: -23px; }
   .history-item-actions button { font-size: 0.62rem; padding: 0 4px; }

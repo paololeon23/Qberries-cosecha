@@ -4,16 +4,34 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no" />
   <meta name="theme-color" content="#5ead51" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="description" content="Registro diario de cosecha QBerries" />
   <link rel="manifest" href="/manifest.json" />
   <link rel="icon" href="/assets/icon-192.png" type="image/png" sizes="192x192" />
   <link rel="apple-touch-icon" href="/assets/icon-192.png" />
   <title>QBerries · Registro</title>
-  <link rel="stylesheet" href="/styles.css?v=158" />
-  <script src="/vendor/xlsx.full.min.js?v=158" defer></script>
-  <script src="/icons.js?v=158" defer></script>
-  <script src="/app.js?v=158" defer></script>
+  <link rel="prefetch" href="/inicio/" />
+  <link rel="prefetch" href="/vinculo/" />
+  <script type="speculationrules">
+    { "prerender": [{ "urls": ["/inicio/", "/vinculo/"], "eagerness": "moderate" }] }
+  </script>
+  <script>
+    /* Antes de pintar: si ya hay sesión, la app se muestra sin pantalla de carga. */
+    try {
+      if (
+        localStorage.getItem("qb-supervisores-identity-ls") &&
+        localStorage.getItem("qb-supervisores-logout-v1") !== "1"
+      ) {
+        document.documentElement.classList.add("has-session");
+      }
+    } catch (e) {}
+  </script>
+  <link rel="stylesheet" href="/styles.css?v=168" />
+  <script src="/vendor/xlsx.full.min.js?v=168" defer></script>
+  <script src="/icons.js?v=168" defer></script>
+  <script src="/app.js?v=168" defer></script>
 </head>
 <body data-page="registro" class="app-booting">
   <div class="stage">
