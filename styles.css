@@ -26,8 +26,9 @@
   --radius-sm: 14px;
   --safe-b: env(safe-area-inset-bottom, 0px);
   --safe-t: env(safe-area-inset-top, 0px);
-  /* Barra inferior tipo PWA: safe-area + altura útil */
-  --nav-safe-bottom: max(4px, env(safe-area-inset-bottom, 0px));
+  /* Barra inferior tipo PWA. Del área segura del iPhone solo se reserva una
+   * parte: lo justo para no pisar el gesto, sin dejar un bloque blanco. */
+  --nav-safe-bottom: max(4px, calc(env(safe-area-inset-bottom, 0px) * 0.3));
   --nav-bar-total: calc(56px + var(--nav-safe-bottom));
   --nav-h: 56px;
   --font: "Segoe UI", system-ui, -apple-system, sans-serif;
@@ -2372,7 +2373,7 @@ body[data-page="scan"] .lock-screen {
   align-items: flex-end;
   height: auto;
   min-height: 0;
-  padding: 10px 4px calc(10px + var(--nav-safe-bottom));
+  padding: 8px 4px var(--nav-safe-bottom);
   background: var(--white);
   border-top: 1px solid var(--border);
   box-shadow: 0 -5px 20px rgba(0, 0, 0, 0.05);
