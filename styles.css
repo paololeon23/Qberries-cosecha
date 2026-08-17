@@ -3707,3 +3707,124 @@ img {
     background: #f3f7fb;
   }
 }
+
+/* ——— AJUSTE FINO PARA PANTALLAS DE CELULAR ——— */
+
+/* Ningún contenido debe empujar la pantalla hacia los lados. */
+.harvest-scroll,
+.history-sheet,
+.export-preview,
+.manual-worker,
+.picker {
+  overflow-x: hidden;
+}
+.harvest-worker-person strong,
+.harvest-worker-person span,
+.picker-item strong,
+.picker-item span,
+.history-item h3,
+.history-item p,
+.manual-worker-head h2 {
+  overflow-wrap: anywhere;
+}
+.export-preview {
+  max-height: min(92dvh, 92%);
+}
+/* El texto largo del botón puede ocupar dos líneas sin romper la fila. */
+.export-preview-actions button {
+  height: auto;
+  padding: 9px 10px;
+  line-height: 1.15;
+}
+.export-preview-actions button .ico {
+  flex: 0 0 auto;
+}
+
+/* Títulos que se adaptan al ancho real del teléfono. */
+.harvest-user h1 {
+  max-width: min(220px, 46vw);
+  font-size: clamp(0.92rem, 4vw, 1.05rem);
+}
+.harvest-section-title h2,
+.home-section-head h2 {
+  font-size: clamp(0.9rem, 3.9vw, 1.02rem);
+}
+.home-today-copy h2 {
+  font-size: clamp(1.15rem, 5.6vw, 1.4rem);
+}
+.export-preview-head h2,
+.history-sheet-head h2 {
+  font-size: clamp(0.95rem, 4.2vw, 1.08rem);
+}
+
+/* Teléfonos comunes (iPhone SE/12 mini, Android de 6"). */
+@media (max-width: 400px) {
+  .harvest-scroll { padding: 11px 11px calc(88px + var(--safe-b)); }
+  .harvest-field-card,
+  .harvest-add-card,
+  .harvest-register-card { padding: 13px 12px; }
+  .home-scroll { padding: 0 13px calc(94px + var(--safe-b)); }
+  .home-hero { padding: calc(18px + var(--safe-t)) 15px 32px; }
+  .home-panel { padding: 15px 12px 14px; }
+  .home-today-card { padding: 15px 58px 46px 15px; }
+  .export-preview { padding: 13px 12px calc(15px + var(--safe-b)); }
+  .vinculo-scroll { padding: 11px 12px calc(94px + var(--safe-b)); }
+}
+@media (min-width: 361px) and (max-width: 400px) {
+  .harvest-worker-form { grid-template-columns: 0.85fr 1.25fr 42px; }
+}
+
+/* Teléfonos angostos: una columna donde dos ya no entran. */
+@media (max-width: 360px) {
+  .harvest-type-card {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 9px;
+  }
+  .export-preview-row { grid-template-columns: minmax(0, 1fr); }
+  .export-preview-actions button { font-size: 0.7rem; }
+  .harvest-users-btn,
+  .harvest-copy-btn { width: 38px; height: 38px; border-radius: 12px; }
+  .harvest-users-btn .ico,
+  .harvest-copy-btn .ico { width: 19px; height: 19px; }
+  .home-action-grid { gap: 7px; }
+  .home-action-icon { width: 46px; height: 46px; border-radius: 14px; }
+  .home-action-icon .ico { width: 20px; height: 20px; }
+  .home-action-grid strong { font-size: 0.6rem; }
+  .app-tabbar em { font-size: 0.55rem; }
+  .app-tabbar .tab-main .tab-main-circle { width: 50px; height: 50px; margin-top: -23px; }
+  .history-item-actions button { font-size: 0.62rem; padding: 0 4px; }
+  .net-badge { font-size: 0.6rem; padding: 4px 7px; }
+  .vin-grupo-pair { gap: 8px; }
+  .trust-note { padding: 11px 10px; }
+}
+
+/* Pantallas muy angostas (320 px). */
+@media (max-width: 330px) {
+  .home-action-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .harvest-location-grid { grid-template-columns: 1fr 1fr; }
+  .harvest-location-grid div:last-child { grid-column: 1 / -1; }
+  .history-item-actions { grid-template-columns: 1fr 1fr; }
+  .history-item-actions button:last-child { grid-column: 1 / -1; }
+  .harvest-head { padding: max(12px, calc(6px + var(--safe-t))) 10px 10px; }
+  .harvest-user h1 { max-width: 42vw; }
+}
+
+/* Teléfonos de pantalla corta: menos aire vertical para no perder el botón. */
+@media (max-height: 700px) {
+  .home-hero { padding-bottom: 26px; border-radius: 0 0 24px 24px; }
+  .harvest-head { padding-bottom: 10px; }
+  .harvest-field-card,
+  .harvest-add-card,
+  .harvest-register-card { margin-bottom: 10px; }
+}
+
+/* Celular acostado: el contenido sigue siendo alcanzable. */
+@media (orientation: landscape) and (max-height: 520px) {
+  .home-hero { padding: calc(10px + var(--safe-t)) 16px 20px; }
+  .harvest-head { padding: max(8px, calc(4px + var(--safe-t))) 12px 8px; }
+  .harvest-logo { width: 36px; height: 36px; max-width: 36px; flex-basis: 36px; }
+  .export-preview { max-height: min(96dvh, 96%); }
+  .app-tabbar { padding: 4px 6px max(6px, var(--safe-b)); }
+  .app-tabbar .tab-main .tab-main-circle { width: 46px; height: 46px; margin-top: -18px; }
+  .qr-frame { max-height: 190px; }
+}

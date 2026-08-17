@@ -20,7 +20,7 @@
   const SESSION_MANUAL_PERSONAS_KEY = "qb-supervisores-manual-personas-v1";
   const HISTORY_TTL_MS = 48 * 60 * 60 * 1000;
   const HISTORY_PAGE_SIZE = 8;
-  const APP_VERSION = "v153";
+  const APP_VERSION = "v154";
   const HARVEST_TYPES = [
     { key: "suma-jarras", label: "Suma de jarras", observacion: "SUMAR JARRAS" },
     { key: "descuento-jarras", label: "Descuento jarras", observacion: "DESCUENTO JARRAS" },
@@ -4621,7 +4621,7 @@
 
       if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
         try {
-          const reg = await navigator.serviceWorker.register("/sw.js?v=153", {
+          const reg = await navigator.serviceWorker.register("/sw.js?v=154", {
             scope: "/",
           });
           reg.update?.().catch(() => {});
