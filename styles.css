@@ -2216,7 +2216,7 @@ body[data-page="scan"] .lock-screen {
   padding-right: 0;
 }
 .harvest-worker-remove {
-  position: static;
+  position: relative;
   width: 22px;
   height: 22px;
   margin: 0;
@@ -2231,6 +2231,12 @@ body[data-page="scan"] .lock-screen {
   box-shadow: 0 1px 4px rgba(198, 40, 57, 0.1);
   cursor: pointer;
   transition: transform 0.12s ease, background 0.12s ease, box-shadow 0.12s ease;
+  touch-action: manipulation;
+}
+.harvest-worker-remove::before {
+  content: "";
+  position: absolute;
+  inset: -11px;
 }
 .harvest-worker-remove:active {
   transform: scale(0.92);
@@ -2429,7 +2435,8 @@ body[data-page="scan"] .lock-screen {
 }
 .export-preview-table-wrap {
   flex: 1 1 auto;
-  min-height: 0;
+  min-height: 120px;
+  max-height: min(42vh, 360px);
   width: 100%;
   overflow: auto;
   touch-action: pan-x pan-y;
@@ -2550,7 +2557,7 @@ body[data-page="scan"] .lock-screen {
 .check-pick-backdrop {
   position: absolute;
   inset: 0;
-  z-index: 165;
+  z-index: 180;
   display: flex;
   align-items: flex-end;
   justify-content: center;
@@ -2661,10 +2668,14 @@ body[data-page="scan"] .lock-screen {
 .check-pick-all { font-weight: 800; color: #2f7a36; }
 .check-pick-item strong { display: block; font-size: 0.82rem; }
 .check-pick-item small { color: #6a776e; font-size: 0.68rem; }
+.check-pick-item.is-disabled {
+  opacity: 0.42;
+  pointer-events: none;
+}
 .check-pick-list {
   flex: 1 1 auto;
-  min-height: 180px;
-  max-height: min(52vh, 420px);
+  min-height: 140px;
+  max-height: min(48vh, 360px);
   margin-bottom: 12px;
   overflow-x: hidden;
   overflow-y: auto;
@@ -4392,6 +4403,10 @@ body.kb-open .stage {
   min-height: 0;
   max-height: var(--app-h, 100dvh);
 }
+html:has(body.kb-open) {
+  height: var(--app-h, 100dvh);
+  max-height: var(--app-h, 100dvh);
+}
 body.kb-open .stage {
   position: fixed;
   top: var(--vv-top, 0px);
@@ -4402,6 +4417,13 @@ body.kb-open .stage {
 
 body.kb-open .app-tabbar {
   display: none;
+}
+body.kb-open .lock-screen {
+  overflow-y: auto;
+  justify-content: flex-start;
+  padding-top: max(16px, var(--safe-t));
+  padding-bottom: 20px;
+  -webkit-overflow-scrolling: touch;
 }
 body.kb-open .harvest-scroll,
 body.kb-open .home-scroll,
@@ -4414,6 +4436,10 @@ body.kb-open .manual-worker,
 body.kb-open .check-pick,
 body.kb-open .picker {
   max-height: calc(var(--app-h, 100dvh) - 12px);
+}
+body.kb-open .picker-backdrop,
+body.kb-open .manual-worker-backdrop {
+  padding-bottom: var(--kb-h, 0px);
 }
 
 /* ——— AJUSTE FINO PARA PANTALLAS DE CELULAR ——— */

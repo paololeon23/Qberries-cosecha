@@ -23,7 +23,7 @@
   const CACHE_DAY_KEY = "qb-supervisores-cache-day-v1";
   const HISTORY_TTL_MS = 48 * 60 * 60 * 1000;
   const HISTORY_PAGE_SIZE = 8;
-  const APP_VERSION = "v245";
+  const APP_VERSION = "v247";
   const HARVEST_TYPES = [
     { key: "suma-jarras", label: "Suma de jarras", short: "Suma", observacion: "SUMAR JARRAS" },
     { key: "descuento-jarras", label: "Descuento jarras", short: "Resta", observacion: "DESCUENTO JARRAS" },
@@ -41,10 +41,24 @@
     vinculo: "/vinculo/index.html",
     registro: "/registro/index.html",
   };
+  /** En APK la UI vive en localhost; las funciones van al sitio Netlify. */
+  const CLOUD_ORIGIN = "https://qberries-cosecha.netlify.app";
+  function isNativeApp() {
+    try {
+      const cap = window.Capacitor?.getPlatform?.() || "";
+      return cap === "android" || cap === "ios";
+    } catch {
+      return false;
+    }
+  }
+  function apiUrl(path) {
+    const rel = path.startsWith("/") ? path : `/${path}`;
+    return isNativeApp() ? `${CLOUD_ORIGIN}${rel}` : rel;
+  }
   const API = {
-    login: "/.netlify/functions/login",
-    sync: "/.netlify/functions/sync",
-    trabajadores: "/.netlify/functions/trabajadores",
+    login: apiUrl("/.netlify/functions/login"),
+    sync: apiUrl("/.netlify/functions/sync"),
+    trabajadores: apiUrl("/.netlify/functions/trabajadores"),
   };
 
   const $ = (sel, root = document) => root.querySelector(sel);
@@ -330,7 +344,7 @@
     }
     window.setTimeout(() => {
       navigationLocked = false;
-    }, 2500);
+    }, 650);
     if (replace) location.replace(href);
     else location.href = href;
   }
@@ -359,8 +373,25 @@
     const root = document.documentElement;
     const vv = window.visualViewport;
     let pendingFrame = 0;
-    /** Mientras se centra un campo, no se corrige el scroll: se veía un rebote. */
-    let focusScrollUntil = 0;
+
+    const activeField = () =>
+      document.activeElement?.closest?.("input, textarea, select") || null;
+
+    const scrollFieldIntoView = (field) => {
+      const scroller = field.closest(
+        ".harvest-scroll, .vinculo-scroll, .home-scroll, .security-screen, .lock-screen, .export-preview, .picker, .manual-worker, .check-pick"
+      );
+      if (scroller) {
+        const rect = field.getBoundingClientRect();
+        const box = scroller.getBoundingClientRect();
+        const pad = 12;
+        if (rect.top < box.top + pad || rect.bottom > box.bottom - pad) {
+          scroller.scrollTop += rect.top - box.top - (box.height - rect.height) / 2;
+        }
+        return;
+      }
+      field.scrollIntoView({ block: "center", behavior: "auto" });
+    };
 
     const apply = () => {
       pendingFrame = 0;
@@ -378,12 +409,9 @@
       root.style.setProperty("--u", `${u}px`);
       document.body?.classList.toggle("kb-open", open);
       // iPhone empuja toda la ventana hacia arriba para destapar el campo y
-      // debajo asoma el fondo del sistema (franja negra). Se devuelve a cero.
-      if (
-        open &&
-        Date.now() > focusScrollUntil &&
-        (window.scrollY || offsetTop)
-      ) {
+      // debajo asoma el fondo del sistema (franja negra). No resetear mientras
+      // hay un campo enfocado: se veía rebote y el input quedaba tapado otra vez.
+      if (open && !activeField() && (window.scrollY || offsetTop)) {
         window.scrollTo(0, 0);
         if (root.scrollTop) root.scrollTop = 0;
         if (document.body?.scrollTop) document.body.scrollTop = 0;
@@ -413,18 +441,16 @@
     document.addEventListener("focusin", (e) => {
       const field = e.target?.closest?.("input, textarea, select");
       if (!field) return;
-      focusScrollUntil = Date.now() + 700;
-      // Un solo ajuste, sin animación y solo si el teclado tapa el campo.
       setTimeout(() => {
         apply();
-        if (isFieldCovered(field)) {
-          field.scrollIntoView({ block: "center", behavior: "auto" });
-        }
+        if (isFieldCovered(field)) scrollFieldIntoView(field);
       }, 280);
     });
     document.addEventListener("focusout", () => {
-      focusScrollUntil = 0;
-      setTimeout(apply, 220);
+      setTimeout(() => {
+        if (activeField()) return;
+        apply();
+      }, 80);
     });
   }
 
@@ -611,6 +637,7 @@
     activeExportSaved: false,
     previewDraftSnapshot: null,
     readyFilesAction: "share",
+    readyFilesItems: [],
     historyPage: 0,
     sessionManualPersonas: /** @type {Record<string,{nombre:string,manual?:boolean}>} */ ({}),
     /** Trabajadores agregados en esta sesión: viven hasta Cerrar sesión. */
@@ -3031,6 +3058,20 @@
     return HARVEST_TYPES.map((item) => latest.get(item.key)).filter(Boolean);
   }
 
+  /** Registros de hoy listos para compartir o descargar (guardados + borrador activo). */
+  function availableExportSnapshots() {
+    const map = previewSnapshotsMap(state.activeExportSnapshot);
+    const seen = new Set();
+    const out = [];
+    HARVEST_TYPES.forEach((item) => {
+      const snap = map[item.key];
+      if (!snap?.id || seen.has(snap.id)) return;
+      seen.add(snap.id);
+      out.push(snap);
+    });
+    return out;
+  }
+
   function harvestTypeLabel(value) {
     return (
       HARVEST_TYPES.find((item) => item.key === value)?.label ||
@@ -3787,7 +3828,7 @@
   function downloadHarvestSnapshot(snapshot, opts = {}) {
     if (!snapshot) return;
     if (!opts.single) {
-      const ready = todayReadySnapshots();
+      const ready = availableExportSnapshots();
       if (ready.length > 1) {
         openReadyFilesModal("download", ready);
         return;
@@ -3869,7 +3910,7 @@
       return;
     }
     if (!opts.single) {
-      const ready = todayReadySnapshots();
+      const ready = availableExportSnapshots();
       if (ready.length > 1) {
         openReadyFilesModal("share", ready);
         return;
@@ -3918,37 +3959,55 @@
   function openReadyFilesModal(action, files) {
     const sheet = $("#readyFiles");
     const list = $("#readyFilesList");
-    const items = files?.length ? files : todayReadySnapshots();
+    const items = files?.length ? files : availableExportSnapshots();
     if (!items.length) {
       toast("Aún no hay archivos listos");
       return;
     }
     state.readyFilesAction = action === "download" ? "download" : "share";
+    state.readyFilesItems = items.slice();
     if (!sheet || !list) {
       confirmReadyFilesAction(items);
       return;
+    }
+    const title = $("#readyFilesTitle");
+    if (title) {
+      title.textContent =
+        state.readyFilesAction === "download"
+          ? "¿Qué Excel desea guardar?"
+          : "¿Qué desea compartir?";
     }
     if ($("#readyFilesAll")) $("#readyFilesAll").checked = true;
     const copy = $("#readyFilesCopy");
     if (copy) {
       copy.textContent =
         items.length > 1
-          ? "Hay más de un Excel listo. Elija cuáles enviar o guardar."
+          ? "Marque Suma, Resta, Descarte o los que necesite. Puede enviar uno, dos o los tres juntos."
           : "Este archivo ya está listo para enviar o guardar.";
     }
-    list.innerHTML = items
-      .map(
-        (item) => `<label class="check-pick-item">
+    list.innerHTML = HARVEST_TYPES.map((type) => {
+      const item = items.find(
+        (snap) => normalizeHarvestType(snap.tipo) === type.key
+      );
+      if (!item) {
+        return `<label class="check-pick-item is-disabled">
+          <input type="checkbox" disabled />
+          <span>
+            <strong>${escapeHtml(type.short)}</strong>
+            <small>Sin registro hoy</small>
+          </span>
+        </label>`;
+      }
+      return `<label class="check-pick-item">
           <input type="checkbox" data-ready-id="${escapeHtml(item.id)}" checked />
           <span>
-            <strong>${escapeHtml(harvestTypeShort(item.tipo))}</strong>
+            <strong>${escapeHtml(type.short)}</strong>
             <small>${item.workers?.length || 0} trabajador(es) · ${fmt(
-          snapshotTotal(item)
-        )} jarras</small>
+        snapshotTotal(item)
+      )} jarras · Lote ${escapeHtml(item.codLote || item.lote || "—")}</small>
           </span>
-        </label>`
-      )
-      .join("");
+        </label>`;
+    }).join("");
     const go = $("#btnReadyFilesGo");
     if (go) {
       go.textContent =
@@ -3959,6 +4018,7 @@
     sheet.hidden = false;
     sheet.removeAttribute("hidden");
     hydrateIcons(sheet);
+    list.scrollTop = 0;
   }
 
   function closeReadyFiles() {
@@ -3973,7 +4033,9 @@
       (input) => input.dataset.readyId
     );
     if (!checked.length) return [];
-    const all = todayReadySnapshots();
+    const all = state.readyFilesItems?.length
+      ? state.readyFilesItems
+      : availableExportSnapshots();
     return all.filter((item) => checked.includes(item.id));
   }
 
@@ -3988,11 +4050,21 @@
   }
 
   function confirmReadyFilesAction(selected) {
+    const picks = selected.map((item) => {
+      if (isSnapshotSaved(item)) return item;
+      if (
+        !state.activeExportSaved &&
+        state.activeExportSnapshot?.id === item.id
+      ) {
+        return persistHarvestSnapshot(item, { silent: true }) || item;
+      }
+      return item;
+    });
     if (state.readyFilesAction === "download") {
-      selected.forEach((item) => downloadHarvestSnapshot(item, { single: true }));
+      picks.forEach((item) => downloadHarvestSnapshot(item, { single: true }));
       return;
     }
-    shareHarvestSnapshots(selected);
+    shareHarvestSnapshots(picks);
   }
 
   function shareHarvestSnapshots(snapshots) {
@@ -5444,6 +5516,13 @@
         input.checked = !!e.target.checked;
       });
     });
+    on("#readyFilesList", "change", (e) => {
+      if (!e.target?.matches?.("[data-ready-id]")) return;
+      const boxes = $$("#readyFilesList [data-ready-id]");
+      const allBox = $("#readyFilesAll");
+      if (!allBox || !boxes.length) return;
+      allBox.checked = boxes.every((input) => input.checked);
+    });
     on("#btnReadyFilesGo", "click", confirmReadyFiles);
     on("#btnCloseHistory", "click", closeHarvestHistory);
     on("#btnHistoryPrev", "click", () => {
@@ -5869,7 +5948,12 @@
       // Datos en segundo plano (no bloquean UI)
       if (navigator.onLine) {
         detectNetlify(2500)
-          .then(() => {})
+          .then((ok) => {
+            if (ok) {
+              flushVinculoQueue().catch(() => {});
+              flushCloudDataQueue().catch(() => {});
+            }
+          })
           .catch(() => {
             state.netlifyReady = false;
             state.cloudApi = false;
@@ -5966,11 +6050,6 @@
           .catch(() => {});
       }, 8000);
 
-      if (canUseCloudApi()) {
-        flushVinculoQueue().catch(() => {});
-        flushCloudDataQueue().catch(() => {});
-      }
-
       // Failsafe por ruta: nunca mezclar pantallas de apartados distintos.
       setTimeout(() => {
         const expected = {
@@ -5990,7 +6069,7 @@
         }
       }, 1200);
 
-      if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+      if ("serviceWorker" in navigator && location.protocol.startsWith("http") && !isNativeApp()) {
         try {
           const reg = await navigator.serviceWorker.register(`/sw.js?v=${APP_VERSION}`, {
             scope: "/",
