@@ -3,8 +3,24 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node local-server.mjs",
-    "start": "node local-server.mjs",
-    "dev:ps": "powershell -NoProfile -ExecutionPolicy Bypass -File ./local-server.ps1"
+    "dev": "node dev/local-server.mjs",
+    "start": "node dev/local-server.mjs",
+    "dev:ps": "powershell -NoProfile -ExecutionPolicy Bypass -File ./dev/local-server.ps1",
+    "build:web": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/sync-www.ps1",
+    "cap:sync": "npm run build:web && npx cap sync android",
+    "cap:open:android": "npx cap open android",
+    "cap:apk": "npm run cap:sync && cd mobile/android && .\\gradlew.bat assembleDebug"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.0.0",
+    "@capacitor/app": "^7.0.0",
+    "@capacitor/core": "^7.0.0",
+    "@capacitor/filesystem": "^7.0.0",
+    "@capacitor/share": "^7.0.0",
+    "@capacitor/splash-screen": "^7.0.0",
+    "@capacitor/status-bar": "^7.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.0.0"
   }
 }

@@ -7,6 +7,19 @@ node_modules/
 *.log
 .DS_Store
 
+# Herramientas locales para compilar APK (se reinstalan con scripts/setup-android.ps1)
+.tools/
+
+# Android / Capacitor (artefactos de compilación)
+mobile/android/app/build/
+mobile/android/.gradle/
+mobile/android/build/
+*.apk
+*.aab
+
+# Temporales de desarrollo
+_tmp_inspect_xlsx.*
+
 # Excel de origen: no van en la app ni en el sitio
 data/*.xlsx
 data/~$*

@@ -12,7 +12,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = __dirname;
+const ROOT = path.join(__dirname, "..");
 const PORT = Number(process.env.PORT || 5500);
 const require = createRequire(import.meta.url);
 
@@ -108,7 +108,7 @@ function loadLocalTrabajadores() {
 }
 
 async function runNetlifyHandler(name, event) {
-  const file = path.join(ROOT, "netlify", "functions", `${name}.js`);
+  const file = path.join(ROOT, "backend", "netlify", "functions", `${name}.js`);
   // CommonJS handlers
   delete require.cache[require.resolve(file)];
   const mod = require(file);

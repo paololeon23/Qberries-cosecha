@@ -1,54 +1,66 @@
 # QBerries · Supervisores Cosecha
 
-Prototipo móvil (PWA) para registro de cosecha de arándanos.
+PWA para registro de cosecha de arándanos (Netlify + APK Android).
+
+## Estructura del proyecto
+
+```
+Supervisores/
+├── app.js, index.html, styles.css, sw.js   ← PWA (Netlify publica la raíz)
+├── inicio/ registro/ vinculo/ instalar/     ← pantallas
+├── data/ vendor/ assets/                  ← datos y librerías
+├── backend/
+│   ├── netlify/functions/                 ← login, sync, trabajadores
+│   └── apps-script/Code.gs                ← Google Sheets
+├── mobile/
+│   ├── www/                               ← copia para APK (sync automático)
+│   └── android/                           ← proyecto Capacitor / Gradle
+├── dev/                                   ← servidor local y ABRIR-APP.bat
+├── scripts/                               ← ordenar JSON, sync www, setup Android
+└── docs/                                  ← guías
+```
 
 ## Acceso (como app real)
 
 1. Escanea el carnet QR (solo Supervisores de Cosecha).
 2. Ingresa la contraseña personal (validada en Netlify, no en el celular).
 3. La sesión queda en ese dispositivo hasta **Cerrar sesión**.
-4. Guardar vínculos exige un token firmado de esa sesión.
 
 ## Variables de entorno (Netlify)
 
-En **Site configuration → Environment variables** configure:
-
 | Variable | Uso |
 |----------|-----|
-| `LOGIN_PIN` | Contraseña de prueba compartida (ej. `231223`) |
-| `SUPERVISOR_PINS` | Opcional: `{"DNI":"clave",...}` una clave por supervisor |
-| `API_TOKEN` | Token secreto hacia Apps Script + firma de sesión |
+| `LOGIN_PIN` | Contraseña de prueba compartida |
+| `SUPERVISOR_PINS` | Opcional: `{"DNI":"clave",...}` |
+| `API_TOKEN` | Token hacia Apps Script + firma de sesión |
 | `APPS_SCRIPT_URL` | URL del Web App de Google Apps Script |
-
-Si configura `SUPERVISOR_PINS`, cada DNI usa su clave; si no, todos usan `LOGIN_PIN`. El cliente no lee estas variables: valida vía `/.netlify/functions/login`.
 
 Plantilla: `.env.example`
 
 ## Desplegar en Netlify
 
 1. Suba este repo a GitHub (o arrastre la carpeta a Netlify).
-2. Build settings: publish `.` · functions `netlify/functions` (ya en `netlify.toml`).
-3. Configure las variables en Netlify (nunca en el código).
-4. Deploy.
+2. Build: publish `.` · functions `backend/netlify/functions` (`netlify.toml`).
+3. Configure variables en Netlify (nunca en el código).
 
 ## Local
 
-Abra la app con el servidor Netlify/local. El primer acceso con contraseña necesita internet (validación en servidor).
+```bash
+npm start          # http://127.0.0.1:5500
+# o: npm run dev:ps
+# o: dev\ABRIR-APP.bat
+```
 
-## Instalar con QR
+## APK Android
 
-Página de instalación: `/instalar/` (por ejemplo `https://qberries-cosecha.netlify.app/instalar/`).
+```bash
+npm run build:web   # raíz → mobile/www
+npm run cap:sync    # sync + Capacitor
+npm run cap:apk     # genera APK debug
+```
 
-- QR listo para imprimir: `assets/qr-instalar-app.png`.
-- La página detecta el celular: en **Android** muestra un botón que instala la app;
-  en **iPhone** guía los tres pasos de Safari (Compartir → Añadir a pantalla de inicio),
-  porque iOS no permite instalar por código.
-- La propia página dibuja su QR, así que si cambia el dominio el código se actualiza solo.
-- También se llega desde la app: **Ayuda → engranaje → QR para instalar en otro celular**.
+Primera vez (descarga herramientas): `scripts/setup-android.ps1`
 
-## Offline / PWA
+## Instalar PWA con QR
 
-- Primera visita **con internet** instala la app en caché (Service Worker).
-- Después funciona **sin internet** si ya hay sesión en el dispositivo.
-- Subir a la nube solo con conexión (Netlify + Apps Script).
-- En el celular: “Agregar a pantalla de inicio” para usarla como app.
+`/instalar/` · QR: `assets/qr-instalar-app.png`

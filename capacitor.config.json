@@ -1,0 +1,11 @@
+{
+  "appId": "pe.agrovision.supervisioncosecha",
+  "appName": "Supervisión de Cosecha",
+  "webDir": "mobile/www",
+  "android": {
+    "path": "mobile/android"
+  },
+  "server": {
+    "androidScheme": "https"
+  }
+}
