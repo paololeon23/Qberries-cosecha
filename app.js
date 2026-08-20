@@ -28,7 +28,7 @@
   const JARRAS_POR_JABA = 12;
   const FUNDO_DEFAULT = "Licapa";
   const FUNDO_OPTIONS = ["Licapa", "Licapa II"];
-  const APP_VERSION = "v330";
+  const APP_VERSION = "v337";
 
   function normalizeFundo(value) {
     const raw = String(value || "").trim();
@@ -4206,7 +4206,9 @@
       });
   }
 
-  function saveGuidesSummary() {
+  function saveGuidesSummary(e) {
+    e?.preventDefault?.();
+    e?.stopPropagation?.();
     if (!requireQrLogin()) return;
     if (state.savingGuias) return;
     if (!state.guias.length) {
@@ -4214,35 +4216,61 @@
       return;
     }
 
+    const btnSave = $("#btnSaveGuidesSummary");
+    const btnCancel = $("#btnCancelGuidesSummary");
+    const btnClose = $("#btnCloseGuidesSummary");
+
+    // 1) Persistir en celular + cola nube — NUNCA borrar guías ni inputs
     state.savingGuias = true;
+    if (btnSave) btnSave.disabled = true;
+    if (btnCancel) btnCancel.disabled = true;
+    if (btnClose) btnClose.disabled = true;
+
     const payload = persistAndQueueGuias();
     if (!payload) {
       state.savingGuias = false;
+      if (btnSave) btnSave.disabled = false;
+      if (btnCancel) btnCancel.disabled = false;
+      if (btnClose) btnClose.disabled = false;
       toast("Falta supervisor para guardar");
       return;
     }
 
     pushGuiasHistory(payload);
+    saveStore();
 
-    if (typeof XLSX !== "undefined") {
-      try {
-        exportExcel();
-      } catch (_) {
-        /* ok */
-      }
+    // 2) Descargar Excel (si falla, los datos siguen en pantalla)
+    let excelOk = false;
+    try {
+      excelOk = !!exportExcel({ silent: true });
+    } catch (_) {
+      excelOk = false;
     }
 
     closeGuidesSummary();
+    renderCards();
+    updateKpis();
+    updateMeta();
+    updateNetworkUI();
 
     if (!navigator.onLine) {
-      toast("Guardado en el celular · pendiente hasta tener internet");
+      toast(
+        excelOk
+          ? "Excel listo · pendiente de subir al servidor"
+          : "Guardado en el celular · pendiente hasta tener internet"
+      );
+    } else if (excelOk) {
+      toast("Excel descargado · subiendo al servidor…");
     } else {
-      toast("Guardado · subiendo al servidor…");
+      toast("Guardado · subiendo al servidor (Excel no descargó)");
     }
 
     flushGuiasInBackground();
     setTimeout(() => {
       state.savingGuias = false;
+      if (btnSave) btnSave.disabled = false;
+      if (btnCancel) btnCancel.disabled = false;
+      if (btnClose) btnClose.disabled = false;
     }, 1500);
   }
 
@@ -4676,7 +4704,7 @@
     return snapshot;
   }
 
-  /** Guarda en el historial (una sola vez por resumen) */
+  /** Guarda en el historial (una sola vez por resumen). NO limpia trabajadores ni inputs. */
   async function commitHarvestSnapshot() {
     const snapshot = state.activeExportSnapshot;
     if (!snapshot) return null;
@@ -4689,7 +4717,8 @@
     showAppLoader("Guardando registro…");
     try {
       await new Promise((r) => window.setTimeout(r, 420));
-      return persistHarvestSnapshot(snapshot);
+      // skipReset: los datos quedan en pantalla para revisar / descargar Excel
+      return persistHarvestSnapshot(snapshot, { skipReset: true });
     } finally {
       hideAppLoader();
       setBtnLoading(btn, false);
@@ -4803,20 +4832,22 @@
   }
 
   function downloadHarvestSnapshot(snapshot, opts = {}) {
-    if (!snapshot) return;
+    if (!snapshot) return false;
     if (!opts.single) {
       const ready = availableExportSnapshots();
       if (ready.length > 1) {
         openReadyFilesModal("download", ready);
-        return;
+        return false;
       }
     }
     try {
       const wb = buildHarvestWorkbook(snapshot);
-      XLSX.writeFile(wb, harvestFileName(snapshot));
-      toast("Excel descargado");
+      const ok = downloadXlsxWorkbook(wb, harvestFileName(snapshot));
+      if (ok) toast("Excel descargado");
+      return ok;
     } catch {
       toast("No se pudo crear el Excel");
+      return false;
     }
   }
 
@@ -6566,16 +6597,76 @@
     return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
   }
 
-  function exportExcel() {
-    if (!requireQrLogin()) return;
+  /**
+   * Descarga un .xlsx de forma fiable en PWA / celular / tablet.
+   * No limpia datos de la app. Devuelve true si el archivo se disparó.
+   */
+  function downloadXlsxWorkbook(wb, filename) {
+    const name = String(filename || `qberries-${dateStamp()}.xlsx`).replace(
+      /[^\w.\- ()]+/g,
+      "_"
+    );
     if (typeof XLSX === "undefined") {
-      toast("Excel no disponible");
-      return;
+      toast("Excel no disponible · recargue la app");
+      return false;
+    }
+    try {
+      const bytes = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+      const blob = new Blob([new Uint8Array(bytes)], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+      const native = window.QBNative;
+      if (native?.isNative?.() && typeof native.shareExcelFiles === "function") {
+        try {
+          const file = new File([blob], name, {
+            type: blob.type,
+            lastModified: Date.now(),
+          });
+          native.shareExcelFiles([file], { title: name, text: "" });
+          return true;
+        } catch {
+          /* seguir con descarga web */
+        }
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      a.rel = "noopener";
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        try {
+          URL.revokeObjectURL(url);
+          a.remove();
+        } catch {
+          /* ignore */
+        }
+      }, 2500);
+      return true;
+    } catch (err) {
+      try {
+        XLSX.writeFile(wb, name);
+        return true;
+      } catch {
+        console.warn("downloadXlsxWorkbook", err);
+        toast("No se pudo descargar el Excel");
+        return false;
+      }
+    }
+  }
+
+  function exportExcel(opts = {}) {
+    if (!requireQrLogin()) return false;
+    if (typeof XLSX === "undefined") {
+      if (!opts.silent) toast("Excel no disponible");
+      return false;
     }
     const rows = rowsFromGuias();
     if (!rows.length) {
-      toast("No hay guías para exportar");
-      return;
+      if (!opts.silent) toast("No hay guías para exportar");
+      return false;
     }
     const t = totals();
     rows.push({
@@ -6598,8 +6689,9 @@
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Guias");
-    XLSX.writeFile(wb, `guias-cosecha-${dateStamp()}.xlsx`);
-    toast("Excel guardado");
+    const ok = downloadXlsxWorkbook(wb, `guias-cosecha-${dateStamp()}.xlsx`);
+    if (ok && !opts.silent) toast("Excel descargado");
+    return ok;
   }
 
   function exportPdf() {
@@ -6870,16 +6962,33 @@
     bindDniLookup("#sesSupDni", "#sesSupNombre");
     bindDniLookup("#sesJavDni", "#sesJavNombre");
 
-    on("#btnGuidesResumen", "click", () => {
+    on("#btnGuidesResumen", "click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
       if (!requireQrLogin()) return;
       openGuidesSummary();
     });
-    on("#btnCloseGuidesSummary", "click", closeGuidesSummary);
-    on("#btnCancelGuidesSummary", "click", closeGuidesSummary);
+    on("#btnCloseGuidesSummary", "click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (state.savingGuias) return;
+      closeGuidesSummary();
+    });
+    on("#btnCancelGuidesSummary", "click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (state.savingGuias) return;
+      closeGuidesSummary();
+    });
     on("#btnSaveGuidesSummary", "click", saveGuidesSummary);
     on("#btnGuidesFundo", "click", () => openPicker("fundo"));
     on("#guidesSummaryModal", "click", (e) => {
+      if (state.savingGuias) return;
       if (e.target?.id === "guidesSummaryModal") closeGuidesSummary();
+    });
+    // Clicks dentro del diálogo no cierran el modal
+    on(".guides-summary-dialog", "click", (e) => {
+      e.stopPropagation();
     });
 
     on("#horaPickerModal", "click", (e) => {
@@ -6947,14 +7056,27 @@
       );
     });
     on("#btnHarvestSave", "click", previewHarvestSummary);
-    on("#btnCommitHarvest", "click", commitHarvestSnapshot);
-    on("#btnCloseExportPreview", "click", closeExportPreview);
+    on("#btnCommitHarvest", "click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      commitHarvestSnapshot();
+    });
+    on("#btnCloseExportPreview", "click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      closeExportPreview();
+    });
     on("#exportPreview", "click", (e) => {
       if (e.target?.id === "exportPreview") closeExportPreview();
     });
-    on("#btnDownloadHarvest", "click", () =>
-      downloadHarvestSnapshot(state.activeExportSnapshot)
-    );
+    on(".export-preview", "click", (e) => {
+      e.stopPropagation();
+    });
+    on("#btnDownloadHarvest", "click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      downloadHarvestSnapshot(state.activeExportSnapshot);
+    });
     on("#btnShareHarvest", "click", (e) => {
       e.preventDefault();
       e.stopPropagation();
