@@ -17,6 +17,7 @@
   const AUTH_SESSION_KEY = "qb-supervisores-auth-v1";
   const HARVEST_KEY = "qb-supervisores-harvest-v1";
   const HARVEST_HISTORY_KEY = "qb-supervisores-excel-history-v1";
+  const HARVEST_SENT_KEY = "qb-supervisores-harvest-sent-v1";
   const GUIAS_HISTORY_KEY = "qb-supervisores-guias-history-v1";
   const SESSION_MANUAL_PERSONAS_KEY = "qb-supervisores-manual-personas-v1";
   const SESSION_WORKERS_KEY = "qb-supervisores-session-workers-v1";
@@ -28,7 +29,7 @@
   const JARRAS_POR_JABA = 12;
   const FUNDO_DEFAULT = "Licapa";
   const FUNDO_OPTIONS = ["Licapa", "Licapa II"];
-  const APP_VERSION = "v346";
+  const APP_VERSION = "v352";
 
   function normalizeFundo(value) {
     const raw = String(value || "").trim();
@@ -144,6 +145,11 @@
     );
   }
 
+  /** Excel → Drive: URL …/exec de Code-excel-drive.gs */
+  function scriptExcelDriveUrl() {
+    return String(window.QB_SCRIPT?.EXCEL_DRIVE || "").trim();
+  }
+
   function isGuiasCloudAction(action) {
     return (
       action === "registrarGuias" || action === "sync_guias_cosecha"
@@ -181,6 +187,150 @@
       }
     }
     return { ok: !!(parsed && parsed.ok === true), parsed, status: res.status };
+  }
+
+  function parseAppsScriptJson(text) {
+    let parsed = null;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      const m = String(text || "").match(/\{[\s\S]*\}/);
+      if (m) {
+        try {
+          parsed = JSON.parse(m[0]);
+        } catch {
+          parsed = null;
+        }
+      }
+    }
+    return parsed;
+  }
+
+  function bytesToBase64(bytes) {
+    const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+    let binary = "";
+    const chunk = 0x8000;
+    for (let i = 0; i < u8.length; i += chunk) {
+      binary += String.fromCharCode.apply(null, u8.subarray(i, i + chunk));
+    }
+    return btoa(binary);
+  }
+
+  /**
+   * Sube el Excel del snapshot a la carpeta Drive configurada en Apps Script.
+   * Devuelve { ok, url, name, message }.
+   */
+  async function uploadHarvestExcelToDrive(snapshot) {
+    const url = scriptExcelDriveUrl();
+    if (!url) {
+      return {
+        ok: false,
+        message:
+          "Falta configurar Drive: pegue la URL …/exec en api-config.js (EXCEL_DRIVE) y el enlace de carpeta en Code-excel-drive.gs",
+      };
+    }
+    if (!snapshot) {
+      return { ok: false, message: "No hay registro para subir" };
+    }
+    if (typeof XLSX === "undefined") {
+      return { ok: false, message: "Excel no disponible · recargue la app" };
+    }
+    if (!navigator.onLine) {
+      return { ok: false, message: "Sin internet: no se puede subir a Drive" };
+    }
+
+    let fileName = "cosecha.xlsx";
+    let base64 = "";
+    try {
+      const wb = buildHarvestWorkbook(snapshot);
+      const bytes = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+      fileName = safeXlsxShareName(harvestFileName(snapshot));
+      base64 = bytesToBase64(bytes);
+    } catch (err) {
+      console.warn("uploadHarvestExcelToDrive build", err);
+      return { ok: false, message: "No se pudo crear el Excel" };
+    }
+
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        redirect: "follow",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({
+          action: "uploadExcel",
+          data: {
+            fileName,
+            mimeType:
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            base64,
+          },
+        }),
+      });
+      const text = await res.text();
+      const parsed = parseAppsScriptJson(text);
+      if (parsed?.ok && parsed.url) {
+        return {
+          ok: true,
+          url: String(parsed.url),
+          name: String(parsed.name || fileName),
+          fileId: parsed.fileId || "",
+        };
+      }
+      return {
+        ok: false,
+        message:
+          parsed?.message ||
+          "No se pudo subir a Drive. Revise el script y el enlace de carpeta.",
+      };
+    } catch (err) {
+      console.warn("uploadHarvestExcelToDrive", err);
+      return { ok: false, message: "Error de red al subir a Drive" };
+    }
+  }
+
+  async function shareDriveLink(link, fileName) {
+    const text = `${fileName || "Excel"}\n${link}`;
+    try {
+      if (typeof navigator.share === "function") {
+        await navigator.share({ title: fileName || "Excel QBerries", text });
+        return true;
+      }
+    } catch (err) {
+      if (err?.name === "AbortError") return true;
+    }
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(link);
+        toast("Enlace de Drive copiado");
+        return true;
+      }
+    } catch {
+      /* ignore */
+    }
+    return false;
+  }
+
+  async function uploadActiveHarvestToDrive(button) {
+    const snapshot = state.activeExportSnapshot;
+    if (!snapshot) {
+      toast("No hay registro para subir");
+      return;
+    }
+    if (button) setBtnLoading(button, true, "Subiendo…");
+    try {
+      const result = await uploadHarvestExcelToDrive(snapshot);
+      if (!result.ok) {
+        toast(result.message || "No se pudo subir a Drive");
+        return;
+      }
+      toast("Excel subido a Drive");
+      state.lastDriveExcelUrl = result.url;
+      markHarvestSnapshotSent(snapshot);
+      toast(harvestDayProgressMessage());
+      await shareDriveLink(result.url, result.name);
+    } finally {
+      if (button) setBtnLoading(button, false);
+    }
   }
   function isNativeApp() {
     try {
@@ -1068,6 +1218,8 @@
     ready: false,
     ownerDni: "",
     fundo: FUNDO_DEFAULT,
+    /** LIC 01–50 o NO_TENGO_POR_AHORA */
+    grupoLic: "",
     supervisorDni: "",
     supervisorNombre: "",
     javeroDni: "",
@@ -1143,6 +1295,8 @@
     activeExportSnapshot: null,
     activeExportSaved: false,
     previewDraftSnapshot: null,
+    /** Borradores del modal por tipo (Suma/Resta/Descarte) sin perder datos. */
+    previewDraftByType: /** @type {Record<string, object>} */ ({}),
     readyFilesAction: "share",
     readyFilesItems: [],
     historyPage: 0,
@@ -1633,6 +1787,54 @@
     return out;
   }
 
+  /** Guías: LIC 1–50 + No tengo por ahora (después de Fundo). */
+  function guidesLicList_() {
+    const out = [
+      {
+        key: "NO_TENGO_POR_AHORA",
+        primary: "No tengo por ahora",
+        secondary: "LIC",
+      },
+    ];
+    for (let n = 1; n <= 50; n++) {
+      const num = String(n).padStart(2, "0");
+      out.push({
+        key: `LIC ${num}`,
+        primary: `LIC ${num}`,
+        secondary: "",
+      });
+    }
+    return out;
+  }
+
+  function isGuidesLicNoTengo_(raw) {
+    const s = String(raw || "")
+      .trim()
+      .toUpperCase()
+      .replace(/_/g, " ");
+    return /NO\s*TENGO/.test(s);
+  }
+
+  function normGuidesLic_(raw) {
+    if (isGuidesLicNoTengo_(raw)) return "NO_TENGO_POR_AHORA";
+    const gNum = String(raw || "").replace(/\D/g, "");
+    if (gNum && Number(gNum) >= 1 && Number(gNum) <= 50) {
+      return `LIC ${String(Number(gNum)).padStart(2, "0")}`;
+    }
+    return "";
+  }
+
+  function displayGuidesLic_(raw) {
+    const v = normGuidesLic_(raw);
+    if (!v) return "";
+    if (v === "NO_TENGO_POR_AHORA") return "No tengo por ahora";
+    return v;
+  }
+
+  function isValidGuidesLic_(v) {
+    return !!normGuidesLic_(v);
+  }
+
   function grupoNumList_() {
     const out = [
       { key: "NO_TENGO", primary: "No tengo", secondary: "" },
@@ -1721,6 +1923,7 @@
     if (
       kind === "grupoLic" ||
       kind === "grupoNum" ||
+      kind === "guidesLic" ||
       kind === "harvestLote" ||
       kind === "harvestType" ||
       kind === "fundo"
@@ -1734,24 +1937,30 @@
         title.textContent =
           kind === "grupoLic"
             ? "Buscar Grupo LIC"
-            : kind === "grupoNum"
-              ? "Buscar Grupo"
-              : kind === "harvestType"
-                ? "Tipo de registro"
-                : kind === "fundo"
-                  ? "Seleccionar fundo"
-                  : "Buscar lote";
+            : kind === "guidesLic"
+              ? "Seleccionar LIC"
+              : kind === "grupoNum"
+                ? "Buscar Grupo"
+                : kind === "harvestType"
+                  ? "Tipo de registro"
+                  : kind === "fundo"
+                    ? "Seleccionar fundo"
+                    : "Buscar lote";
       }
       if (query) {
         query.placeholder =
           kind === "grupoLic"
             ? "Buscar Grupo LIC 01, 02…"
-            : kind === "grupoNum"
-              ? "Buscar Grupo 01, 02…"
-              : "Buscar lote...";
+            : kind === "guidesLic"
+              ? "Buscar LIC 01…50 o No tengo"
+              : kind === "grupoNum"
+                ? "Buscar Grupo 01, 02…"
+                : "Buscar lote...";
         query.value = "";
       }
-      if (search) search.hidden = kind === "harvestType" || kind === "fundo";
+      if (search) {
+        search.hidden = kind === "harvestType" || kind === "fundo";
+      }
       if (addBtn) addBtn.hidden = true;
       renderPickerList();
       const backdrop = $("#picker");
@@ -1807,6 +2016,25 @@
       return grupoLicList_().filter((g) => {
         if (!q) return true;
         if (isNoTengo_(g.key)) return "no tengo".includes(q) || q.includes("no");
+        const n = String(parseInt(g.key.replace(/\D/g, ""), 10));
+        return (
+          g.primary.toLowerCase().includes(q) ||
+          g.key.toLowerCase().includes(q) ||
+          n.includes(q) ||
+          q.includes("lic")
+        );
+      });
+    }
+    if (ctx.kind === "guidesLic") {
+      return guidesLicList_().filter((g) => {
+        if (!q) return true;
+        if (isGuidesLicNoTengo_(g.key)) {
+          return (
+            "no tengo por ahora".includes(q) ||
+            q.includes("no") ||
+            q.includes("ahora")
+          );
+        }
         const n = String(parseInt(g.key.replace(/\D/g, ""), 10));
         return (
           g.primary.toLowerCase().includes(q) ||
@@ -1877,8 +2105,12 @@
     let selected = "";
     if (state.picker?.kind === "grupoLic") {
       selected = $("#vinGrupoLic")?.value || "";
+    } else if (state.picker?.kind === "guidesLic") {
+      selected = currentGuidesLic() || "";
     } else if (state.picker?.kind === "grupoNum") {
       selected = $("#vinGrupo")?.value || "";
+    } else if (state.picker?.kind === "fundo") {
+      selected = currentFundo();
     } else if (state.picker?.kind === "harvestLote") {
       selected = state.harvest.lote || "";
     } else if (state.picker?.kind === "harvestType") {
@@ -1923,6 +2155,15 @@
       setVinGrupoLicUI(v);
       closePicker();
       toast(displayGrupo_(normGrupoLic_(v)));
+      return;
+    }
+    if (ctx.kind === "guidesLic") {
+      setGuidesLic(v);
+      closePicker();
+      if ($("#guidesSummaryModal") && !$("#guidesSummaryModal").hidden) {
+        renderGuidesSummaryCard();
+      }
+      toast(displayGuidesLic_(v) || "LIC");
       return;
     }
     if (ctx.kind === "grupoNum") {
@@ -1977,7 +2218,7 @@
 
   function onPickerAdd() {
     const ctx = state.picker;
-    if (!ctx || ctx.kind === "grupoLic" || ctx.kind === "grupoNum") return;
+    if (!ctx || ctx.kind === "grupoLic" || ctx.kind === "grupoNum" || ctx.kind === "guidesLic") return;
     const typed = String($("#pickerQuery")?.value || "").trim();
     if (!typed) {
       toast("Escriba arriba lo que desea agregar");
@@ -3646,6 +3887,9 @@
       state.harvest.byType = emptyHarvestByType();
     }
     state.harvest.byType[key] = emptyHarvestTypeDraft();
+    if (state.previewDraftByType && typeof state.previewDraftByType === "object") {
+      delete state.previewDraftByType[key];
+    }
     if (normalizeHarvestType(state.harvest.tipo) === key) {
       attachCurrentHarvestDraft();
     }
@@ -3674,6 +3918,132 @@
       if (!latest.has(tipo)) latest.set(tipo, item);
     });
     return HARVEST_TYPES.map((item) => latest.get(item.key)).filter(Boolean);
+  }
+
+  function loadHarvestSentMap() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(HARVEST_SENT_KEY) || "{}");
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function harvestSentKey(snapshot) {
+    if (!snapshot) return "";
+    const dni = String(snapshot.supervisorDni || state.identity?.dni || "").replace(
+      /\D/g,
+      ""
+    );
+    const tipo = normalizeHarvestType(snapshot.tipo);
+    const fecha = String(snapshot.fecha || todayISO());
+    return `${fecha}|${dni}|${tipo}`;
+  }
+
+  function isHarvestSnapshotSent(snapshot) {
+    if (!snapshot) return false;
+    const map = loadHarvestSentMap();
+    const key = harvestSentKey(snapshot);
+    return !!(map[snapshot.id] || (key && map[key]));
+  }
+
+  function markHarvestSnapshotSent(snapshot) {
+    if (!snapshot?.id) return;
+    const map = loadHarvestSentMap();
+    map[snapshot.id] = new Date().toISOString();
+    const key = harvestSentKey(snapshot);
+    if (key) map[key] = map[snapshot.id];
+    try {
+      localStorage.setItem(HARVEST_SENT_KEY, JSON.stringify(map));
+    } catch {
+      /* ignore */
+    }
+    renderHarvestDayChecklist();
+    renderExportPreviewDayStatus();
+    renderExportPreviewTypes(state.activeExportSnapshot);
+  }
+
+  /** Estado del día: Suma / Resta / Descarte — tengo o no, y si ya se envió. */
+  function harvestDayTypeStatus() {
+    const ready = todayReadySnapshots();
+    const byTipo = new Map(
+      ready.map((snap) => [normalizeHarvestType(snap.tipo), snap])
+    );
+    return HARVEST_TYPES.map((item) => {
+      const snapshot = byTipo.get(item.key) || null;
+      const saved = !!snapshot;
+      const sent = saved && isHarvestSnapshotSent(snapshot);
+      return {
+        key: item.key,
+        short: item.short,
+        label: item.label,
+        saved,
+        sent,
+        snapshot,
+      };
+    });
+  }
+
+  function harvestMissingTypesToday() {
+    return harvestDayTypeStatus().filter((item) => !item.saved);
+  }
+
+  function harvestUnsentTypesToday() {
+    return harvestDayTypeStatus().filter((item) => item.saved && !item.sent);
+  }
+
+  function harvestDayProgressMessage() {
+    const status = harvestDayTypeStatus();
+    const missing = status.filter((s) => !s.saved).map((s) => s.short);
+    const unsent = status.filter((s) => s.saved && !s.sent).map((s) => s.short);
+    if (!missing.length && !unsent.length) {
+      return "Listo: Suma, Resta y Descarte guardados y enviados.";
+    }
+    const parts = [];
+    if (missing.length) parts.push(`Falta registrar: ${missing.join(", ")}`);
+    if (unsent.length) parts.push(`Falta enviar: ${unsent.join(", ")}`);
+    return parts.join(" · ");
+  }
+
+  function renderHarvestDayChecklist() {
+    const root = $("#harvestDayChecklist");
+    if (!root) return;
+    const status = harvestDayTypeStatus();
+    root.innerHTML = status
+      .map((item) => {
+        const cls = item.sent
+          ? "is-sent"
+          : item.saved
+            ? "is-saved"
+            : "is-missing";
+        const label = item.sent
+          ? "Enviado"
+          : item.saved
+            ? "Guardado"
+            : "Sin registro";
+        return `<div class="hdc-item ${cls}" data-harvest-check="${escapeHtml(
+          item.key
+        )}">
+          <strong>${escapeHtml(item.short)}</strong>
+          <small>${label}</small>
+        </div>`;
+      })
+      .join("");
+  }
+
+  function renderExportPreviewDayStatus() {
+    const el = $("#exportPreviewDayStatus");
+    if (!el) return;
+    el.textContent = harvestDayProgressMessage();
+  }
+
+  function focusNextMissingHarvestType() {
+    const missing = harvestMissingTypesToday();
+    if (!missing.length) return;
+    const next = missing[0].key;
+    if (normalizeHarvestType(state.harvest.tipo) !== next) {
+      switchHarvestType(next);
+    }
   }
 
   /** Registros de hoy listos para compartir o descargar (guardados + borrador activo). */
@@ -3785,6 +4155,7 @@
     if ($("#harvestTurno")) $("#harvestTurno").textContent = state.harvest.turno || "—";
     if ($("#harvestVariedad")) $("#harvestVariedad").textContent = state.harvest.variedad || "—";
     renderHarvestWorkers();
+    renderHarvestDayChecklist();
     hydrateIcons($("#harvestScreen"));
     updateNetworkUI();
   }
@@ -4031,12 +4402,36 @@
     if (label) label.textContent = state.session.fundo;
   }
 
+  function currentGuidesLic() {
+    return normGuidesLic_(state.session.grupoLic || "");
+  }
+
+  function setGuidesLic(value) {
+    state.session.grupoLic = normGuidesLic_(value);
+    saveStore();
+    renderGuidesLicLabel();
+  }
+
+  function renderGuidesLicLabel() {
+    const label = $("#guidesLicLabel");
+    if (!label) return;
+    const txt = displayGuidesLic_(state.session.grupoLic);
+    if (txt) {
+      label.textContent = txt;
+      label.classList.remove("ph");
+    } else {
+      label.textContent = "Elegir";
+      label.classList.add("ph");
+    }
+  }
+
   function renderGuidesMeta() {
     const s = state.session;
     const fechaTxt = (s.fecha || todayISO()).split("-").reverse().join("/");
     const fundo = currentFundo();
     const label = $("#guidesFundoLabel");
     if (label) label.textContent = fundo;
+    renderGuidesLicLabel();
     if ($("#guidesFecha")) $("#guidesFecha").textContent = fechaTxt;
     if ($("#guidesSupervisor")) {
       const nom = s.supervisorNombre || "Supervisor";
@@ -4131,6 +4526,7 @@
     const supervisorNombre =
       state.session.supervisorNombre || identity?.nombre || "";
     const fundo = currentFundo();
+    const grupoLic = currentGuidesLic();
     const t0 = totals();
     const id = guiasCloudQueueId(fecha, supervisorDni, fundo);
     const savedAt = new Date().toISOString();
@@ -4142,6 +4538,7 @@
       horaGuardado: savedAt,
       fecha,
       fundo,
+      grupoLic,
       securityCode: identity?.dni || supervisorDni || "",
       supervisorDni,
       supervisorNombre,
@@ -4149,6 +4546,7 @@
       session: {
         fecha,
         fundo,
+        grupoLic,
         supervisorDni,
         supervisorNombre,
       },
@@ -4215,6 +4613,11 @@
       toast("No hay guías para guardar");
       return;
     }
+    if (!isValidGuidesLic_(state.session.grupoLic)) {
+      toast("Seleccione LIC (01–50) o No tengo por ahora");
+      openPicker("guidesLic");
+      return;
+    }
 
     const btnSave = $("#btnSaveGuidesSummary");
     const btnCancel = $("#btnCancelGuidesSummary");
@@ -4240,8 +4643,8 @@
     saveStore();
 
     // Tras guardar: limpiar inputs / guías de pantalla (sesión del supervisor se mantiene)
-    state.guias = [];
-    state.expandedGuiaId = null;
+    state.guias = [emptyGuia()];
+    state.expandedGuiaId = state.guias[0].id;
     saveStore();
 
     closeGuidesSummary();
@@ -4321,6 +4724,9 @@
         <div class="gs-paper-meta">
           <div><small>FECHA</small><strong>${fechaTxt}</strong></div>
           <div><small>FUNDO</small><strong>${escapeHtml(currentFundo())}</strong></div>
+          <div><small>LIC</small><strong>${escapeHtml(
+            displayGuidesLic_(state.session.grupoLic) || "—"
+          )}</strong></div>
           <div><small>SUPERVISOR</small><strong>${escapeHtml(sup)}</strong></div>
         </div>
         <div class="gs-table-wrap">
@@ -4467,13 +4873,16 @@
   }
 
   function makeHarvestSnapshot() {
+    syncCurrentHarvestDraft();
     const id = state.identity || getIdentity() || {};
     const h = state.harvest;
+    const tipo = normalizeHarvestType(h.tipo);
+    const prev = state.previewDraftByType?.[tipo];
     return {
-      id: uid(),
+      id: prev?.id || uid(),
       savedAt: new Date().toISOString(),
       fecha: h.fecha || todayISO(),
-      tipo: normalizeHarvestType(h.tipo),
+      tipo,
       lote: h.lote || "",
       codLote: h.codLote || "",
       modulo: h.modulo || "",
@@ -4488,6 +4897,65 @@
         tarde: num(w.tarde),
       })),
     };
+  }
+
+  /** ¿El borrador de un tipo tiene datos para mostrar en modal/tabla? */
+  function harvestDraftHasData(draft) {
+    if (!draft || typeof draft !== "object") return false;
+    if (String(draft.lote || "").trim()) return true;
+    return (draft.workers || []).some(
+      (w) =>
+        String(w?.dni || "").replace(/\D/g, "").length === 8 ||
+        num(w?.manana) > 0 ||
+        num(w?.tarde) > 0
+    );
+  }
+
+  /**
+   * Snapshot desde la caché local de un tipo (Suma/Resta/Descarte)
+   * sin perder lo ingresado al cambiar de pestaña o abrir el modal.
+   */
+  function snapshotFromTypeDraft(tipo) {
+    syncCurrentHarvestDraft();
+    const key = normalizeHarvestType(tipo);
+    const bucket = harvestTypeBucket(key);
+    if (!harvestDraftHasData(bucket)) return null;
+    const id = state.identity || getIdentity() || {};
+    if (!state.previewDraftByType || typeof state.previewDraftByType !== "object") {
+      state.previewDraftByType = {};
+    }
+    const prev = state.previewDraftByType[key];
+    const snapshot = {
+      id: prev?.id || uid(),
+      savedAt: prev?.savedAt || new Date().toISOString(),
+      fecha: state.harvest.fecha || todayISO(),
+      tipo: key,
+      lote: bucket.lote || "",
+      codLote: bucket.codLote || "",
+      modulo: bucket.modulo || "",
+      turno: bucket.turno || "",
+      variedad: bucket.variedad || "",
+      supervisor: id.nombre || "SUPERVISOR",
+      supervisorDni: id.dni || "",
+      workers: (bucket.workers || []).map((w) => ({
+        dni: w.dni,
+        nombre: w.nombre,
+        manana: num(w.manana),
+        tarde: num(w.tarde),
+      })),
+    };
+    state.previewDraftByType[key] = snapshot;
+    return snapshot;
+  }
+
+  function rememberPreviewDraft(snapshot) {
+    if (!snapshot) return;
+    const key = normalizeHarvestType(snapshot.tipo);
+    if (!state.previewDraftByType || typeof state.previewDraftByType !== "object") {
+      state.previewDraftByType = {};
+    }
+    state.previewDraftByType[key] = snapshot;
+    state.previewDraftSnapshot = snapshot;
   }
 
   function snapshotTotal(snapshot) {
@@ -4654,6 +5122,8 @@
 
   /** Solo muestra el resumen: guardar ocurre dentro del modal */
   function previewHarvestSummary() {
+    // Persistir en caché local antes de abrir modal/tabla
+    saveHarvest();
     if (!state.harvest.lote) {
       toast("Seleccione el lote antes de continuar");
       $("#btnHarvestLote")?.focus();
@@ -4668,8 +5138,9 @@
       toast("Ingrese las jarras de mañana o tarde");
       return null;
     }
-    const snapshot = makeHarvestSnapshot();
-    state.previewDraftSnapshot = snapshot;
+    const snapshot =
+      snapshotFromTypeDraft(state.harvest.tipo) || makeHarvestSnapshot();
+    rememberPreviewDraft(snapshot);
     openExportPreview(snapshot, { saved: false });
     return snapshot;
   }
@@ -4725,12 +5196,13 @@
     return snapshot;
   }
 
-  /** Guarda en el historial (una sola vez por resumen). NO limpia trabajadores ni inputs. */
+  /** Guarda, limpia ese tipo y muestra qué falta (Suma / Resta / Descarte). */
   async function commitHarvestSnapshot() {
     const snapshot = state.activeExportSnapshot;
     if (!snapshot) return null;
     if (state.activeExportSaved) {
       toast("Este registro ya está guardado");
+      renderExportPreviewDayStatus();
       return snapshot;
     }
     const btn = $("#btnCommitHarvest");
@@ -4738,8 +5210,17 @@
     showAppLoader("Guardando registro…");
     try {
       await new Promise((r) => window.setTimeout(r, 420));
-      // skipReset: los datos quedan en pantalla para revisar / descargar Excel
-      return persistHarvestSnapshot(snapshot, { skipReset: true });
+      // Limpia trabajadores/jarras de ESTE tipo (Suma, Resta o Descarte)
+      const saved = persistHarvestSnapshot(snapshot, { skipReset: false });
+      if (!saved) return null;
+      state.previewDraftSnapshot = null;
+      renderHarvestDayChecklist();
+      renderExportPreviewDayStatus();
+      renderExportPreviewTypes(saved);
+      focusNextMissingHarvestType();
+      const msg = harvestDayProgressMessage();
+      toast(msg);
+      return saved;
     } finally {
       hideAppLoader();
       setBtnLoading(btn, false);
@@ -4761,9 +5242,20 @@
 
   function previewSnapshotsMap(current) {
     const map = {};
+    // 1) Ya guardados hoy (historial)
     todayReadySnapshots().forEach((item) => {
       map[normalizeHarvestType(item.tipo)] = item;
     });
+    // 2) Borradores en caché local por tipo (no se pierden al cambiar Suma/Resta/Descarte)
+    HARVEST_TYPES.forEach((item) => {
+      const key = item.key;
+      if (map[key] && isSnapshotSaved(map[key])) return;
+      const cached = state.previewDraftByType?.[key];
+      const fromDraft = snapshotFromTypeDraft(key);
+      if (fromDraft) map[key] = fromDraft;
+      else if (cached) map[key] = cached;
+    });
+    // 3) El que está abierto ahora
     const draft = state.previewDraftSnapshot;
     if (draft) map[normalizeHarvestType(draft.tipo)] = draft;
     if (current) map[normalizeHarvestType(current.tipo)] = current;
@@ -4785,16 +5277,21 @@
     const root = $("#exportPreviewTypes");
     if (!root) return;
     const active = current || state.activeExportSnapshot;
+    const status = harvestDayTypeStatus();
     const map = previewSnapshotsMap(active);
     // Siempre visibles: así el supervisor ve qué archivos ya están listos.
     root.hidden = false;
-    root.innerHTML = HARVEST_TYPES.map((item) => {
-      const snapshot = map[item.key];
-      const on = snapshot && snapshot.id === active?.id;
-      return `<button type="button" class="${on ? "is-on" : ""}" data-preview-type="${item.key}" ${
-        snapshot ? "" : "disabled"
-      }>${escapeHtml(item.short)}${snapshot ? " ✓" : ""}</button>`;
-    }).join("");
+    root.innerHTML = status
+      .map((item) => {
+        const snapshot = map[item.key] || item.snapshot;
+        const on = snapshot && snapshot.id === active?.id;
+        const mark = item.sent ? " ✓✓" : item.saved || snapshot ? " ✓" : "";
+        return `<button type="button" class="${on ? "is-on" : ""}" data-preview-type="${
+          item.key
+        }" ${snapshot ? "" : "disabled"}>${escapeHtml(item.short)}${mark}</button>`;
+      })
+      .join("");
+    renderExportPreviewDayStatus();
   }
 
   function openExportPreview(snapshot, opts = {}) {
@@ -4805,6 +5302,7 @@
     if (!state.activeExportSaved) state.previewDraftSnapshot = snapshot;
     updateExportPreviewSavedUI();
     renderExportPreviewTypes(snapshot);
+    renderExportPreviewDayStatus();
     const rows = $("#exportPreviewRows");
     if (rows) {
       rows.innerHTML = harvestExcelRows(snapshot)
@@ -4847,9 +5345,36 @@
   }
 
   function closeExportPreview() {
+    // Al cerrar el modal NO se borra lo ingresado: queda en caché por tipo
+    saveHarvest();
     const modal = $("#exportPreview");
     if (modal) modal.hidden = true;
     resetViewportLayout();
+    renderHarvestDayChecklist();
+    renderHarvest();
+  }
+
+  /** No cierra a ciegas si falta Suma/Resta/Descarte o enviar. */
+  function requestCloseExportPreview() {
+    const missing = harvestMissingTypesToday();
+    const unsent = harvestUnsentTypesToday();
+    if (!missing.length && !unsent.length) {
+      closeExportPreview();
+      return;
+    }
+    const lines = [];
+    if (missing.length) {
+      lines.push(`Falta registrar: ${missing.map((m) => m.short).join(", ")}`);
+    }
+    if (unsent.length) {
+      lines.push(`Falta enviar: ${unsent.map((m) => m.short).join(", ")}`);
+    }
+    confirmModal(
+      "Conteo incompleto",
+      `${lines.join(". ")}. ¿Cerrar igual?`,
+      () => closeExportPreview(),
+      "Cerrar igual"
+    );
   }
 
   function downloadHarvestSnapshot(snapshot, opts = {}) {
@@ -4958,7 +5483,11 @@
       native
         .shareExcelFiles(files, { title })
         .then((res) => {
-          if (res?.ok) return;
+          if (res?.ok) {
+            markHarvestSnapshotSent(snapshot);
+            toast(harvestDayProgressMessage());
+            return;
+          }
           // Si el plugin falla, intentar Web Share del WebView
           tryWebShareExcel(files, title, snapshot);
         })
@@ -5011,7 +5540,8 @@
     navigator
       .share(payload)
       .then(() => {
-        /* menú nativo abierto / compartido */
+        markHarvestSnapshotSent(snapshot);
+        toast(harvestDayProgressMessage());
       })
       .catch((err) => {
         if (isShareAbort(err)) return;
@@ -5119,23 +5649,23 @@
       title.textContent =
         state.readyFilesAction === "download"
           ? "¿Qué Excel desea guardar?"
-          : "Enviar por WhatsApp";
+          : "Compartir archivo";
     }
     if ($("#readyFilesAll")) $("#readyFilesAll").checked = true;
     const copy = $("#readyFilesCopy");
     if (copy) {
       copy.textContent =
         state.readyFilesAction === "share" && items.length > 1
-          ? "Puede enviar todos juntos o marcar solo los que necesita (Suma, Resta o Descarte)."
+          ? "Marque el Excel y pulse Compartir. Se abre el menú del celular (WhatsApp, Drive, Gmail, etc.)."
           : state.readyFilesAction === "download"
             ? "Elija qué Excel guardar en el celular."
-            : "Este archivo se enviará por WhatsApp.";
+            : "Se abre el menú Compartir del celular para enviar el archivo.";
     }
     const allSend = $("#btnReadyFilesAllSend");
     if (allSend) {
       const showMass = state.readyFilesAction === "share" && items.length > 1;
       allSend.hidden = !showMass;
-      allSend.textContent = `Enviar todos (${items.length})`;
+      allSend.textContent = `Compartir (${items.length})`;
     }
     list.innerHTML = HARVEST_TYPES.map((type) => {
       const item = items.find(
@@ -5166,8 +5696,8 @@
         state.readyFilesAction === "download"
           ? "Guardar Excel"
           : items.length > 1
-            ? "Enviar los que marqué"
-            : "Enviar por WhatsApp";
+            ? "Compartir los que marqué"
+            : "Compartir archivo";
     }
     sheet.hidden = false;
     sheet.removeAttribute("hidden");
@@ -5552,7 +6082,7 @@
           <li><strong>Sin base:</strong> toque usuarios, complete DNI y nombre; se guarda en Data Manuales cuando haya internet.</li>
           <li><strong>Jarras:</strong> anote mañana y tarde por separado; el total se suma solo.</li>
           <li><strong>Guardar:</strong> revise el resumen antes de compartirlo o descargarlo.</li>
-          <li><strong>Excel:</strong> consulte las últimas 48 horas y comparta el archivo por WhatsApp.</li>
+          <li><strong>Excel:</strong> consulte las últimas 48 horas y use Compartir para enviar el archivo (WhatsApp, Drive, Gmail, etc.).</li>
           <li><strong>Sin internet:</strong> puede navegar, registrar guías y cosecha; todo queda en el celular y sube al reconectar.</li>
         </ul>
         <button type="button" class="help-close">Entendido</button>
@@ -7009,6 +7539,7 @@
     });
     on("#btnSaveGuidesSummary", "click", saveGuidesSummary);
     on("#btnGuidesFundo", "click", () => openPicker("fundo"));
+    on("#btnGuidesLic", "click", () => openPicker("guidesLic"));
     on("#guidesSummaryModal", "click", (e) => {
       if (state.savingGuias) return;
       if (e.target?.id === "guidesSummaryModal") closeGuidesSummary();
@@ -7091,10 +7622,10 @@
     on("#btnCloseExportPreview", "click", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      closeExportPreview();
+      requestCloseExportPreview();
     });
     on("#exportPreview", "click", (e) => {
-      if (e.target?.id === "exportPreview") closeExportPreview();
+      if (e.target?.id === "exportPreview") requestCloseExportPreview();
     });
     on(".export-preview", "click", (e) => {
       e.stopPropagation();
@@ -7103,6 +7634,11 @@
       e.preventDefault();
       e.stopPropagation();
       downloadHarvestSnapshot(state.activeExportSnapshot, { single: true });
+    });
+    on("#btnUploadDriveHarvest", "click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      uploadActiveHarvestToDrive(e.currentTarget);
     });
     on("#btnShareHarvest", "click", (e) => {
       e.preventDefault();
@@ -7123,8 +7659,13 @@
       const btn = e.target?.closest?.("[data-preview-type]");
       if (!btn || btn.disabled) return;
       const tipo = btn.dataset.previewType;
-      const snapshot = previewSnapshotsMap(state.activeExportSnapshot)[tipo];
+      // Refresca desde caché local (byType) para no perder jarras/trabajadores
+      saveHarvest();
+      const snapshot =
+        previewSnapshotsMap(state.activeExportSnapshot)[tipo] ||
+        snapshotFromTypeDraft(tipo);
       if (!snapshot) return;
+      if (!isSnapshotSaved(snapshot)) rememberPreviewDraft(snapshot);
       openExportPreview(snapshot, { saved: isSnapshotSaved(snapshot) });
     });
     on("#btnCopyYesterdayWorkers", "click", copyYesterdayWorkers);

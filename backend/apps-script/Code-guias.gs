@@ -19,10 +19,11 @@
   *  GET/POST action=ping
   *
   * HOJA DATA-GUIAS (1 fila por supervisor/día/fundo):
-  * NOMBRE SUPERVISOR | DNI SUPERVISOR | FECHA | FUNDO | TOTAL JARRAS | TOTAL JABAS | TOTAL GUIAS | LOTES | N° GUIAS | HORA SUBIDA
+  * NOMBRE SUPERVISOR | DNI SUPERVISOR | FECHA | FUNDO | GRUPO LIC | TOTAL JARRAS | TOTAL JABAS | TOTAL GUIAS | LOTES | N° GUIAS | HORA SUBIDA
   * - TOTAL JARRAS / TOTAL JABAS / TOTAL GUIAS: números separados (para sumar fácil)
   * - LOTES y N° GUIAS: solo dato de respaldo
   * - FUNDO: Licapa o Licapa II
+  * - GRUPO LIC: LIC 01–50 o NO TENGO POR AHORA
   */
 
   var SHEET_NAME = 'DATA-GUIAS';
@@ -32,6 +33,7 @@
     'DNI SUPERVISOR',
     'FECHA',
     'FUNDO',
+    'GRUPO LIC',
     'TOTAL JARRAS',
     'TOTAL JABAS',
     'TOTAL GUIAS',
@@ -240,12 +242,14 @@
       clean_(d.fecha || session.fecha) ||
       Utilities.formatDate(new Date(), 'America/Lima', 'yyyy-MM-dd');
     var fundo = normalizeFundo_(d.fundo || session.fundo);
+    var grupoLic = normalizeGuidesLic_(d.grupoLic || session.grupoLic);
 
     var row = [
       supervisorNombre,
       supervisorDni,
       fecha,
       fundo,
+      grupoLic,
       jarras,
       jabas,
       nGuias,
@@ -259,18 +263,15 @@
     var rowIndex = findGuiasRowByKey_(sh, supervisorDni, fecha, fundo);
     if (rowIndex > 0) {
       var prev = sh.getRange(rowIndex, 1, 1, HEADERS.length).getDisplayValues()[0];
-      var same =
-        clean_(prev[0]) === clean_(row[0]) &&
-        clean_(prev[1]) === clean_(row[1]) &&
-        clean_(prev[2]) === clean_(row[2]) &&
-        clean_(prev[3]) === clean_(row[3]) &&
-        clean_(prev[4]) === clean_(row[4]) &&
-        clean_(prev[5]) === clean_(row[5]) &&
-        clean_(prev[6]) === clean_(row[6]) &&
-        clean_(prev[7]) === clean_(row[7]) &&
-        clean_(prev[8]) === clean_(row[8]);
+      var same = true;
+      for (var c = 0; c < HEADERS.length - 1; c++) {
+        if (clean_(prev[c]) !== clean_(row[c])) {
+          same = false;
+          break;
+        }
+      }
       if (same) {
-        sh.getRange(rowIndex, 10).setValue(row[9]);
+        sh.getRange(rowIndex, HEADERS.length).setValue(row[HEADERS.length - 1]);
         return { created: false, updated: false, duplicate: true };
       }
       sh.getRange(rowIndex, 1, 1, HEADERS.length).setValues([row]);
@@ -279,6 +280,20 @@
 
     sh.getRange(sh.getLastRow() + 1, 1, 1, HEADERS.length).setValues([row]);
     return { created: true, updated: false, duplicate: false };
+  }
+
+  function normalizeGuidesLic_(value) {
+    var raw = clean_(value);
+    if (!raw) return '';
+    var up = raw.toUpperCase().replace(/_/g, ' ').replace(/\s+/g, ' ');
+    if (/NO\s*TENGO/.test(up)) return 'NO TENGO POR AHORA';
+    var digits = up.replace(/\D/g, '');
+    var n = Number(digits);
+    if (n >= 1 && n <= 50) {
+      var num = n < 10 ? '0' + n : String(n);
+      return 'LIC ' + num;
+    }
+    return raw;
   }
 
   function normalizeFundo_(value) {
@@ -325,6 +340,24 @@
     }
     if (first !== HEADERS[0]) {
       throw new Error('La hoja "' + sh.getName() + '" tiene encabezados incompatibles');
+    }
+    // Migración: insertar columna GRUPO LIC después de FUNDO si falta
+    var headerCount = Math.max(sh.getLastColumn(), HEADERS.length);
+    var headers = sh.getRange(1, 1, 1, headerCount).getDisplayValues()[0];
+    var hasGrupoLic = false;
+    for (var i = 0; i < headers.length; i++) {
+      if (clean_(headers[i]).toUpperCase() === 'GRUPO LIC') {
+        hasGrupoLic = true;
+        break;
+      }
+    }
+    if (!hasGrupoLic) {
+      sh.insertColumnAfter(4);
+      sh.getRange(1, 5).setValue('GRUPO LIC');
+      sh.getRange(1, 5)
+        .setFontWeight('bold')
+        .setBackground('#e00b29')
+        .setFontColor('#ffffff');
     }
   }
 

@@ -2810,6 +2810,58 @@ body[data-page="scan"] .lock-screen {
   opacity: 0.38;
   cursor: default;
 }
+.export-preview-day-status {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #f3f8f1;
+  border: 1px solid #d5e7d1;
+  color: #1f5c28;
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+.harvest-day-checklist {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 10px;
+}
+.harvest-day-checklist .hdc-item {
+  border: 1.5px solid #d5e7d1;
+  border-radius: 11px;
+  background: #f7fbf6;
+  padding: 8px 6px;
+  text-align: center;
+  min-height: 52px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+}
+.harvest-day-checklist .hdc-item strong {
+  font-size: 0.78rem;
+  color: #1f5c28;
+}
+.harvest-day-checklist .hdc-item small {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #6b7c6e;
+}
+.harvest-day-checklist .hdc-item.is-saved {
+  border-color: #7cbc6a;
+  background: #eaf6e6;
+}
+.harvest-day-checklist .hdc-item.is-sent {
+  border-color: #2f7a36;
+  background: #d8f0d2;
+}
+.harvest-day-checklist .hdc-item.is-sent small {
+  color: #1f5c28;
+}
+.harvest-day-checklist .hdc-item.is-missing small {
+  color: #b45309;
+}
 .check-pick-backdrop {
   position: absolute;
   inset: 0;
@@ -2955,6 +3007,11 @@ body[data-page="scan"] .lock-screen {
 .share-whatsapp {
   border: 0;
   background: #25d366;
+  color: #fff;
+}
+.upload-drive {
+  border: 0;
+  background: #1a73e8;
   color: #fff;
 }
 .download-excel {
@@ -5265,7 +5322,7 @@ html.is-android body.kb-open .export-preview {
 }
 .guides-meta-row {
   display: grid;
-  grid-template-columns: 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   gap: 10px;
   align-items: stretch;
 }
@@ -6328,8 +6385,8 @@ html.is-android body.kb-open .export-preview {
     padding: 20px 18px 18px;
   }
   .guides-meta-row {
-    grid-template-columns: 1fr;
-    gap: 12px;
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.1fr) minmax(0, 0.9fr);
+    gap: 10px;
   }
   .guides-kpi {
     padding: 16px 12px 18px;

@@ -65,5 +65,22 @@ Si dice `UNAUTHORIZED` / `Falta configurar API_TOKEN`, el deploy en Google es vi
 - `ping`
 - `registrarGuias`
 
+## 3) Excel → carpeta Drive → `Code-excel-drive.gs`
+Sube el `.xlsx` a **una carpeta Drive** (el enlace lo pega usted una sola vez en el script).
+
+```
+PWA  →  api-config.js (QB_SCRIPT.EXCEL_DRIVE)
+     →  Code-excel-drive.gs
+     →  Carpeta Drive (DRIVE_FOLDER_LINK)
+```
+
+1. Copie el enlace de su carpeta Drive  
+2. Péguelo en `DRIVE_FOLDER_LINK` dentro de `Code-excel-drive.gs`  
+3. Apps Script nuevo → pegar archivo → Implementar → Aplicación web (Yo / Cualquier persona)  
+4. URL `/exec` → `api-config.js` → `EXCEL_DRIVE: "…/exec"`  
+5. Redeploy Netlify  
+
+Botón en la app: **Subir a Drive** (vista previa del Excel). Devuelve el enlace del archivo.
+
 ## Prueba en editor
 Solo `testPing` / `myFunction` (rápido).
