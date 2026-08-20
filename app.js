@@ -28,7 +28,7 @@
   const JARRAS_POR_JABA = 12;
   const FUNDO_DEFAULT = "Licapa";
   const FUNDO_OPTIONS = ["Licapa", "Licapa II"];
-  const APP_VERSION = "v344";
+  const APP_VERSION = "v345";
 
   function normalizeFundo(value) {
     const raw = String(value || "").trim();
@@ -4882,62 +4882,12 @@
     return file ? [file] : [];
   }
 
-  /** Abre WhatsApp (app o web) con un texto. No puede adjuntar archivo por URL. */
-  function openWhatsAppChat(text) {
-    const msg = encodeURIComponent(
-      text ||
-        "Hola, le envío el Excel de cosecha QBerries. El archivo está en Descargas — adjúntelo aquí."
-    );
-    const appUrl = `whatsapp://send?text=${msg}`;
-    const webUrl = `https://api.whatsapp.com/send?text=${msg}`;
-    try {
-      // Intento app nativa (celular)
-      const iframe = document.createElement("iframe");
-      iframe.style.display = "none";
-      iframe.src = appUrl;
-      document.body.appendChild(iframe);
-      setTimeout(() => {
-        try {
-          iframe.remove();
-        } catch {
-          /* ignore */
-        }
-      }, 1500);
-    } catch {
-      /* ignore */
-    }
-    // Web / fallback (siempre útil en tablet o si no hay app)
-    try {
-      window.open(webUrl, "_blank", "noopener,noreferrer");
-    } catch {
-      location.href = webUrl;
-    }
-  }
-
   /**
-   * Plan B: descarga el Excel y abre WhatsApp para que adjunte el archivo.
-   * Se usa cuando el menú Compartir del sistema no está disponible.
+   * Abre el menú nativo Compartir (como iOS/Android) con UN solo Excel.
+   * NO usa API de WhatsApp (wa.me / api.whatsapp.com).
+   * Debe llamarse dentro del click del usuario.
    */
-  function fallbackWhatsAppWithDownload(snapshot, fileName) {
-    try {
-      const wb = buildHarvestWorkbook(snapshot);
-      downloadXlsxWorkbook(wb, fileName || harvestFileName(snapshot));
-    } catch (err) {
-      console.warn("fallbackWhatsApp download", err);
-      toast("No se pudo preparar el Excel");
-      return;
-    }
-    toast("Excel descargado · abriendo WhatsApp…");
-    openWhatsAppChat(
-      "Hola, le envío el Excel de cosecha QBerries. El archivo ya está en Descargas de este celular — por favor adjúntelo en este chat."
-    );
-  }
-
-  /**
-   * Un solo Excel → WhatsApp.
-   * Debe llamarse DENTRO del click (mismo gesto), sin awaits previos.
-   */
-  function shareOneExcelWhatsApp(snapshot) {
+  function shareOneExcelNative(snapshot) {
     if (!snapshot) {
       toast("No hay registro para enviar");
       return;
@@ -4951,92 +4901,99 @@
     try {
       file = harvestShareFile(snapshot);
     } catch (err) {
-      console.warn("shareOneExcelWhatsApp build", err);
+      console.warn("shareOneExcelNative build", err);
     }
     if (!file) {
       toast("No se pudo crear el Excel");
       return;
     }
 
+    // Garantía: exactamente 1 archivo
+    const files = [file];
     const fileName = file.name || harvestFileName(snapshot);
     const native = window.QBNative;
 
-    // APK Capacitor
     if (native?.isNative?.() && typeof native.shareExcelFiles === "function") {
       native
-        .shareExcelFiles([file], { title: fileName, text: "" })
+        .shareExcelFiles(files, { title: fileName, text: "" })
         .then((res) => {
-          if (res?.ok) toast("Elija WhatsApp");
-          else fallbackWhatsAppWithDownload(snapshot, fileName);
+          if (res?.ok) toast("Elija WhatsApp en el menú");
+          else toast("No se abrió Compartir. Pruebe Descargar Excel.");
         })
         .catch((err) => {
           if (native.isShareCancelled?.(err)) return;
-          fallbackWhatsAppWithDownload(snapshot, fileName);
+          toast("No se abrió Compartir. Pruebe Descargar Excel.");
         });
       return;
     }
 
-    // Navegador / PWA: Web Share API (solo 1 intento en el gesto del usuario)
-    const hasShare = typeof navigator.share === "function";
-    const isFile = typeof File !== "undefined" && file instanceof File;
-    let canFiles = false;
-    if (hasShare && isFile) {
-      if (typeof navigator.canShare === "function") {
-        try {
-          canFiles = navigator.canShare({ files: [file] });
-        } catch {
-          canFiles = false;
-        }
-      } else {
-        // Sin canShare (algunos Android viejos): intentar share igual
-        canFiles = true;
+    if (typeof navigator.share !== "function") {
+      toast("Este dispositivo no tiene menú Compartir. Use Descargar Excel.");
+      return;
+    }
+
+    if (typeof File === "undefined" || !(file instanceof File)) {
+      toast("No se pudo preparar el archivo. Use Descargar Excel.");
+      return;
+    }
+
+    let canFiles = true;
+    if (typeof navigator.canShare === "function") {
+      try {
+        canFiles = navigator.canShare({ files });
+      } catch {
+        canFiles = false;
       }
     }
 
-    if (hasShare && isFile && canFiles) {
-      // Un solo share, sin title (más compatible). No reintentar: pierde el gesto.
-      navigator
-        .share({ files: [file] })
-        .then(() => toast("Elija WhatsApp"))
-        .catch((err) => {
-          if (err?.name === "AbortError") return;
-          console.warn("navigator.share files failed", err);
-          fallbackWhatsAppWithDownload(snapshot, fileName);
-        });
+    if (!canFiles) {
+      toast("Este navegador no permite compartir archivos. Use Descargar Excel.");
       return;
     }
 
-    // Tablet / PC / navegador sin share de archivos
-    fallbackWhatsAppWithDownload(snapshot, fileName);
+    // Menú nativo del sistema — 1 documento
+    navigator
+      .share({ files })
+      .then(() => toast("Elija WhatsApp"))
+      .catch((err) => {
+        if (err?.name === "AbortError") return;
+        console.warn("navigator.share", err);
+        toast("No se pudo compartir. Use Descargar Excel.");
+      });
+  }
+
+  // Alias por compatibilidad con llamadas anteriores
+  function shareOneExcelWhatsApp(snapshot) {
+    shareOneExcelNative(snapshot);
   }
 
   function pickShareablePayload(files) {
     if (!files?.length || typeof navigator.share !== "function") return null;
-    const list = files.slice();
-    if (typeof navigator.canShare !== "function") {
-      return { files: [list[0]], title: list[0].name };
-    }
-    try {
-      if (navigator.canShare({ files: [list[0]] })) {
-        return { files: [list[0]], title: list[0].name };
+    const one = files[0];
+    if (!one) return null;
+    if (typeof navigator.canShare === "function") {
+      try {
+        if (!navigator.canShare({ files: [one] })) return null;
+      } catch {
+        return null;
       }
-    } catch {
-      /* ignore */
     }
-    return null;
+    return { files: [one], title: one.name };
   }
 
-  /** Solo abre el menú de compartir. Nunca descarga el archivo. */
+  /** Menú nativo · siempre 1 archivo */
   function shareFilesNow(payload, { onOk, onFail } = {}) {
-    if (!payload?.files?.length) {
+    const one = payload?.files?.[0];
+    if (!one) {
       onFail?.();
       return false;
     }
+    const files = [one];
     const native = window.QBNative;
     if (native?.isNative?.()) {
       native
-        .shareExcelFiles(payload.files, {
-          title: payload.title || "Excel de cosecha QBerries",
+        .shareExcelFiles(files, {
+          title: payload.title || one.name || "Excel QBerries",
           text: "",
         })
         .then((res) => {
@@ -5054,30 +5011,12 @@
       return false;
     }
     navigator
-      .share({ files: payload.files })
+      .share({ files })
       .then(() => onOk?.())
       .catch((err) => {
         if (err?.name === "AbortError") return;
         onFail?.(err);
       });
-    return true;
-  }
-
-  async function shareFilesSequential(files) {
-    for (let i = 0; i < files.length; i += 1) {
-      const file = files[i];
-      toast(
-        files.length > 1
-          ? `Enviando ${i + 1} de ${files.length}… elija WhatsApp`
-          : "Elija WhatsApp para enviar el Excel"
-      );
-      try {
-        await navigator.share({ files: [file] });
-      } catch (err) {
-        if (err?.name === "AbortError") return false;
-        throw err;
-      }
-    }
     return true;
   }
 
@@ -5087,18 +5026,20 @@
       toast("No hay registro para enviar");
       return;
     }
-    // Resumen / uso normal: SIEMPRE un solo Excel
-    shareOneExcelWhatsApp(list[0]);
+    if (list.length > 1) {
+      toast("Se comparte 1 Excel (el seleccionado)");
+    }
+    // Nunca varios archivos en el mismo menú Compartir
+    shareOneExcelNative(list[0]);
   }
 
-  /** Desde el resumen: SIEMPRE un solo Excel (el que se está viendo). */
   function shareHarvestFromPreview() {
     const current = state.activeExportSnapshot;
     if (!current) {
       toast("No hay registro para enviar");
       return;
     }
-    shareOneExcelWhatsApp(current);
+    shareOneExcelNative(current);
   }
 
   function shareHarvestSnapshot(snapshot) {
@@ -5106,7 +5047,7 @@
       toast("No hay registro para compartir");
       return;
     }
-    shareOneExcelWhatsApp(snapshot);
+    shareOneExcelNative(snapshot);
   }
 
   function openReadyFilesModal(action, files) {
@@ -5219,11 +5160,17 @@
       picks.forEach((item) => downloadHarvestSnapshot(item, { single: true }));
       return;
     }
-    shareExcelDocuments(picks);
+    // Compartir: un solo Excel en el menú nativo (el primero marcado)
+    if (picks.length > 1) {
+      toast("Se abre Compartir con 1 Excel. Marque solo uno si desea otro.");
+    }
+    shareOneExcelNative(picks[0]);
   }
 
   function shareHarvestSnapshots(snapshots) {
-    shareExcelDocuments(snapshots);
+    const list = (snapshots || []).filter(Boolean);
+    if (!list.length) return;
+    shareOneExcelNative(list[0]);
   }
 
   function renderHarvestHistory() {
@@ -7131,8 +7078,8 @@
         toast("Espere a que cargue el Excel e intente otra vez");
         return;
       }
-      // Misma pulsación: construir + abrir compartir (no perder el gesto)
-      shareOneExcelWhatsApp(snapshot);
+      // Menú nativo · 1 Excel · sin API WhatsApp
+      shareOneExcelNative(snapshot);
     });
     on("#exportPreviewTypes", "click", (e) => {
       const btn = e.target?.closest?.("[data-preview-type]");
@@ -7180,7 +7127,10 @@
         return;
       }
       closeReadyFiles();
-      shareExcelDocuments(all);
+      shareOneExcelNative(all[0]);
+      if (all.length > 1) {
+        toast("Compartiendo 1 Excel. Repita para los demás.");
+      }
     });
     on("#btnCloseHistory", "click", closeHarvestHistory);
     on("#historyTabs", "click", (e) => {

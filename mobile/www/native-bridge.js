@@ -86,20 +86,8 @@
   async function shareExcelFiles(files, meta) {
     if (!isNative()) return { ok: false, reason: "not-native" };
     if (!files?.length) return { ok: false, reason: "no-files" };
-    if (files.length === 1) return shareExcelFile(files[0], meta);
-    const Share = plugin("Share");
-    if (!Share) return { ok: false, reason: "share-unavailable" };
-    const uris = [];
-    for (const file of files) {
-      uris.push(await writeShareFile(file));
-    }
-    await Share.share({
-      title: meta?.title || "Excel de cosecha",
-      text: meta?.text || "Registro de cosecha",
-      files: uris,
-      dialogTitle: "Compartir Excel",
-    });
-    return { ok: true };
+    // Siempre 1 documento en el menú Compartir (como el share sheet de iPhone)
+    return shareExcelFile(files[0], meta);
   }
 
   async function requestCamera() {

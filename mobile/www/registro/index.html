@@ -15,10 +15,9 @@
   <script>
     (function(){try{var w=window.innerWidth||0;if(w<=1024)return;var t=Number(navigator.maxTouchPoints||0);var coarse=window.matchMedia("(pointer: coarse)").matches;if((t>0||coarse)&&Math.max(w,window.innerHeight||0)<=1366)return;var ua=navigator.userAgent||"";if(/iPhone|iPod|iPad|Android|Tablet/i.test(ua))return;if(navigator.platform==="MacIntel"&&t>1)return;document.documentElement.classList.add("is-computer");}catch(e){}})();
   </script>
-  <link rel="prefetch" href="/inicio/" />
   <link rel="prefetch" href="/vinculo/" />
   <script type="speculationrules">
-    { "prerender": [{ "urls": ["/inicio/", "/vinculo/"], "eagerness": "moderate" }] }
+    { "prerender": [{ "urls": ["/vinculo/"], "eagerness": "moderate" }] }
   </script>
   <script>
     /* Antes de pintar: si ya hay sesión, la app se muestra sin pantalla de carga. */
@@ -31,11 +30,12 @@
       }
     } catch (e) {}
   </script>
-  <link rel="stylesheet" href="/styles.css?v=256" />
-  <script src="/vendor/xlsx.full.min.js?v=256" defer></script>
-  <script src="/icons.js?v=256" defer></script>
-  <script src="/native-bridge.js?v=256" defer></script>
-  <script src="/app.js?v=256" defer></script>
+  <link rel="stylesheet" href="/styles.css?v=345" />
+  <script src="/vendor/sweetalert2.all.min.js?v=345" defer></script>
+  <script src="/vendor/xlsx.full.min.js?v=345" defer></script>
+  <script src="/icons.js?v=345" defer></script>
+  <script src="/api-config.js?v=345" defer></script>
+  <script src="/app.js?v=345" defer></script>
 </head>
 <body data-page="registro" class="app-booting">
   <div class="computer-block" id="computerBlock" role="alertdialog">
@@ -50,6 +50,19 @@
 </script>
   <div class="stage">
     <div class="phone" id="phone">
+      <header class="app-topnav" id="appTopnav" aria-label="Navegación">
+        <div class="app-topnav-inner">
+          <nav class="app-topnav-pill" aria-label="Secciones">
+            <button type="button" data-tab="registro" class="is-active" aria-current="page">Conteo</button>
+            <button type="button" data-tab="guias">Guías</button>
+          </nav>
+          <div class="app-topnav-tools">
+            <button type="button" data-tab="excel" aria-label="Historial"><span data-icon="fileSpreadsheet"></span></button>
+            <button type="button" data-tab="vincular" aria-label="Vincular datos"><span data-icon="link"></span></button>
+            <button type="button" data-tab="perfil" aria-label="Mi perfil"><span data-icon="user"></span></button>
+          </div>
+        </div>
+      </header>
       <span id="netPill" class="status-chip is-online" title="Estado de conexión">
         <span class="status-dot"></span>
         <span class="status-text">Con internet</span>
@@ -80,16 +93,19 @@
           </div>
         </header>
 
-        <div class="harvest-scroll">
+        <div class="registro-panels" id="registroPanels">
+        <div class="harvest-scroll registro-panel registro-panel--conteo is-active" id="conteoPanel" data-panel="conteo">
           <section class="harvest-type-card">
-            <div>
-              <small>TIPO DE REGISTRO</small>
-              <span>Cada tipo conserva su propio lote y personal</span>
+            <div class="harvest-section-title">
+              <div>
+                <small>TIPO DE REGISTRO</small>
+                <h2>Elija el tipo</h2>
+              </div>
             </div>
             <input type="hidden" id="harvestType" value="suma-jarras" />
             <button type="button" class="select-trigger harvest-type-trigger" id="btnHarvestType" aria-label="Seleccionar tipo de registro">
               <span id="harvestTypeLabel">Suma de jarras</span>
-              <span class="chev" data-icon="chevronDown"></span>
+              <span class="chev" data-icon="search"></span>
             </button>
           </section>
 
@@ -101,10 +117,10 @@
               </div>
             </div>
             <label class="harvest-lote-control">
-              <span>Lote</span>
+              <span class="sr-only">Lote</span>
               <input type="hidden" id="harvestLote" value="" />
               <button type="button" class="select-trigger harvest-lote-trigger" id="btnHarvestLote" aria-label="Seleccionar lote">
-                <span id="harvestLoteLabel" class="ph">Seleccionar lote</span>
+                <span id="harvestLoteLabel" class="ph">Buscar lote</span>
                 <span class="chev" data-icon="search"></span>
               </button>
             </label>
@@ -130,19 +146,22 @@
                 </button>
               </div>
             </div>
-            <form id="harvestWorkerForm" class="harvest-worker-form">
-              <label>
-                <span>DNI</span>
-                <input id="harvestWorkerDni" inputmode="numeric" maxlength="8" placeholder="8 dígitos" autocomplete="off" />
-              </label>
-              <label class="harvest-worker-name">
-                <span>Nombres y apellidos</span>
-                <input id="harvestWorkerName" placeholder="ACTUALIZADO" autocomplete="off" disabled />
-              </label>
-              <button type="submit" aria-label="Agregar trabajador">
-                <span data-icon="plus"></span>
-              </button>
-            </form>
+            <div class="harvest-add-box">
+              <p class="harvest-add-box-kicker">Agregar trabajador <span>solo local</span></p>
+              <form id="harvestWorkerForm" class="harvest-worker-form">
+                <label>
+                  <span>DNI</span>
+                  <input id="harvestWorkerDni" inputmode="numeric" maxlength="8" placeholder="8 dígitos" autocomplete="off" />
+                </label>
+                <label class="harvest-worker-name">
+                  <span>Nombres y apellidos</span>
+                  <input id="harvestWorkerName" placeholder="ACTUALIZADO" autocomplete="off" disabled />
+                </label>
+                <button type="submit" aria-label="Agregar trabajador">
+                  <span data-icon="plus"></span>
+                </button>
+              </form>
+            </div>
             <p class="harvest-form-msg" id="harvestWorkerMsg"></p>
             <p class="harvest-manual-hint">Si no está en la base, toque el ícono de usuarios. Se reportará a Data Manuales.</p>
           </section>
@@ -175,6 +194,48 @@
           </button>
         </div>
 
+        <aside class="guides-sheet registro-panel registro-panel--guias" id="guidesSheet" data-panel="guias" aria-label="Guías" aria-hidden="true">
+          <div class="guides-scroll">
+            <section class="guides-meta-card">
+              <div class="guides-meta-row">
+                <div class="guides-meta-chip guides-meta-chip--fundo">
+                  <small>FUNDO</small>
+                  <button type="button" class="guides-fundo-trigger" id="btnGuidesFundo" aria-label="Seleccionar fundo">
+                    <span id="guidesFundoLabel">Licapa</span>
+                  </button>
+                </div>
+                <div class="guides-meta-chip guides-meta-chip--fecha">
+                  <small>FECHA</small>
+                  <strong id="guidesFecha">—</strong>
+                </div>
+              </div>
+              <div class="guides-meta-supervisor">
+                <small>SUPERVISOR RESPONSABLE</small>
+                <strong id="guidesSupervisor">—</strong>
+              </div>
+            </section>
+
+            <div id="cards" class="guides-cards"></div>
+
+            <button type="button" class="harvest-save-btn guides-add-main" id="btnAgregarGuia">
+              <span data-icon="plus"></span> Agregar guía
+            </button>
+
+            <div class="guides-bottom-panel">
+              <div class="guides-day-total">
+                <span>TOTAL DEL DÍA</span>
+              </div>
+              <div class="guides-kpi-bar">
+                <div class="guides-kpi guides-kpi--guias"><small>GUÍAS</small><strong id="kpiGuias">0</strong></div>
+                <div class="guides-kpi guides-kpi--jarras"><small>JARRAS</small><strong id="kpiJarras">0</strong></div>
+                <div class="guides-kpi guides-kpi--jabas"><small>JABAS</small><strong id="kpiJabas">0</strong></div>
+              </div>
+              <button type="button" class="harvest-save-btn guides-resumen-btn" id="btnGuidesResumen">Ver resumen</button>
+            </div>
+          </div>
+        </aside>
+        </div>
+
       </main>
 
       <div class="picker-backdrop" id="picker" hidden>
@@ -194,23 +255,72 @@
         </div>
       </div>
 
-      <nav class="app-tabbar" id="appTabbar" aria-label="Navegación principal">
-        <button type="button" class="nav-btn nav-link" data-tab="inicio" data-nav-index="0" aria-label="Inicio">
-          <span data-icon="home"><svg class="ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-8 9 8"/><path d="M5 10v11h14V10"/><path d="M9 21v-7h6v7"/></svg></span><em>Inicio</em>
-        </button>
-        <button type="button" class="nav-btn nav-link is-active active" data-tab="registro" data-nav-index="1" aria-label="Registro" aria-current="page">
-          <span data-icon="clipboard"><svg class="ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M9 14h6M9 10h6M9 18h4"/></svg></span><em>Registro</em>
-        </button>
-        <button type="button" class="nav-btn tab-main" data-tab="vincular" data-nav-index="2" aria-label="Vincular">
-          <span class="tab-main-circle" data-icon="plus"><svg class="ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></span>
-        </button>
-        <button type="button" class="nav-btn nav-link" data-tab="excel" data-nav-index="3" aria-label="Excel">
-          <span data-icon="fileSpreadsheet"><svg class="ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h2M12 13h2M16 13h2M8 17h2M12 17h2M16 17h2"/></svg></span><em>Excel</em>
-        </button>
-        <button type="button" class="nav-btn nav-link" data-tab="ayuda" data-nav-index="4" aria-label="Ayuda">
-          <span data-icon="info"><svg class="ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="11" x2="12" y2="16"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg></span><em>Ayuda</em>
-        </button>
-      </nav>
+      <div class="profile-modal-backdrop" id="profileModal" hidden>
+        <section class="profile-modal" role="dialog" aria-modal="true" aria-labelledby="profileModalTitle">
+          <div class="profile-modal-head">
+            <div>
+              <small>MI PERFIL</small>
+              <h2 id="profileModalTitle">Supervisor</h2>
+            </div>
+            <button type="button" id="btnCloseProfile" aria-label="Cerrar">
+              <span data-icon="x"></span>
+            </button>
+          </div>
+          <div class="profile-modal-avatar" data-icon="user"></div>
+          <div class="profile-modal-rows">
+            <div class="profile-modal-row">
+              <span>DNI</span>
+              <strong id="profileDni">—</strong>
+            </div>
+            <div class="profile-modal-row">
+              <span>Cargo</span>
+              <strong id="profileCargo">—</strong>
+            </div>
+            <div class="profile-modal-row">
+              <span>Nombre</span>
+              <strong id="profileNombre">—</strong>
+            </div>
+          </div>
+          <div class="profile-app-tools">
+            <small>ESTA APP</small>
+            <p class="profile-app-ver" id="profileAppVersion">Versión</p>
+            <button type="button" class="profile-tool-btn app-tools-update" id="btnProfileUpdate">
+              <span data-icon="refresh"></span> Actualizar app
+            </button>
+            <button type="button" class="profile-tool-btn app-tools-cache" id="btnProfileCache">
+              <span data-icon="trash"></span> Borrar caché
+            </button>
+            <button type="button" class="profile-tool-btn app-tools-install" id="btnProfileInstall" hidden>
+              <span data-icon="download"></span> Instalar app
+            </button>
+            <p class="profile-app-installed" id="profileAppInstalled" hidden>Ya está instalada en este celular.</p>
+          </div>
+          <button type="button" class="btn btn-danger btn-block" id="btnProfileLogout">
+            <span data-icon="logOut"></span> Cerrar sesión
+          </button>
+        </section>
+      </div>
+
+      <div class="profile-modal-backdrop" id="workerIdModal" hidden>
+        <section class="profile-modal worker-id-modal" role="dialog" aria-modal="true" aria-labelledby="workerIdModalName">
+          <div class="profile-modal-head">
+            <small>PERSONA REGISTRADA EN LA EMPRESA</small>
+            <button type="button" id="btnCloseWorkerId" aria-label="Cerrar">
+              <span data-icon="x"></span>
+            </button>
+          </div>
+          <div class="profile-modal-rows">
+            <div class="profile-modal-row">
+              <span>Nombre</span>
+              <strong id="workerIdModalName">Nombre</strong>
+            </div>
+            <div class="profile-modal-row">
+              <span>DNI</span>
+              <strong id="workerIdModalDni">—</strong>
+            </div>
+          </div>
+        </section>
+      </div>
 
       <div class="modal-backdrop" id="modal" hidden>
         <div class="modal" role="dialog" aria-modal="true">
@@ -306,22 +416,94 @@
         </section>
       </div>
 
+      <div class="guides-summary-backdrop" id="guidesSummaryModal" hidden>
+        <section class="guides-summary-dialog" role="dialog" aria-modal="true" aria-labelledby="guidesSummaryTitle">
+          <div class="guides-summary-head">
+            <div>
+              <small>CAPTURA · COMPARTIR</small>
+              <h2 id="guidesSummaryTitle">Resumen de guías</h2>
+            </div>
+            <button type="button" id="btnCloseGuidesSummary" aria-label="Cerrar">
+              <span data-icon="x"></span>
+            </button>
+          </div>
+          <p class="guides-summary-hint">Revise y pulse Guardar. Se sube al servidor y se limpian los campos para un nuevo registro.</p>
+          <div id="guidesSummaryCard" class="guides-summary-card"></div>
+          <div class="guides-summary-actions">
+            <button type="button" class="guides-summary-cancel" id="btnCancelGuidesSummary">Cancelar</button>
+            <button type="button" class="guides-summary-save" id="btnSaveGuidesSummary">Guardar</button>
+          </div>
+        </section>
+      </div>
+
+      <div class="modal-backdrop" id="horaPickerModal" hidden>
+        <section class="hora-picker" role="dialog" aria-modal="true" aria-labelledby="horaPickerTitle">
+          <div class="hora-picker-head">
+            <div>
+              <small id="horaPickerTitle">SELECCIONAR HORA</small>
+              <strong class="hora-picker-now" id="horaPickerNow">—</strong>
+            </div>
+          </div>
+
+          <div class="hora-picker-spinners">
+            <div class="hora-spinner">
+              <button type="button" class="hora-step" data-hora-act="hour-inc" aria-label="Hora +">▲</button>
+              <div class="hora-box">
+                <span id="horaPickerHour">08</span>
+              </div>
+              <button type="button" class="hora-step" data-hora-act="hour-dec" aria-label="Hora -">▼</button>
+            </div>
+
+            <div class="hora-sep" aria-hidden="true">:</div>
+
+            <div class="hora-spinner">
+              <button type="button" class="hora-step" data-hora-act="min-inc" aria-label="Minuto +">▲</button>
+              <div class="hora-box">
+                <span id="horaPickerMin">10</span>
+              </div>
+              <button type="button" class="hora-step" data-hora-act="min-dec" aria-label="Minuto -">▼</button>
+            </div>
+          </div>
+
+          <div class="hora-picker-actions">
+            <div class="hora-picker-actions-row">
+              <button type="button" class="hora-btn-secondary" id="btnHoraExacta">Tomar hora exacta</button>
+              <button type="button" class="hora-btn-secondary hora-btn-cancel" id="btnHoraCancelar">Cancelar</button>
+            </div>
+            <button type="button" class="hora-btn-confirm" id="btnHoraConfirmar">Tomar hora</button>
+          </div>
+        </section>
+      </div>
+
       <aside class="history-sheet" id="historySheet" hidden>
         <div class="history-sheet-head">
-          <div>
+          <button type="button" class="app-back app-back--on-light" id="btnCloseHistory" aria-label="Volver">Atrás</button>
+          <div class="history-sheet-titles">
             <small>ÚLTIMAS 48 HORAS</small>
-            <h2>Historial de Excel</h2>
+            <h2>Historial</h2>
           </div>
-          <button type="button" id="btnCloseHistory" aria-label="Cerrar">
-            <span data-icon="x"><svg class="ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg></span>
-          </button>
         </div>
-        <p class="history-copy">Los registros se eliminan automáticamente después de 48 horas. Se muestran de 8 en 8.</p>
-        <div class="history-list" id="historyList"></div>
-        <div class="history-pager" id="historyPager" hidden>
-          <button type="button" id="btnHistoryPrev" aria-label="Anterior">Anterior</button>
-          <span id="historyPageLabel">1/1</span>
-          <button type="button" id="btnHistoryNext" aria-label="Siguiente">Siguiente</button>
+        <div class="history-tabs" id="historyTabs">
+          <button type="button" class="history-tab is-active" data-history-tab="conteo">Conteo</button>
+          <button type="button" class="history-tab" data-history-tab="guias">Guías</button>
+        </div>
+        <div class="history-panel" id="historyPanelConteo">
+          <p class="history-copy">Los registros se eliminan automáticamente después de 48 horas. Se muestran de 8 en 8.</p>
+          <div class="history-list" id="historyList"></div>
+          <div class="history-pager" id="historyPager" hidden>
+            <button type="button" id="btnHistoryPrev" aria-label="Anterior">Anterior</button>
+            <span id="historyPageLabel">1/1</span>
+            <button type="button" id="btnHistoryNext" aria-label="Siguiente">Siguiente</button>
+          </div>
+        </div>
+        <div class="history-panel" id="historyPanelGuias" hidden>
+          <p class="history-copy">Resúmenes de guías guardados. Se eliminan después de 48 horas.</p>
+          <div class="history-list" id="guiasHistoryList"></div>
+          <div class="history-pager" id="guiasHistoryPager" hidden>
+            <button type="button" id="btnGuiasHistoryPrev" aria-label="Anterior">Anterior</button>
+            <span id="guiasHistoryPageLabel">1/1</span>
+            <button type="button" id="btnGuiasHistoryNext" aria-label="Siguiente">Siguiente</button>
+          </div>
         </div>
       </aside>
 
@@ -336,7 +518,7 @@
               <span data-icon="x"></span>
             </button>
           </div>
-          <p class="check-pick-copy">Cada trabajador que agregue queda aquí hasta cerrar sesión. Úselo en Suma, Resta o Descarte.</p>
+          <p class="check-pick-copy">Cada vez que confirma un registro (Suma, Resta o Descarte) los DNI quedan aquí, cualquier día. Elija quiénes van en este tipo.</p>
           <label class="check-pick-search">
             <span data-icon="search" class="check-pick-search-ico"></span>
             <input id="workerPickQuery" type="search" placeholder="Buscar por nombre o DNI" autocomplete="off" />
@@ -361,13 +543,14 @@
               <span data-icon="x"></span>
             </button>
           </div>
-          <p class="check-pick-copy" id="readyFilesCopy">Hay más de un Excel listo. Elija cuáles enviar o guardar.</p>
+          <p class="check-pick-copy" id="readyFilesCopy">Hay más de un Excel listo. Envíe todos o elija cuáles.</p>
+          <button type="button" class="btn btn-primary btn-block" id="btnReadyFilesAllSend">Enviar todos</button>
           <label class="check-pick-all">
             <input type="checkbox" id="readyFilesAll" checked />
             <span>Seleccionar todos</span>
           </label>
           <div class="check-pick-list" id="readyFilesList"></div>
-          <button type="button" class="btn btn-primary btn-block" id="btnReadyFilesGo">Continuar</button>
+          <button type="button" class="btn btn-ghost btn-block" id="btnReadyFilesGo">Enviar los que marqué</button>
         </section>
       </div>
 

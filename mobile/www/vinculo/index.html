@@ -15,10 +15,9 @@
   <script>
     (function(){try{var w=window.innerWidth||0;if(w<=1024)return;var t=Number(navigator.maxTouchPoints||0);var coarse=window.matchMedia("(pointer: coarse)").matches;if((t>0||coarse)&&Math.max(w,window.innerHeight||0)<=1366)return;var ua=navigator.userAgent||"";if(/iPhone|iPod|iPad|Android|Tablet/i.test(ua))return;if(navigator.platform==="MacIntel"&&t>1)return;document.documentElement.classList.add("is-computer");}catch(e){}})();
   </script>
-  <link rel="prefetch" href="/inicio/" />
   <link rel="prefetch" href="/registro/" />
   <script type="speculationrules">
-    { "prerender": [{ "urls": ["/inicio/", "/registro/"], "eagerness": "moderate" }] }
+    { "prerender": [{ "urls": ["/registro/"], "eagerness": "moderate" }] }
   </script>
   <script>
     /* Antes de pintar: si ya hay sesión, la app se muestra sin pantalla de carga. */
@@ -31,10 +30,12 @@
       }
     } catch (e) {}
   </script>
-  <link rel="stylesheet" href="/styles.css?v=256" />
-  <script src="/icons.js?v=256" defer></script>
-  <script src="/native-bridge.js?v=256" defer></script>
-  <script src="/app.js?v=256" defer></script>
+  <link rel="stylesheet" href="/styles.css?v=345" />
+  <script src="/vendor/sweetalert2.all.min.js?v=345" defer></script>
+  <script src="/vendor/xlsx.full.min.js?v=345" defer></script>
+  <script src="/icons.js?v=345" defer></script>
+  <script src="/api-config.js?v=345" defer></script>
+  <script src="/app.js?v=345" defer></script>
 </head>
 <body data-page="vinculo" class="app-booting">
   <div class="computer-block" id="computerBlock" role="alertdialog">
@@ -49,6 +50,19 @@
 </script>
   <div class="stage">
     <div class="phone" id="phone">
+      <header class="app-topnav" id="appTopnav" aria-label="Navegación">
+        <div class="app-topnav-inner">
+          <nav class="app-topnav-pill" aria-label="Secciones">
+            <button type="button" data-tab="registro">Conteo</button>
+            <button type="button" data-tab="guias">Guías</button>
+          </nav>
+          <div class="app-topnav-tools">
+            <button type="button" data-tab="excel" aria-label="Historial"><span data-icon="fileSpreadsheet"></span></button>
+            <button type="button" data-tab="vincular" class="is-active" aria-current="page" aria-label="Vincular datos"><span data-icon="link"></span></button>
+            <button type="button" data-tab="perfil" aria-label="Mi perfil"><span data-icon="user"></span></button>
+          </div>
+        </div>
+      </header>
       <span id="netPill" class="status-chip is-online" title="Estado de conexión">
         <span class="status-dot"></span>
         <span class="status-text">Con internet</span>
@@ -57,7 +71,7 @@
       <main class="vinculo-screen" id="vinculoScreen">
         <header class="vinculo-head">
           <div class="vinculo-user">
-            <img class="hero-logo vinculo-logo" src="/assets/logo-qberries.png" alt="QBerries" />
+            <button type="button" class="app-back" id="btnVinculoBack" aria-label="Volver a Conteo">Atrás</button>
             <div>
               <small>QBERRIES · SUPERVISORES</small>
               <h1>Vincular datos</h1>
@@ -158,9 +172,109 @@
           </div>
           <p class="thanks-sync" id="thanksSyncStatus" hidden></p>
           <button type="button" class="thanks-retry" id="btnThanksRescan">Escanear nuevamente</button>
-          <button type="button" class="thanks-continue" id="btnThanksContinue">Ir al inicio</button>
+          <button type="button" class="thanks-continue" id="btnThanksContinue">Ir al registro</button>
         </div>
       </main>
+
+      <aside class="guides-sheet" id="guidesSheet" hidden aria-label="Guías">
+        <div class="guides-scroll">
+          <section class="guides-meta-card">
+            <div class="guides-meta-row">
+              <div class="guides-meta-chip guides-meta-chip--fundo">
+                <small>FUNDO</small>
+                <button type="button" class="guides-fundo-trigger" id="btnGuidesFundo" aria-label="Seleccionar fundo">
+                  <span id="guidesFundoLabel">Licapa</span>
+                </button>
+              </div>
+              <div class="guides-meta-chip guides-meta-chip--fecha">
+                <small>FECHA</small>
+                <strong id="guidesFecha">—</strong>
+              </div>
+            </div>
+            <div class="guides-meta-supervisor">
+              <small>SUPERVISOR RESPONSABLE</small>
+              <strong id="guidesSupervisor">—</strong>
+            </div>
+          </section>
+
+          <div id="cards" class="guides-cards"></div>
+
+          <button type="button" class="harvest-save-btn guides-add-main" id="btnAgregarGuia">
+            <span data-icon="plus"></span> Agregar guía
+          </button>
+
+          <div class="guides-bottom-panel">
+            <div class="guides-day-total">
+              <span>TOTAL DEL DÍA</span>
+            </div>
+            <div class="guides-kpi-bar">
+              <div class="guides-kpi guides-kpi--guias"><small>GUÍAS</small><strong id="kpiGuias">0</strong></div>
+              <div class="guides-kpi guides-kpi--jarras"><small>JARRAS</small><strong id="kpiJarras">0</strong></div>
+              <div class="guides-kpi guides-kpi--jabas"><small>JABAS</small><strong id="kpiJabas">0</strong></div>
+            </div>
+            <button type="button" class="harvest-save-btn guides-resumen-btn" id="btnGuidesResumen">Ver resumen</button>
+          </div>
+        </div>
+      </aside>
+
+      <div class="guides-summary-backdrop" id="guidesSummaryModal" hidden>
+        <section class="guides-summary-dialog" role="dialog" aria-modal="true" aria-labelledby="guidesSummaryTitle">
+          <div class="guides-summary-head">
+            <div>
+              <small>CAPTURA · COMPARTIR</small>
+              <h2 id="guidesSummaryTitle">Resumen de guías</h2>
+            </div>
+            <button type="button" id="btnCloseGuidesSummary" aria-label="Cerrar">
+              <span data-icon="x"></span>
+            </button>
+          </div>
+          <p class="guides-summary-hint">Revise y pulse Guardar. Se sube al servidor y se limpian los campos para un nuevo registro.</p>
+          <div id="guidesSummaryCard" class="guides-summary-card"></div>
+          <div class="guides-summary-actions">
+            <button type="button" class="guides-summary-cancel" id="btnCancelGuidesSummary">Cancelar</button>
+            <button type="button" class="guides-summary-save" id="btnSaveGuidesSummary">Guardar</button>
+          </div>
+        </section>
+      </div>
+
+      <div class="modal-backdrop" id="horaPickerModal" hidden>
+        <section class="hora-picker" role="dialog" aria-modal="true" aria-labelledby="horaPickerTitle">
+          <div class="hora-picker-head">
+            <div>
+              <small id="horaPickerTitle">SELECCIONAR HORA</small>
+              <strong class="hora-picker-now" id="horaPickerNow">—</strong>
+            </div>
+          </div>
+
+          <div class="hora-picker-spinners">
+            <div class="hora-spinner">
+              <button type="button" class="hora-step" data-hora-act="hour-inc" aria-label="Hora +">▲</button>
+              <div class="hora-box">
+                <span id="horaPickerHour">08</span>
+              </div>
+              <button type="button" class="hora-step" data-hora-act="hour-dec" aria-label="Hora -">▼</button>
+            </div>
+
+            <div class="hora-sep" aria-hidden="true">:</div>
+
+            <div class="hora-spinner">
+              <button type="button" class="hora-step" data-hora-act="min-inc" aria-label="Minuto +">▲</button>
+              <div class="hora-box">
+                <span id="horaPickerMin">10</span>
+              </div>
+              <button type="button" class="hora-step" data-hora-act="min-dec" aria-label="Minuto -">▼</button>
+            </div>
+          </div>
+
+          <div class="hora-picker-actions">
+            <div class="hora-picker-actions-row">
+              <button type="button" class="hora-btn-secondary" id="btnHoraExacta">Tomar hora exacta</button>
+              <button type="button" class="hora-btn-secondary hora-btn-cancel" id="btnHoraCancelar">Cancelar</button>
+            </div>
+            <button type="button" class="hora-btn-confirm" id="btnHoraConfirmar">Tomar hora</button>
+          </div>
+        </section>
+      </div>
 
       <div class="picker-backdrop" id="picker" hidden>
         <div class="picker" role="dialog" aria-modal="true" aria-labelledby="pickerTitle">
@@ -179,25 +293,53 @@
         </div>
       </div>
 
-      <nav class="app-tabbar" id="appTabbar" aria-label="Navegación principal">
-        <button type="button" class="nav-btn nav-link" data-tab="inicio" data-nav-index="0" aria-label="Inicio">
-          <span data-icon="home"><svg class="ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-8 9 8"/><path d="M5 10v11h14V10"/><path d="M9 21v-7h6v7"/></svg></span><em>Inicio</em>
-        </button>
-        <button type="button" class="nav-btn nav-link" data-tab="registro" data-nav-index="1" aria-label="Registro">
-          <span data-icon="clipboard"><svg class="ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M9 14h6M9 10h6M9 18h4"/></svg></span><em>Registro</em>
-        </button>
-        <button type="button" class="nav-btn tab-main is-active active" data-tab="vincular" data-nav-index="2" aria-label="Vincular" aria-current="page">
-          <span class="tab-main-circle" data-icon="plus"><svg class="ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></span>
-        </button>
-        <button type="button" class="nav-btn nav-link" data-tab="excel" data-nav-index="3" aria-label="Excel">
-          <span data-icon="fileSpreadsheet"><svg class="ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h2M12 13h2M16 13h2M8 17h2M12 17h2M16 17h2"/></svg></span><em>Excel</em>
-        </button>
-        <button type="button" class="nav-btn nav-link" data-tab="ayuda" data-nav-index="4" aria-label="Ayuda">
-          <span data-icon="info"><svg class="ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="11" x2="12" y2="16"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg></span><em>Ayuda</em>
-        </button>
-      </nav>
-
       <div class="toast" id="toast" hidden></div>
+
+      <div class="profile-modal-backdrop" id="profileModal" hidden>
+        <section class="profile-modal" role="dialog" aria-modal="true" aria-labelledby="profileModalTitle">
+          <div class="profile-modal-head">
+            <div>
+              <small>MI PERFIL</small>
+              <h2 id="profileModalTitle">Supervisor</h2>
+            </div>
+            <button type="button" id="btnCloseProfile" aria-label="Cerrar">
+              <span data-icon="x"></span>
+            </button>
+          </div>
+          <div class="profile-modal-avatar" data-icon="user"></div>
+          <div class="profile-modal-rows">
+            <div class="profile-modal-row">
+              <span>DNI</span>
+              <strong id="profileDni">—</strong>
+            </div>
+            <div class="profile-modal-row">
+              <span>Cargo</span>
+              <strong id="profileCargo">—</strong>
+            </div>
+            <div class="profile-modal-row">
+              <span>Nombre</span>
+              <strong id="profileNombre">—</strong>
+            </div>
+          </div>
+          <div class="profile-app-tools">
+            <small>ESTA APP</small>
+            <p class="profile-app-ver" id="profileAppVersion">Versión</p>
+            <button type="button" class="profile-tool-btn app-tools-update" id="btnProfileUpdate">
+              <span data-icon="refresh"></span> Actualizar app
+            </button>
+            <button type="button" class="profile-tool-btn app-tools-cache" id="btnProfileCache">
+              <span data-icon="trash"></span> Borrar caché
+            </button>
+            <button type="button" class="profile-tool-btn app-tools-install" id="btnProfileInstall" hidden>
+              <span data-icon="download"></span> Instalar app
+            </button>
+            <p class="profile-app-installed" id="profileAppInstalled" hidden>Ya está instalada en este celular.</p>
+          </div>
+          <button type="button" class="btn btn-danger btn-block" id="btnProfileLogout">
+            <span data-icon="logOut"></span> Cerrar sesión
+          </button>
+        </section>
+      </div>
     </div>
   </div>
 </body>
