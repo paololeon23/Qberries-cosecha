@@ -28,7 +28,7 @@
   const JARRAS_POR_JABA = 12;
   const FUNDO_DEFAULT = "Licapa";
   const FUNDO_OPTIONS = ["Licapa", "Licapa II"];
-  const APP_VERSION = "v343";
+  const APP_VERSION = "v344";
 
   function normalizeFundo(value) {
     const raw = String(value || "").trim();
@@ -4882,27 +4882,148 @@
     return file ? [file] : [];
   }
 
+  /** Abre WhatsApp (app o web) con un texto. No puede adjuntar archivo por URL. */
+  function openWhatsAppChat(text) {
+    const msg = encodeURIComponent(
+      text ||
+        "Hola, le envío el Excel de cosecha QBerries. El archivo está en Descargas — adjúntelo aquí."
+    );
+    const appUrl = `whatsapp://send?text=${msg}`;
+    const webUrl = `https://api.whatsapp.com/send?text=${msg}`;
+    try {
+      // Intento app nativa (celular)
+      const iframe = document.createElement("iframe");
+      iframe.style.display = "none";
+      iframe.src = appUrl;
+      document.body.appendChild(iframe);
+      setTimeout(() => {
+        try {
+          iframe.remove();
+        } catch {
+          /* ignore */
+        }
+      }, 1500);
+    } catch {
+      /* ignore */
+    }
+    // Web / fallback (siempre útil en tablet o si no hay app)
+    try {
+      window.open(webUrl, "_blank", "noopener,noreferrer");
+    } catch {
+      location.href = webUrl;
+    }
+  }
+
+  /**
+   * Plan B: descarga el Excel y abre WhatsApp para que adjunte el archivo.
+   * Se usa cuando el menú Compartir del sistema no está disponible.
+   */
+  function fallbackWhatsAppWithDownload(snapshot, fileName) {
+    try {
+      const wb = buildHarvestWorkbook(snapshot);
+      downloadXlsxWorkbook(wb, fileName || harvestFileName(snapshot));
+    } catch (err) {
+      console.warn("fallbackWhatsApp download", err);
+      toast("No se pudo preparar el Excel");
+      return;
+    }
+    toast("Excel descargado · abriendo WhatsApp…");
+    openWhatsAppChat(
+      "Hola, le envío el Excel de cosecha QBerries. El archivo ya está en Descargas de este celular — por favor adjúntelo en este chat."
+    );
+  }
+
+  /**
+   * Un solo Excel → WhatsApp.
+   * Debe llamarse DENTRO del click (mismo gesto), sin awaits previos.
+   */
+  function shareOneExcelWhatsApp(snapshot) {
+    if (!snapshot) {
+      toast("No hay registro para enviar");
+      return;
+    }
+    if (typeof XLSX === "undefined") {
+      toast("Espere a que cargue el Excel e intente otra vez");
+      return;
+    }
+
+    let file = null;
+    try {
+      file = harvestShareFile(snapshot);
+    } catch (err) {
+      console.warn("shareOneExcelWhatsApp build", err);
+    }
+    if (!file) {
+      toast("No se pudo crear el Excel");
+      return;
+    }
+
+    const fileName = file.name || harvestFileName(snapshot);
+    const native = window.QBNative;
+
+    // APK Capacitor
+    if (native?.isNative?.() && typeof native.shareExcelFiles === "function") {
+      native
+        .shareExcelFiles([file], { title: fileName, text: "" })
+        .then((res) => {
+          if (res?.ok) toast("Elija WhatsApp");
+          else fallbackWhatsAppWithDownload(snapshot, fileName);
+        })
+        .catch((err) => {
+          if (native.isShareCancelled?.(err)) return;
+          fallbackWhatsAppWithDownload(snapshot, fileName);
+        });
+      return;
+    }
+
+    // Navegador / PWA: Web Share API (solo 1 intento en el gesto del usuario)
+    const hasShare = typeof navigator.share === "function";
+    const isFile = typeof File !== "undefined" && file instanceof File;
+    let canFiles = false;
+    if (hasShare && isFile) {
+      if (typeof navigator.canShare === "function") {
+        try {
+          canFiles = navigator.canShare({ files: [file] });
+        } catch {
+          canFiles = false;
+        }
+      } else {
+        // Sin canShare (algunos Android viejos): intentar share igual
+        canFiles = true;
+      }
+    }
+
+    if (hasShare && isFile && canFiles) {
+      // Un solo share, sin title (más compatible). No reintentar: pierde el gesto.
+      navigator
+        .share({ files: [file] })
+        .then(() => toast("Elija WhatsApp"))
+        .catch((err) => {
+          if (err?.name === "AbortError") return;
+          console.warn("navigator.share files failed", err);
+          fallbackWhatsAppWithDownload(snapshot, fileName);
+        });
+      return;
+    }
+
+    // Tablet / PC / navegador sin share de archivos
+    fallbackWhatsAppWithDownload(snapshot, fileName);
+  }
+
   function pickShareablePayload(files) {
     if (!files?.length || typeof navigator.share !== "function") return null;
     const list = files.slice();
-    const title = list[0]?.name || "Excel QBerries";
     if (typeof navigator.canShare !== "function") {
-      return { files: list, title };
+      return { files: [list[0]], title: list[0].name };
     }
-    // Probar varias formas: algunos Android rechazan multi o nombres largos
-    const tries = [
-      { files: list, title },
-      { files: [list[0]], title: list[0].name },
-    ];
-    for (const attempt of tries) {
-      try {
-        if (navigator.canShare(attempt)) return attempt;
-      } catch {
-        /* seguir */
+    try {
+      if (navigator.canShare({ files: [list[0]] })) {
+        return { files: [list[0]], title: list[0].name };
       }
+    } catch {
+      /* ignore */
     }
-    // Algunos navegadores mienten en canShare; igual intentamos 1 archivo
-    return { files: [list[0]], title: list[0].name };
+    return null;
   }
 
   /** Solo abre el menú de compartir. Nunca descarga el archivo. */
@@ -4932,23 +5053,12 @@
       onFail?.({ reason: "no-share-api" });
       return false;
     }
-    const shareData = {
-      files: payload.files,
-      title: payload.title || payload.files[0]?.name || "Excel QBerries",
-    };
     navigator
-      .share(shareData)
+      .share({ files: payload.files })
       .then(() => onOk?.())
       .catch((err) => {
         if (err?.name === "AbortError") return;
-        // Reintento sin title (algunos WebView fallan con title+files)
-        navigator
-          .share({ files: payload.files })
-          .then(() => onOk?.())
-          .catch((err2) => {
-            if (err2?.name === "AbortError") return;
-            onFail?.(err2 || err);
-          });
+        onFail?.(err);
       });
     return true;
   }
@@ -4962,15 +5072,10 @@
           : "Elija WhatsApp para enviar el Excel"
       );
       try {
-        await navigator.share({ files: [file], title: file.name });
+        await navigator.share({ files: [file] });
       } catch (err) {
         if (err?.name === "AbortError") return false;
-        try {
-          await navigator.share({ files: [file] });
-        } catch (err2) {
-          if (err2?.name === "AbortError") return false;
-          throw err2;
-        }
+        throw err;
       }
     }
     return true;
@@ -4982,73 +5087,8 @@
       toast("No hay registro para enviar");
       return;
     }
-    if (typeof XLSX === "undefined") {
-      toast("Espere a que cargue el Excel e intente otra vez");
-      return;
-    }
-
-    let files = [];
-    try {
-      files = list.map((item) => harvestShareFile(item)).filter(Boolean);
-    } catch (err) {
-      console.warn("shareExcelDocuments build", err);
-      files = [];
-    }
-    if (!files.length) {
-      toast("No se pudo crear el Excel para compartir");
-      return;
-    }
-
-    const native = window.QBNative;
-    if (native?.isNative?.()) {
-      shareFilesNow(
-        { files, title: files.length > 1 ? "Excel de cosecha" : files[0].name },
-        {
-          onOk: () => toast("Elija WhatsApp para enviar"),
-          onFail: () =>
-            toast("No se pudo abrir el envío. Intente otra vez."),
-        }
-      );
-      return;
-    }
-
-    if (typeof navigator.share !== "function") {
-      toast("Este dispositivo no puede abrir Compartir. Use Chrome o la app instalada.");
-      return;
-    }
-
-    const payload = pickShareablePayload(files);
-    if (files.length > 1 && payload?.files?.length === 1 && list.length > 1) {
-      // Multi no soportado: enviar de uno en uno
-      shareFilesSequential(files).catch(() =>
-        toast("No se pudo enviar. Intente de uno en uno.")
-      );
-      return;
-    }
-
-    if (!payload?.files?.length) {
-      toast("No se pudo preparar el archivo para WhatsApp");
-      return;
-    }
-
-    toast("Abriendo compartir…");
-    shareFilesNow(payload, {
-      onOk: () =>
-        toast(
-          payload.files.length > 1
-            ? "Elija WhatsApp para enviar los Excel"
-            : "Elija WhatsApp para enviar el Excel"
-        ),
-      onFail: () => {
-        if (files.length > 1) {
-          shareFilesSequential(files).catch(() =>
-            toast("No se pudo abrir WhatsApp. Pruebe Descargar Excel y adjúntelo.")
-          );
-          return;
-        }
-        toast("No se pudo abrir WhatsApp. Pruebe Descargar Excel y adjúntelo.");
-      },
-    });
+    // Resumen / uso normal: SIEMPRE un solo Excel
+    shareOneExcelWhatsApp(list[0]);
   }
 
   /** Desde el resumen: SIEMPRE un solo Excel (el que se está viendo). */
@@ -5058,16 +5098,15 @@
       toast("No hay registro para enviar");
       return;
     }
-    shareExcelDocuments([current]);
+    shareOneExcelWhatsApp(current);
   }
 
-  function shareHarvestSnapshot(snapshot, opts = {}) {
+  function shareHarvestSnapshot(snapshot) {
     if (!snapshot) {
       toast("No hay registro para compartir");
       return;
     }
-    // Un solo documento; no abrir selector múltiple
-    shareExcelDocuments([snapshot]);
+    shareOneExcelWhatsApp(snapshot);
   }
 
   function openReadyFilesModal(action, files) {
@@ -7092,8 +7131,8 @@
         toast("Espere a que cargue el Excel e intente otra vez");
         return;
       }
-      // Solo el Excel de ESTE resumen
-      shareExcelDocuments([snapshot]);
+      // Misma pulsación: construir + abrir compartir (no perder el gesto)
+      shareOneExcelWhatsApp(snapshot);
     });
     on("#exportPreviewTypes", "click", (e) => {
       const btn = e.target?.closest?.("[data-preview-type]");
