@@ -30,12 +30,12 @@
       }
     } catch (e) {}
   </script>
-  <link rel="stylesheet" href="/styles.css?v=352" />
-  <script src="/vendor/sweetalert2.all.min.js?v=352" defer></script>
-  <script src="/vendor/xlsx.full.min.js?v=352" defer></script>
-  <script src="/icons.js?v=352" defer></script>
-  <script src="/api-config.js?v=352" defer></script>
-  <script src="/app.js?v=352" defer></script>
+  <link rel="stylesheet" href="/styles.css?v=360" />
+  <script src="/vendor/sweetalert2.all.min.js?v=360" defer></script>
+  <script src="/vendor/xlsx.full.min.js?v=360" defer></script>
+  <script src="/icons.js?v=360" defer></script>
+  <script src="/api-config.js?v=360" defer></script>
+  <script src="/app.js?v=360" defer></script>
 </head>
 <body data-page="registro" class="app-booting">
   <div class="computer-block" id="computerBlock" role="alertdialog">
@@ -107,6 +107,7 @@
               <span id="harvestTypeLabel">Suma de jarras</span>
               <span class="chev" data-icon="search"></span>
             </button>
+            <p class="harvest-type-lock-note" id="harvestTypeLockNote" hidden></p>
             <div class="harvest-day-checklist" id="harvestDayChecklist" aria-live="polite"></div>
           </section>
 
@@ -295,7 +296,7 @@
               <span data-icon="refresh"></span> Actualizar app
             </button>
             <button type="button" class="profile-tool-btn app-tools-cache" id="btnProfileCache">
-              <span data-icon="trash"></span> Borrar caché
+              <span data-icon="trash"></span> Borrar todo
             </button>
             <button type="button" class="profile-tool-btn app-tools-install" id="btnProfileInstall" hidden>
               <span data-icon="download"></span> Instalar app
@@ -412,9 +413,6 @@
             <div class="export-preview-row">
               <button type="button" class="save-harvest" id="btnCommitHarvest">
                 Guardar registro
-              </button>
-              <button type="button" class="share-whatsapp" id="btnShareHarvest">
-                <span data-icon="upload"></span> Compartir
               </button>
             </div>
             <button type="button" class="upload-drive" id="btnUploadDriveHarvest">

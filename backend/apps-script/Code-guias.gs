@@ -115,15 +115,10 @@
     return 'gsend:' + String(id || '').trim();
   }
 
-  /**
-   * Anti doble-POST (reintento / bug / doble clic).
-   * Clave = envío concreto (savedAt + totales), NO el id del día
-   * → un guardado nuevo del mismo día sí puede actualizar la fila.
-   */
-  function isDuplicateSend_(d) {
+  function buildSendId_(d) {
     d = d || {};
     var totals = d.totals && typeof d.totals === 'object' ? d.totals : {};
-    var sendId = clean_(
+    return clean_(
       d.sendId ||
         [
           clean_(d.id),
@@ -133,14 +128,30 @@
           String(number_(totals.guias)),
         ].join('|')
     );
+  }
+
+  /**
+   * ¿Este sendId ya se guardó bien?
+   * NO escribe en caché aquí (solo se marca después de guardar).
+   */
+  function isDuplicateSend_(d) {
+    var sendId = buildSendId_(d);
     if (!sendId || sendId === '||||') return false;
     var key = sendIdKey_(sendId);
     try {
       var cache = CacheService.getScriptCache();
       if (cache.get(key)) return true;
-      cache.put(key, '1', 21600);
     } catch (_) {}
     return false;
+  }
+
+  /** Marcar sendId solo cuando el Sheet ya se escribió. */
+  function markSendIdDone_(d) {
+    var sendId = buildSendId_(d);
+    if (!sendId || sendId === '||||') return;
+    try {
+      CacheService.getScriptCache().put(sendIdKey_(sendId), '1', 21600);
+    } catch (_) {}
   }
 
   /**
@@ -181,11 +192,15 @@
         return { created: false, updated: false, duplicate: true, rows: 0 };
       }
       var result = saveGuiasSummary_(d, session, guias, totals, supervisorNombre, supervisorDni);
+      // Solo después de escribir en el Sheet
+      markSendIdDone_(d);
       return {
         created: !!result.created,
         updated: !!result.updated,
         duplicate: !!result.duplicate,
-        rows: 1
+        rows: 1,
+        fundo: normalizeFundo_(d.fundo || session.fundo),
+        grupoLic: normalizeGuidesLic_(d.grupoLic || session.grupoLic)
       };
     } finally {
       if (got) {
@@ -342,16 +357,18 @@
       throw new Error('La hoja "' + sh.getName() + '" tiene encabezados incompatibles');
     }
     // Migración: insertar columna GRUPO LIC después de FUNDO si falta
-    var headerCount = Math.max(sh.getLastColumn(), HEADERS.length);
+    var headerCount = Math.max(sh.getLastColumn(), 1);
     var headers = sh.getRange(1, 1, 1, headerCount).getDisplayValues()[0];
     var hasGrupoLic = false;
-    for (var i = 0; i < headers.length; i++) {
+    var i;
+    for (i = 0; i < headers.length; i++) {
       if (clean_(headers[i]).toUpperCase() === 'GRUPO LIC') {
         hasGrupoLic = true;
         break;
       }
     }
     if (!hasGrupoLic) {
+      // Columna 4 = FUNDO → insertar a la derecha
       sh.insertColumnAfter(4);
       sh.getRange(1, 5).setValue('GRUPO LIC');
       sh.getRange(1, 5)
@@ -359,6 +376,12 @@
         .setBackground('#e00b29')
         .setFontColor('#ffffff');
     }
+    // Asegurar fila de encabezados completa (por si faltan columnas al final)
+    sh.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
+    sh.getRange(1, 1, 1, HEADERS.length)
+      .setFontWeight('bold')
+      .setBackground('#e00b29')
+      .setFontColor('#ffffff');
   }
 
   function writeHeaders_(sh) {

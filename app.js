@@ -7,6 +7,8 @@
   const PERSONAS_META_KEY = "qb-trabajadores-meta-v1";
   const VINCULO_QUEUE_KEY = "qb-supervisores-vinculo-queue-v1";
   const CLOUD_DATA_QUEUE_KEY = "qb-supervisores-data-queue-v1";
+  const DRIVE_QUEUE_KEY = "qb-supervisores-drive-queue-v1";
+  const HARVEST_DRIVE_URL_KEY = "qb-supervisores-harvest-drive-url-v1";
   const VINCULO_DONE_KEY = "qb-supervisores-vinculo-done-v1";
   const CUSTOM_CATALOG_KEY = "qb-supervisores-catalog-extra-v1";
   const PIN_KEY = "qb-supervisores-pin-v2";
@@ -29,7 +31,7 @@
   const JARRAS_POR_JABA = 12;
   const FUNDO_DEFAULT = "Licapa";
   const FUNDO_OPTIONS = ["Licapa", "Licapa II"];
-  const APP_VERSION = "v352";
+  const APP_VERSION = "v360";
 
   function normalizeFundo(value) {
     const raw = String(value || "").trim();
@@ -173,20 +175,25 @@
       }),
     });
     const text = await res.text();
-    let parsed = null;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      const m = String(text || "").match(/\{[\s\S]*\}/);
-      if (m) {
-        try {
-          parsed = JSON.parse(m[0]);
-        } catch {
-          parsed = null;
-        }
-      }
+    const parsed = parseAppsScriptJson(text);
+    if (!parsed) {
+      console.warn("postGuiasToAppsScript empty/invalid", res.status, text?.slice?.(0, 200));
+      return {
+        ok: false,
+        parsed: null,
+        status: res.status,
+        message: "El servidor no respondió bien. Reintente.",
+      };
     }
-    return { ok: !!(parsed && parsed.ok === true), parsed, status: res.status };
+    if (parsed.ok !== true) {
+      return {
+        ok: false,
+        parsed,
+        status: res.status,
+        message: parsed.message || "No se pudo guardar en Guías",
+      };
+    }
+    return { ok: true, parsed, status: res.status };
   }
 
   function parseAppsScriptJson(text) {
@@ -226,7 +233,7 @@
       return {
         ok: false,
         message:
-          "Falta configurar Drive: pegue la URL …/exec en api-config.js (EXCEL_DRIVE) y el enlace de carpeta en Code-excel-drive.gs",
+          "Falta configurar Drive: pegue la URL …/exec en api-config.js (EXCEL_DRIVE)",
       };
     }
     if (!snapshot) {
@@ -234,9 +241,6 @@
     }
     if (typeof XLSX === "undefined") {
       return { ok: false, message: "Excel no disponible · recargue la app" };
-    }
-    if (!navigator.onLine) {
-      return { ok: false, message: "Sin internet: no se puede subir a Drive" };
     }
 
     let fileName = "cosecha.xlsx";
@@ -263,6 +267,9 @@
             mimeType:
               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             base64,
+            // Carpeta Drive: Suma / Resta / Descarte (no mezclar)
+            tipo: normalizeHarvestType(snapshot.tipo),
+            observacion: harvestTypeObservacion(snapshot.tipo),
           },
         }),
       });
@@ -288,6 +295,111 @@
     }
   }
 
+  function loadDriveQueue() {
+    try {
+      const q = JSON.parse(localStorage.getItem(DRIVE_QUEUE_KEY) || "[]");
+      return Array.isArray(q) ? q : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function saveDriveQueue(queue) {
+    localStorage.setItem(DRIVE_QUEUE_KEY, JSON.stringify(queue || []));
+  }
+
+  function isDriveUploadPending(snapshotId) {
+    return loadDriveQueue().some((item) => item.id === String(snapshotId || ""));
+  }
+
+  function enqueueDriveUpload(snapshot) {
+    if (!snapshot?.id) return false;
+    const queue = loadDriveQueue().filter((item) => item.id !== snapshot.id);
+    queue.push({
+      id: snapshot.id,
+      tipo: normalizeHarvestType(snapshot.tipo),
+      fecha: snapshot.fecha || todayISO(),
+      queuedAt: new Date().toISOString(),
+    });
+    saveDriveQueue(queue);
+    updateNetworkUI();
+    return true;
+  }
+
+  function loadHarvestDriveUrlMap() {
+    try {
+      const parsed = JSON.parse(
+        localStorage.getItem(HARVEST_DRIVE_URL_KEY) || "{}"
+      );
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function getHarvestDriveUrl(snapshot) {
+    if (!snapshot?.id) return "";
+    const map = loadHarvestDriveUrlMap();
+    return String(map[snapshot.id]?.url || map[snapshot.id] || "");
+  }
+
+  function saveHarvestDriveUrl(snapshot, url, name) {
+    if (!snapshot?.id || !url) return;
+    const map = loadHarvestDriveUrlMap();
+    map[snapshot.id] = {
+      url: String(url),
+      name: String(name || ""),
+      at: new Date().toISOString(),
+    };
+    try {
+      localStorage.setItem(HARVEST_DRIVE_URL_KEY, JSON.stringify(map));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function flushDriveQueue() {
+    if (!navigator.onLine) {
+      return { sent: 0, remain: loadDriveQueue().length };
+    }
+    if (!scriptExcelDriveUrl()) {
+      return { sent: 0, remain: loadDriveQueue().length };
+    }
+    const queue = loadDriveQueue();
+    if (!queue.length) return { sent: 0, remain: 0 };
+
+    const remain = [];
+    let sent = 0;
+    for (const item of queue) {
+      const snapshot = historySnapshotById(item.id);
+      if (!snapshot) continue; // registro fuera de TTL: descartar
+      try {
+        const result = await uploadHarvestExcelToDrive(snapshot);
+        if (result.ok && result.url) {
+          saveHarvestDriveUrl(snapshot, result.url, result.name);
+          markHarvestSnapshotSent(snapshot);
+          sent += 1;
+        } else {
+          remain.push(item);
+        }
+      } catch {
+        remain.push(item);
+      }
+    }
+    saveDriveQueue(remain);
+    updateNetworkUI();
+    if (sent > 0) {
+      toast(
+        remain.length
+          ? `Drive: ${sent} subido(s) · ${remain.length} pendiente(s)`
+          : `Drive: ${sent} Excel subido(s)`
+      );
+      renderHarvestHistory();
+      renderHarvestDayChecklist();
+    }
+    return { sent, remain: remain.length };
+  }
+
   async function shareDriveLink(link, fileName) {
     const text = `${fileName || "Excel"}\n${link}`;
     try {
@@ -310,27 +422,64 @@
     return false;
   }
 
-  async function uploadActiveHarvestToDrive(button) {
-    const snapshot = state.activeExportSnapshot;
+  /**
+   * Sube a Drive o deja pendiente si no hay internet.
+   * Si ya hay link, ofrece compartir el enlace.
+   */
+  async function uploadOrQueueHarvestToDrive(snapshot, button) {
     if (!snapshot) {
       toast("No hay registro para subir");
       return;
     }
+    if (!scriptExcelDriveUrl()) {
+      toast("Drive no configurado en la app");
+      return;
+    }
+
+    const existing = getHarvestDriveUrl(snapshot);
+    if (existing) {
+      markHarvestSnapshotSent(snapshot);
+      await shareDriveLink(existing, harvestFileName(snapshot));
+      return;
+    }
+
+    if (!navigator.onLine) {
+      enqueueDriveUpload(snapshot);
+      toast("Sin internet · Drive en pendiente. Se sube al reconectar.");
+      renderHarvestHistory();
+      return;
+    }
+
     if (button) setBtnLoading(button, true, "Subiendo…");
     try {
       const result = await uploadHarvestExcelToDrive(snapshot);
       if (!result.ok) {
-        toast(result.message || "No se pudo subir a Drive");
+        // Red falló: dejar pendiente para reintento
+        enqueueDriveUpload(snapshot);
+        toast(
+          result.message
+            ? `${result.message} · quedó pendiente`
+            : "No se pudo subir · quedó pendiente"
+        );
+        renderHarvestHistory();
         return;
       }
-      toast("Excel subido a Drive");
+      // Quitar de cola si estaba
+      saveDriveQueue(loadDriveQueue().filter((item) => item.id !== snapshot.id));
+      saveHarvestDriveUrl(snapshot, result.url, result.name);
       state.lastDriveExcelUrl = result.url;
       markHarvestSnapshotSent(snapshot);
+      toast("Excel subido a Drive");
       toast(harvestDayProgressMessage());
+      renderHarvestHistory();
       await shareDriveLink(result.url, result.name);
     } finally {
       if (button) setBtnLoading(button, false);
     }
+  }
+
+  async function uploadActiveHarvestToDrive(button) {
+    await uploadOrQueueHarvestToDrive(state.activeExportSnapshot, button);
   }
   function isNativeApp() {
     try {
@@ -2057,12 +2206,15 @@
       });
     }
     if (ctx.kind === "harvestType") {
-      return HARVEST_TYPES.map((item) => ({
-        key: item.key,
-        primary: item.label,
-        secondary: "",
-        raw: item,
-      }));
+      return HARVEST_TYPES.map((item) => {
+        const locked = isHarvestTypeLocked(item.key);
+        return {
+          key: item.key,
+          primary: item.label,
+          secondary: locked ? "Bloqueada hoy" : "",
+          raw: item,
+        };
+      });
     }
     if (ctx.kind === "fundo") {
       return FUNDO_OPTIONS.map((f) => ({
@@ -2173,6 +2325,11 @@
       return;
     }
     if (ctx.kind === "harvestLote") {
+      if (isHarvestTypeLocked(state.harvest.tipo)) {
+        closePicker();
+        toast("Tipo bloqueado · no se cambia el lote");
+        return;
+      }
       selectHarvestLote(v);
       closePicker();
       toast(`Lote ${v}`);
@@ -2180,6 +2337,12 @@
     }
     if (ctx.kind === "harvestType") {
       if (!HARVEST_TYPES.some((item) => item.key === v)) return;
+      if (isHarvestTypeLocked(v)) {
+        closePicker();
+        switchHarvestType(v);
+        toast(`${harvestTypeShort(v)} ya guardada · bloqueada`);
+        return;
+      }
       switchHarvestType(v);
       closePicker();
       toast(harvestTypeLabel(v));
@@ -2935,7 +3098,10 @@
           if (isGuiasCloudAction(item.action)) {
             const result = await postGuiasToAppsScript(item.data);
             if (result.ok) sent += 1;
-            else remain.push(item);
+            else {
+              console.warn("guias flush fail", result.message || result.parsed);
+              remain.push(item);
+            }
             continue;
           }
 
@@ -3868,6 +4034,12 @@
 
   function switchHarvestType(tipo) {
     const next = normalizeHarvestType(tipo);
+    if (isHarvestTypeLocked(next) && normalizeHarvestType(state.harvest.tipo) !== next) {
+      // Se puede mirar el checklist, pero no editar de nuevo ese tipo hoy
+      toast(
+        `${harvestTypeShort(next)} ya está guardada hoy · elija otra opción`
+      );
+    }
     if (state.harvest.tipo === next) {
       attachCurrentHarvestDraft();
       renderHarvest();
@@ -3886,6 +4058,7 @@
     if (!state.harvest.byType || typeof state.harvest.byType !== "object") {
       state.harvest.byType = emptyHarvestByType();
     }
+    // Limpia SOLO este tipo; Suma/Resta/Descarte de los demás se conservan
     state.harvest.byType[key] = emptyHarvestTypeDraft();
     if (state.previewDraftByType && typeof state.previewDraftByType === "object") {
       delete state.previewDraftByType[key];
@@ -3897,6 +4070,15 @@
     document.querySelectorAll("[data-harvest-field]").forEach((input) => {
       input.value = "";
     });
+    // Limpiar también lote visible del tipo guardado
+    if (normalizeHarvestType(state.harvest.tipo) === key) {
+      state.harvest.lote = "";
+      state.harvest.codLote = "";
+      state.harvest.modulo = "";
+      state.harvest.turno = "";
+      state.harvest.variedad = "";
+      state.harvest.workers = [];
+    }
     saveHarvest();
     renderHarvest();
   }
@@ -3906,6 +4088,17 @@
     const supervisorDni = String(identity.dni || "").replace(/\D/g, "");
     const owner = String(item?.supervisorDni || "").replace(/\D/g, "");
     return !owner || !supervisorDni || owner === supervisorDni;
+  }
+
+  /** Clave única: 1 tabla por día + supervisor + tipo (Suma/Resta/Descarte). */
+  function harvestDayTypeKey(snapshot) {
+    if (!snapshot) return "";
+    const fecha = String(snapshot.fecha || todayISO());
+    const dni = String(
+      snapshot.supervisorDni || state.identity?.dni || ""
+    ).replace(/\D/g, "");
+    const tipo = normalizeHarvestType(snapshot.tipo);
+    return `${fecha}|${dni}|${tipo}`;
   }
 
   function todayReadySnapshots() {
@@ -3918,6 +4111,44 @@
       if (!latest.has(tipo)) latest.set(tipo, item);
     });
     return HARVEST_TYPES.map((item) => latest.get(item.key)).filter(Boolean);
+  }
+
+  /** Ya guardada hoy → bloqueada (no se vuelve a llenar). */
+  function isHarvestTypeLocked(tipo) {
+    const key = normalizeHarvestType(tipo);
+    return todayReadySnapshots().some(
+      (snap) => normalizeHarvestType(snap.tipo) === key
+    );
+  }
+
+  function setHarvestEditorLocked(locked) {
+    const screen = $("#harvestScreen") || $("#conteoPanel");
+    if (screen) screen.classList.toggle("is-type-locked", !!locked);
+    const saveBtn = $("#btnHarvestSave");
+    if (saveBtn) {
+      saveBtn.disabled = !!locked;
+      saveBtn.setAttribute("aria-disabled", locked ? "true" : "false");
+    }
+    const loteBtn = $("#btnHarvestLote");
+    if (loteBtn) loteBtn.disabled = !!locked;
+    $$("#harvestWorkerForm input, #harvestWorkerForm button").forEach((el) => {
+      el.disabled = !!locked;
+    });
+    $$("#harvestWorkers [data-harvest-field]").forEach((el) => {
+      el.disabled = !!locked;
+    });
+    const lockNote = $("#harvestTypeLockNote");
+    if (lockNote) {
+      if (locked) {
+        lockNote.hidden = false;
+        lockNote.textContent = `${harvestTypeShort(
+          state.harvest.tipo
+        )} ya guardada hoy · bloqueada. Siga con otra opción.`;
+      } else {
+        lockNote.hidden = true;
+        lockNote.textContent = "";
+      }
+    }
   }
 
   function loadHarvestSentMap() {
@@ -3963,7 +4194,7 @@
     renderExportPreviewTypes(state.activeExportSnapshot);
   }
 
-  /** Estado del día: Suma / Resta / Descarte — tengo o no, y si ya se envió. */
+  /** Estado del día: Suma / Resta / Descarte — tengo o no, bloqueada, enviada. */
   function harvestDayTypeStatus() {
     const ready = todayReadySnapshots();
     const byTipo = new Map(
@@ -3973,12 +4204,14 @@
       const snapshot = byTipo.get(item.key) || null;
       const saved = !!snapshot;
       const sent = saved && isHarvestSnapshotSent(snapshot);
+      const locked = saved;
       return {
         key: item.key,
         short: item.short,
         label: item.label,
         saved,
         sent,
+        locked,
         snapshot,
       };
     });
@@ -3997,11 +4230,11 @@
     const missing = status.filter((s) => !s.saved).map((s) => s.short);
     const unsent = status.filter((s) => s.saved && !s.sent).map((s) => s.short);
     if (!missing.length && !unsent.length) {
-      return "Listo: Suma, Resta y Descarte guardados y enviados.";
+      return "Listo: Suma, Resta y Descarte guardados y en Drive.";
     }
     const parts = [];
-    if (missing.length) parts.push(`Falta registrar: ${missing.join(", ")}`);
-    if (unsent.length) parts.push(`Falta enviar: ${unsent.join(", ")}`);
+    if (missing.length) parts.push(`Pendiente: ${missing.join(", ")}`);
+    if (unsent.length) parts.push(`Falta subir a Drive: ${unsent.join(", ")}`);
     return parts.join(" · ");
   }
 
@@ -4013,22 +4246,62 @@
       .map((item) => {
         const cls = item.sent
           ? "is-sent"
-          : item.saved
-            ? "is-saved"
-            : "is-missing";
+          : item.locked
+            ? "is-locked"
+            : item.saved
+              ? "is-saved"
+              : "is-missing";
         const label = item.sent
-          ? "Enviado"
-          : item.saved
-            ? "Guardado"
-            : "Sin registro";
-        return `<div class="hdc-item ${cls}" data-harvest-check="${escapeHtml(
-          item.key
+          ? "En Drive"
+          : item.locked
+            ? "Bloqueada · ver"
+            : item.saved
+              ? "Guardada · ver"
+              : "Sin registro";
+        const canOpen =
+          !!item.snapshot ||
+          !!state.previewDraftByType?.[item.key] ||
+          harvestDraftHasData(harvestTypeBucket(item.key));
+        return `<button type="button" class="hdc-item ${cls}${
+          canOpen ? " is-clickable" : ""
+        }" data-harvest-check="${escapeHtml(item.key)}" aria-label="Ver ${escapeHtml(
+          item.short
         )}">
           <strong>${escapeHtml(item.short)}</strong>
           <small>${label}</small>
-        </div>`;
+        </button>`;
       })
       .join("");
+  }
+
+  /**
+   * Abre el modal de Suma/Resta/Descarte SIN cambiar el formulario activo.
+   * Así no se pierde ni se mezcla la data del tipo que se está llenando.
+   */
+  function openHarvestChecklistPreview(tipo) {
+    const key = normalizeHarvestType(tipo);
+    // Persistir lo que hay en pantalla, pero no cambiar state.harvest.tipo
+    try {
+      syncCurrentHarvestDraft();
+      saveHarvest();
+    } catch {
+      /* ignore */
+    }
+
+    const snapshot =
+      previewSnapshotsMap(state.activeExportSnapshot)[key] ||
+      snapshotFromTypeDraft(key) ||
+      null;
+
+    if (!snapshot) {
+      toast(
+        `Sin registro de ${harvestTypeShort(key)} · complete y pulse Guardar`
+      );
+      return;
+    }
+
+    if (!isSnapshotSaved(snapshot)) rememberPreviewDraft(snapshot);
+    openExportPreview(snapshot, { saved: isSnapshotSaved(snapshot) });
   }
 
   function renderExportPreviewDayStatus() {
@@ -4156,6 +4429,7 @@
     if ($("#harvestVariedad")) $("#harvestVariedad").textContent = state.harvest.variedad || "—";
     renderHarvestWorkers();
     renderHarvestDayChecklist();
+    setHarvestEditorLocked(isHarvestTypeLocked(state.harvest.tipo));
     hydrateIcons($("#harvestScreen"));
     updateNetworkUI();
   }
@@ -4596,11 +4870,13 @@
         if (result?.sent > 0 && result.remain === 0) {
           toast("Guías subidas al servidor");
         } else if (result?.remain > 0 && navigator.onLine) {
-          toast("Pendiente de subir · se reintentará solo");
+          toast("Guías pendientes · se reintentará solo");
+        } else if (!navigator.onLine) {
+          toast("Sin internet · guías pendientes de subir");
         }
       })
       .catch(() => {
-        /* ya guardado en celular + cola */
+        toast("No se pudo subir guías · quedan pendientes");
       });
   }
 
@@ -4722,12 +4998,12 @@
           </div>
         </div>
         <div class="gs-paper-meta">
-          <div><small>FECHA</small><strong>${fechaTxt}</strong></div>
-          <div><small>FUNDO</small><strong>${escapeHtml(currentFundo())}</strong></div>
-          <div><small>LIC</small><strong>${escapeHtml(
+          <div class="gs-meta-fecha"><small>FECHA</small><strong>${fechaTxt}</strong></div>
+          <div class="gs-meta-fundo"><small>FUNDO</small><strong>${escapeHtml(currentFundo())}</strong></div>
+          <div class="gs-meta-lic"><small>LIC</small><strong>${escapeHtml(
             displayGuidesLic_(state.session.grupoLic) || "—"
           )}</strong></div>
-          <div><small>SUPERVISOR</small><strong>${escapeHtml(sup)}</strong></div>
+          <div class="gs-meta-sup"><small>SUPERVISOR</small><strong title="${escapeHtml(sup)}">${escapeHtml(sup)}</strong></div>
         </div>
         <div class="gs-table-wrap">
           <table class="gs-table">
@@ -4878,8 +5154,11 @@
     const h = state.harvest;
     const tipo = normalizeHarvestType(h.tipo);
     const prev = state.previewDraftByType?.[tipo];
+    const existing = todayReadySnapshots().find(
+      (snap) => normalizeHarvestType(snap.tipo) === tipo
+    );
     return {
-      id: prev?.id || uid(),
+      id: existing?.id || prev?.id || uid(),
       savedAt: new Date().toISOString(),
       fecha: h.fecha || todayISO(),
       tipo,
@@ -5124,6 +5403,14 @@
   function previewHarvestSummary() {
     // Persistir en caché local antes de abrir modal/tabla
     saveHarvest();
+    const tipo = normalizeHarvestType(state.harvest.tipo);
+    if (isHarvestTypeLocked(tipo)) {
+      toast(
+        `${harvestTypeShort(tipo)} ya está guardada hoy · no se puede duplicar`
+      );
+      focusNextMissingHarvestType();
+      return null;
+    }
     if (!state.harvest.lote) {
       toast("Seleccione el lote antes de continuar");
       $("#btnHarvestLote")?.focus();
@@ -5145,55 +5432,79 @@
     return snapshot;
   }
 
+  /** Guarda 1 sola tabla por tipo/día (reemplaza si existiera). */
+  function upsertHarvestHistory(snapshot) {
+    if (!snapshot) return null;
+    const history = loadHarvestHistory();
+    const key = harvestDayTypeKey(snapshot);
+    const existing = history.find((item) => harvestDayTypeKey(item) === key);
+    const nextSnap = {
+      ...snapshot,
+      id: existing?.id || snapshot.id,
+      savedAt: new Date().toISOString(),
+    };
+    const next = [
+      nextSnap,
+      ...history.filter((item) => harvestDayTypeKey(item) !== key),
+    ].slice(0, 50);
+    try {
+      localStorage.setItem(HARVEST_HISTORY_KEY, JSON.stringify(next));
+    } catch {
+      return null;
+    }
+    return nextSnap;
+  }
+
   function persistHarvestSnapshot(snapshot, opts = {}) {
     if (!snapshot) return null;
     const silent = !!opts.silent;
     const skipReset = !!opts.skipReset;
+    const tipo = normalizeHarvestType(snapshot.tipo);
+
+    // Seguridad: no permitir segunda tabla del mismo tipo hoy
+    if (
+      isHarvestTypeLocked(tipo) &&
+      !loadHarvestHistory().some((item) => item.id === snapshot.id)
+    ) {
+      if (!silent) {
+        toast(
+          `${harvestTypeShort(tipo)} ya tiene una tabla hoy · no se duplica`
+        );
+      }
+      return null;
+    }
+
     if (
       state.activeExportSaved &&
       state.activeExportSnapshot?.id === snapshot.id
     ) {
       return snapshot;
     }
-    const history = loadHarvestHistory();
-    if (history.some((item) => item.id === snapshot.id)) {
-      state.activeExportSaved = true;
-      updateExportPreviewSavedUI();
-      enqueueCloudData(
-        "registrarCosecha",
-        buildHarvestSyncPayload(snapshot),
-        snapshot.id
-      );
-      if (!skipReset) resetHarvestTypeAfterSave(snapshot.tipo);
-      captureSavedWorkers(snapshot.workers);
-      flushCloudDataQueue().catch(() => {});
-      return snapshot;
-    }
-    try {
-      localStorage.setItem(
-        HARVEST_HISTORY_KEY,
-        JSON.stringify([snapshot, ...history].slice(0, 50))
-      );
-    } catch {
+
+    const savedSnap = upsertHarvestHistory(snapshot);
+    if (!savedSnap) {
       if (!silent) toast("No hay espacio para guardar el historial");
       return null;
     }
+
+    state.activeExportSnapshot = savedSnap;
     state.activeExportSaved = true;
     updateExportPreviewSavedUI();
     enqueueCloudData(
       "registrarCosecha",
-      buildHarvestSyncPayload(snapshot),
-      snapshot.id
+      buildHarvestSyncPayload(savedSnap),
+      savedSnap.id
     );
-    if (!skipReset) resetHarvestTypeAfterSave(snapshot.tipo);
-    if (state.previewDraftSnapshot?.id === snapshot.id) {
-      state.previewDraftSnapshot = snapshot;
+    // Limpia solo ESTE tipo; deja Resta/Descarte (u otras) intactas
+    if (!skipReset) resetHarvestTypeAfterSave(savedSnap.tipo);
+    if (state.previewDraftSnapshot?.id === savedSnap.id) {
+      state.previewDraftSnapshot = savedSnap;
     }
-    if (!silent) toast("Se guardó correctamente");
-    captureSavedWorkers(snapshot.workers);
+    if (!silent) toast(`${harvestTypeShort(savedSnap.tipo)} guardada · formulario limpio`);
+    captureSavedWorkers(savedSnap.workers);
     flushCloudDataQueue().catch(() => {});
-    renderExportPreviewTypes(snapshot);
-    return snapshot;
+    renderExportPreviewTypes(savedSnap);
+    return savedSnap;
   }
 
   /** Guarda, limpia ese tipo y muestra qué falta (Suma / Resta / Descarte). */
@@ -5201,7 +5512,7 @@
     const snapshot = state.activeExportSnapshot;
     if (!snapshot) return null;
     if (state.activeExportSaved) {
-      toast("Este registro ya está guardado");
+      toast("Este registro ya está guardado y bloqueado");
       renderExportPreviewDayStatus();
       return snapshot;
     }
@@ -5210,7 +5521,6 @@
     showAppLoader("Guardando registro…");
     try {
       await new Promise((r) => window.setTimeout(r, 420));
-      // Limpia trabajadores/jarras de ESTE tipo (Suma, Resta o Descarte)
       const saved = persistHarvestSnapshot(snapshot, { skipReset: false });
       if (!saved) return null;
       state.previewDraftSnapshot = null;
@@ -5218,8 +5528,7 @@
       renderExportPreviewDayStatus();
       renderExportPreviewTypes(saved);
       focusNextMissingHarvestType();
-      const msg = harvestDayProgressMessage();
-      toast(msg);
+      toast(harvestDayProgressMessage());
       return saved;
     } finally {
       hideAppLoader();
@@ -5784,6 +6093,8 @@
               hour: "2-digit",
               minute: "2-digit",
             });
+        const driveUrl = getHarvestDriveUrl(item);
+        const drivePending = !driveUrl && isDriveUploadPending(item.id);
         return `<article class="history-item" data-history-id="${escapeHtml(
           item.id
         )}">
@@ -5797,11 +6108,25 @@
             snapshotTotal(item)
           )} jarras · ${escapeHtml(item.variedad || "Sin variedad")}<br>${escapeHtml(
             item.supervisor || ""
-          )}</p>
+          )}${
+            drivePending
+              ? `<br><em class="history-drive-note">Drive pendiente de subir</em>`
+              : driveUrl
+                ? `<br><em class="history-drive-note is-ok">En Drive</em>`
+                : ""
+          }</p>
           <div class="history-item-actions">
             <button type="button" data-history-action="preview">Ver</button>
-            <button type="button" data-history-action="share">Compartir</button>
             <button type="button" data-history-action="download">Descargar</button>
+            <button type="button" class="history-drive-btn${
+              drivePending ? " is-pending" : driveUrl ? " is-ready" : ""
+            }" data-history-action="drive">${
+              drivePending
+                ? "Drive pendiente"
+                : driveUrl
+                  ? "Compartir Drive"
+                  : "Subir Drive"
+            }</button>
           </div>
         </article>`;
       })
@@ -5950,28 +6275,127 @@
     resetViewportLayout();
   }
 
-  async function clearAppCache(button) {
-    setBtnLoading(button, true, "Borrando…");
-    try {
-      clearTabShellStorage();
+  /** Borra TODA la data local de la app (sesión, colas, historial, borradores). */
+  function wipeAllAppLocalData() {
+    const knownKeys = [
+      STORAGE_KEY,
+      PERSONAS_KEY,
+      SUPERVISORES_KEY,
+      PERSONAS_META_KEY,
+      VINCULO_QUEUE_KEY,
+      CLOUD_DATA_QUEUE_KEY,
+      DRIVE_QUEUE_KEY,
+      HARVEST_DRIVE_URL_KEY,
+      VINCULO_DONE_KEY,
+      CUSTOM_CATALOG_KEY,
+      PIN_KEY,
+      SESSION_KEY,
+      SESSION_PIN_KEY,
+      IDENTITY_KEY,
+      IDENTITY_LS_KEY,
+      AUTH_SESSION_KEY,
+      HARVEST_KEY,
+      HARVEST_HISTORY_KEY,
+      HARVEST_SENT_KEY,
+      GUIAS_HISTORY_KEY,
+      SESSION_MANUAL_PERSONAS_KEY,
+      SESSION_WORKERS_KEY,
+      SAVED_WORKERS_KEY,
+      LOGOUT_FLAG_KEY,
+      CACHE_DAY_KEY,
+      TAB_SHELL_LS_KEY,
+      "qb-tab-shells-v1",
+      "qb-action-loader",
+      "qb-tab-nav",
+    ];
+    knownKeys.forEach((key) => {
       try {
-        localStorage.removeItem(CACHE_DAY_KEY);
+        localStorage.removeItem(key);
       } catch {
         /* ignore */
       }
+      try {
+        sessionStorage.removeItem(key);
+      } catch {
+        /* ignore */
+      }
+    });
 
-      if (!isNativeApp()) {
-        if ("caches" in window) {
+    // Barrido: cualquier otra clave qb-
+    try {
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const key = localStorage.key(i);
+        if (key && /^qb[-_]/i.test(key)) localStorage.removeItem(key);
+      }
+    } catch {
+      /* ignore */
+    }
+    try {
+      for (let i = sessionStorage.length - 1; i >= 0; i--) {
+        const key = sessionStorage.key(i);
+        if (key && /^qb[-_]/i.test(key)) sessionStorage.removeItem(key);
+      }
+    } catch {
+      /* ignore */
+    }
+
+    clearTabShellStorage();
+    tabShellCache.clear();
+
+    // Estado en memoria
+    try {
+      state.guias = [];
+      state.session = emptySession();
+      state.harvest = emptyHarvest();
+      state.identity = null;
+      state.previewDraftSnapshot = null;
+      state.previewDraftByType = {};
+      state.activeExportSnapshot = null;
+      state.activeExportSaved = false;
+      state.sessionWorkers = {};
+      state.sessionManualPersonas = {};
+      state.readyFilesItems = [];
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function clearAppCache(button) {
+    confirmModal(
+      "Borrar todo",
+      "Se limpiará TODO en el celular: sesión, guías, conteo, historial, Drive pendiente y caché. Tendrá que escanear el carnet otra vez. ¿Continuar?",
+      () => {
+        void runFullAppWipe(button);
+      },
+      "Borrar todo"
+    );
+  }
+
+  async function runFullAppWipe(button) {
+    setBtnLoading(button, true, "Borrando…");
+    try {
+      wipeAllAppLocalData();
+
+      if ("caches" in window) {
+        try {
           const keys = await caches.keys();
           await Promise.all(keys.map((key) => caches.delete(key)));
           const leftover = await caches.keys();
           await Promise.all(leftover.map((key) => caches.delete(key)));
+        } catch {
+          /* ignore */
         }
-        if ("serviceWorker" in navigator) {
+      }
+      if ("serviceWorker" in navigator && !isNativeApp()) {
+        try {
           const regs = await navigator.serviceWorker.getRegistrations();
           await Promise.all(regs.map((reg) => reg.unregister()));
+        } catch {
+          /* ignore */
         }
-        if (typeof indexedDB !== "undefined" && indexedDB.databases) {
+      }
+      if (typeof indexedDB !== "undefined" && indexedDB.databases) {
+        try {
           const dbs = await indexedDB.databases();
           await Promise.all(
             (dbs || []).map(
@@ -5988,17 +6412,15 @@
                 })
             )
           );
+        } catch {
+          /* ignore */
         }
       }
 
-      toast(
-        isNativeApp()
-          ? "Caché borrada · recargando app…"
-          : "Caché borrada por completo · recargando…"
-      );
+      toast("Todo limpio · recargando app…");
       reloadWithBust();
     } catch {
-      toast("No se pudo borrar la caché");
+      toast("No se pudo borrar por completo · intente de nuevo");
       setBtnLoading(button, false);
     }
   }
@@ -6082,7 +6504,7 @@
           <li><strong>Sin base:</strong> toque usuarios, complete DNI y nombre; se guarda en Data Manuales cuando haya internet.</li>
           <li><strong>Jarras:</strong> anote mañana y tarde por separado; el total se suma solo.</li>
           <li><strong>Guardar:</strong> revise el resumen antes de compartirlo o descargarlo.</li>
-          <li><strong>Excel:</strong> consulte las últimas 48 horas y use Compartir para enviar el archivo (WhatsApp, Drive, Gmail, etc.).</li>
+          <li><strong>Excel:</strong> consulte las últimas 48 horas; use Subir a Drive o Descargar.</li>
           <li><strong>Sin internet:</strong> puede navegar, registrar guías y cosecha; todo queda en el celular y sube al reconectar.</li>
         </ul>
         <button type="button" class="help-close">Entendido</button>
@@ -6099,7 +6521,7 @@
               "Borre la caché de la app (service worker) y luego toque Actualizar app. Sus registros de cosecha, historial y sesión no se eliminan."
             }</p>
             <a class="app-tools-install" href="/instalar/">${ico("download")} Instalar en el celular</a>
-            <button type="button" class="app-tools-cache">${ico("trash")} Borrar caché</button>
+            <button type="button" class="app-tools-cache">${ico("trash")} Borrar todo</button>
             <button type="button" class="app-tools-update">${ico("refresh")} Actualizar app</button>
           </section>
         </div>`;
@@ -6224,6 +6646,12 @@
   }
 
   function pushHarvestWorker(dni, nombre, { fromManual = false } = {}) {
+    if (isHarvestTypeLocked(state.harvest.tipo)) {
+      toast(
+        `${harvestTypeShort(state.harvest.tipo)} ya está guardada · no se edita`
+      );
+      return false;
+    }
     const key = String(dni || "").replace(/\D/g, "");
     const name = String(nombre || "")
       .trim()
@@ -6458,6 +6886,7 @@
   }
 
   function onHarvestWorkersInput(e) {
+    if (isHarvestTypeLocked(state.harvest.tipo)) return;
     const input = e.target.closest("[data-harvest-field]");
     if (!input) return;
     const row = input.closest("[data-worker-id]");
@@ -7614,6 +8043,12 @@
       );
     });
     on("#btnHarvestSave", "click", previewHarvestSummary);
+    on("#harvestDayChecklist", "click", (e) => {
+      const item = e.target?.closest?.("[data-harvest-check]");
+      if (!item) return;
+      e.preventDefault();
+      openHarvestChecklistPreview(item.dataset.harvestCheck);
+    });
     on("#btnCommitHarvest", "click", (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -7639,21 +8074,6 @@
       e.preventDefault();
       e.stopPropagation();
       uploadActiveHarvestToDrive(e.currentTarget);
-    });
-    on("#btnShareHarvest", "click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const snapshot = state.activeExportSnapshot;
-      if (!snapshot) {
-        toast("No hay registro para enviar");
-        return;
-      }
-      if (typeof XLSX === "undefined") {
-        toast("Espere a que cargue el Excel e intente otra vez");
-        return;
-      }
-      // Menú nativo · 1 Excel · sin API WhatsApp
-      shareOneExcelNative(snapshot);
     });
     on("#exportPreviewTypes", "click", (e) => {
       const btn = e.target?.closest?.("[data-preview-type]");
@@ -7746,10 +8166,10 @@
       if (action === "preview") {
         closeHarvestHistory();
         openExportPreview(snapshot);
-      } else if (action === "share") {
-        shareHarvestSnapshot(snapshot, { single: true });
       } else if (action === "download") {
         downloadHarvestSnapshot(snapshot, { single: true });
+      } else if (action === "drive") {
+        uploadOrQueueHarvestToDrive(snapshot, button);
       }
     });
     on("#btnHarvestLogout", "click", () => {
@@ -8196,6 +8616,7 @@
 
       document.addEventListener("visibilitychange", () => {
         if (document.visibilityState !== "visible" || !navigator.onLine) return;
+        flushDriveQueue().catch(() => {});
         detectNetlify(2500)
           .then((ok) => {
             updateNetworkUI();
@@ -8350,6 +8771,7 @@
         toast("Internet recuperado · subiendo…");
         loadSupervisores().catch(() => {});
         loadPersonas().catch(() => {});
+        flushDriveQueue().catch(() => {});
         ensureCloudReady_(2000)
           .then(async (ok) => {
             if (!ok) return null;
@@ -8372,6 +8794,7 @@
       });
       document.addEventListener("visibilitychange", () => {
         if (document.hidden || !navigator.onLine) return;
+        flushDriveQueue().catch(() => {});
         ensureCloudReady_(2000)
           .then((ok) =>
             ok
@@ -8388,6 +8811,7 @@
 
       setInterval(() => {
         if (!navigator.onLine) return;
+        if (loadDriveQueue().length) flushDriveQueue().catch(() => {});
         if (!loadVinculoQueue().length && !loadCloudDataQueue().length) return;
         ensureCloudReady_(2000)
           .then((ok) =>

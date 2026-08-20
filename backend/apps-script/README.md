@@ -66,21 +66,30 @@ Si dice `UNAUTHORIZED` / `Falta configurar API_TOKEN`, el deploy en Google es vi
 - `registrarGuias`
 
 ## 3) Excel → carpeta Drive → `Code-excel-drive.gs`
-Sube el `.xlsx` a **una carpeta Drive** (el enlace lo pega usted una sola vez en el script).
+Sube el `.xlsx` a Drive **por tipo** (no se mezclan):
+
+| Tipo app | Carpeta Drive |
+|----------|----------------|
+| Suma | Subcarpeta `SUMAR JARRAS` (se crea sola) |
+| Resta | Subcarpeta `DESCUENTO JARRAS` (se crea sola) |
+| Descarte | Subcarpeta `DESCARTE - DESHIDRATADO` (se crea sola) |
 
 ```
 PWA  →  api-config.js (QB_SCRIPT.EXCEL_DRIVE)
      →  Code-excel-drive.gs
-     →  Carpeta Drive (DRIVE_FOLDER_LINK)
+     →  Carpeta Drive padre (DRIVE_FOLDER_LINK)
+         ├── SUMAR JARRAS
+         ├── DESCUENTO JARRAS
+         └── DESCARTE - DESHIDRATADO
 ```
 
-1. Copie el enlace de su carpeta Drive  
+1. Copie el enlace de su carpeta Drive padre  
 2. Péguelo en `DRIVE_FOLDER_LINK` dentro de `Code-excel-drive.gs`  
-3. Apps Script nuevo → pegar archivo → Implementar → Aplicación web (Yo / Cualquier persona)  
+3. Apps Script nuevo → pegar archivo → Implementar → **Nueva versión** → Aplicación web (Yo / Cualquier persona)  
 4. URL `/exec` → `api-config.js` → `EXCEL_DRIVE: "…/exec"`  
 5. Redeploy Netlify  
 
-Botón en la app: **Subir a Drive** (vista previa del Excel). Devuelve el enlace del archivo.
+Botón en la app: **Subir a Drive**. La app envía `tipo` para elegir carpeta.
 
 ## Prueba en editor
 Solo `testPing` / `myFunction` (rápido).
