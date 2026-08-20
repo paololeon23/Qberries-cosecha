@@ -1124,7 +1124,7 @@ html:not(.has-session) body.app-booting::before {
 }
 .qty-row {
   display: grid;
-  grid-template-columns: 1fr;
+  grid-template-columns: 1fr 1fr;
   gap: 10px;
 }
 .gf-label {
@@ -5603,7 +5603,7 @@ html.is-android body.kb-open .export-preview {
 }
 .guides-qty-grid {
   display: grid;
-  grid-template-columns: 1fr;
+  grid-template-columns: 1fr 1fr;
   gap: 10px;
 }
 .guides-qty-field {
@@ -6345,11 +6345,14 @@ html.is-android body.kb-open .export-preview {
   .guides-cards .empty {
     width: 100%;
   }
-  /* Formularios Guías: también 1 columna */
+  /* Formularios Guías: 1 columna, excepto Jarras|Jabas */
   .guides-cards .guia-grid,
-  .guia-grid,
-  .qty-row {
+  .guia-grid {
     grid-template-columns: 1fr;
+  }
+  .qty-row,
+  .guides-qty-grid {
+    grid-template-columns: 1fr 1fr;
   }
   .guides-cards .guia-field:nth-child(5),
   .guides-cards .qty-block,

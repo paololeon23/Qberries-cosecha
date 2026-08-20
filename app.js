@@ -28,7 +28,7 @@
   const JARRAS_POR_JABA = 12;
   const FUNDO_DEFAULT = "Licapa";
   const FUNDO_OPTIONS = ["Licapa", "Licapa II"];
-  const APP_VERSION = "v338";
+  const APP_VERSION = "v343";
 
   function normalizeFundo(value) {
     const raw = String(value || "").trim();
@@ -4220,7 +4220,7 @@
     const btnCancel = $("#btnCancelGuidesSummary");
     const btnClose = $("#btnCloseGuidesSummary");
 
-    // 1) Persistir en celular + cola nube — NUNCA borrar guías ni inputs
+    // Solo guardar (celular + nube). NO descarga Excel.
     state.savingGuias = true;
     if (btnSave) btnSave.disabled = true;
     if (btnCancel) btnCancel.disabled = true;
@@ -4239,13 +4239,10 @@
     pushGuiasHistory(payload);
     saveStore();
 
-    // 2) Descargar Excel (si falla, los datos siguen en pantalla)
-    let excelOk = false;
-    try {
-      excelOk = !!exportExcel({ silent: true });
-    } catch (_) {
-      excelOk = false;
-    }
+    // Tras guardar: limpiar inputs / guías de pantalla (sesión del supervisor se mantiene)
+    state.guias = [];
+    state.expandedGuiaId = null;
+    saveStore();
 
     closeGuidesSummary();
     renderCards();
@@ -4254,15 +4251,9 @@
     updateNetworkUI();
 
     if (!navigator.onLine) {
-      toast(
-        excelOk
-          ? "Excel listo · pendiente de subir al servidor"
-          : "Guardado en el celular · pendiente hasta tener internet"
-      );
-    } else if (excelOk) {
-      toast("Excel descargado · subiendo al servidor…");
+      toast("Guardado · pantalla limpia · pendiente de subir");
     } else {
-      toast("Guardado · subiendo al servidor (Excel no descargó)");
+      toast("Guardado · pantalla limpia · subiendo…");
     }
 
     flushGuiasInBackground();
@@ -4833,7 +4824,9 @@
 
   function downloadHarvestSnapshot(snapshot, opts = {}) {
     if (!snapshot) return false;
-    if (!opts.single) {
+    // Desde resumen / historial: un solo Excel (opts.single o por defecto true en preview)
+    const forceSingle = opts.single !== false;
+    if (!forceSingle) {
       const ready = availableExportSnapshots();
       if (ready.length > 1) {
         openReadyFilesModal("download", ready);
@@ -4854,21 +4847,29 @@
   function harvestShareFile(snapshot) {
     const primary = buildHarvestFile(snapshot);
     if (!primary) return null;
-    const name = harvestFileName(snapshot);
+    const rawName = harvestFileName(snapshot);
+    const name = String(rawName || "cosecha.xlsx")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^A-Za-z0-9._-]+/g, "_")
+      .replace(/_+/g, "_")
+      .replace(/^_|_$/g, "") || "cosecha.xlsx";
+    const type =
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
     const blob =
       primary instanceof Blob
         ? primary
-        : new Blob([primary], {
-            type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-          });
+        : new Blob([primary], { type });
     try {
-      return new File([blob], name, {
-        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      return new File([blob], name.endsWith(".xlsx") ? name : `${name}.xlsx`, {
+        type,
         lastModified: Date.now(),
       });
     } catch {
       try {
-        Object.defineProperty(blob, "name", { value: name });
+        Object.defineProperty(blob, "name", {
+          value: name.endsWith(".xlsx") ? name : `${name}.xlsx`,
+        });
       } catch {
         /* ignore */
       }
@@ -4883,30 +4884,25 @@
 
   function pickShareablePayload(files) {
     if (!files?.length || typeof navigator.share !== "function") return null;
-    const payload = { files: files.slice(), title: files[0]?.name || "Excel QBerries" };
-    if (typeof navigator.canShare !== "function") return payload;
-    try {
-      if (navigator.canShare(payload)) return payload;
-    } catch {
-      /* algunos navegadores fallan el chequeo y igual pueden compartir */
+    const list = files.slice();
+    const title = list[0]?.name || "Excel QBerries";
+    if (typeof navigator.canShare !== "function") {
+      return { files: list, title };
     }
-    if (files.length > 1) {
+    // Probar varias formas: algunos Android rechazan multi o nombres largos
+    const tries = [
+      { files: list, title },
+      { files: [list[0]], title: list[0].name },
+    ];
+    for (const attempt of tries) {
       try {
-        if (navigator.canShare({ files: [files[0]] })) {
-          return { files: [files[0]], title: files[0].name, sequential: true };
-        }
+        if (navigator.canShare(attempt)) return attempt;
       } catch {
-        /* ignore */
+        /* seguir */
       }
     }
-    try {
-      if (navigator.canShare({ files: [files[0]] })) {
-        return { files: [files[0]], title: files[0].name };
-      }
-    } catch {
-      /* ignore */
-    }
-    return payload;
+    // Algunos navegadores mienten en canShare; igual intentamos 1 archivo
+    return { files: [list[0]], title: list[0].name };
   }
 
   /** Solo abre el menú de compartir. Nunca descarga el archivo. */
@@ -4933,18 +4929,26 @@
       return true;
     }
     if (typeof navigator.share !== "function") {
-      onFail?.();
+      onFail?.({ reason: "no-share-api" });
       return false;
     }
+    const shareData = {
+      files: payload.files,
+      title: payload.title || payload.files[0]?.name || "Excel QBerries",
+    };
     navigator
-      .share({
-        files: payload.files,
-        title: payload.title || payload.files[0]?.name || "Excel QBerries",
-      })
+      .share(shareData)
       .then(() => onOk?.())
       .catch((err) => {
         if (err?.name === "AbortError") return;
-        onFail?.(err);
+        // Reintento sin title (algunos WebView fallan con title+files)
+        navigator
+          .share({ files: payload.files })
+          .then(() => onOk?.())
+          .catch((err2) => {
+            if (err2?.name === "AbortError") return;
+            onFail?.(err2 || err);
+          });
       });
     return true;
   }
@@ -4961,7 +4965,12 @@
         await navigator.share({ files: [file], title: file.name });
       } catch (err) {
         if (err?.name === "AbortError") return false;
-        throw err;
+        try {
+          await navigator.share({ files: [file] });
+        } catch (err2) {
+          if (err2?.name === "AbortError") return false;
+          throw err2;
+        }
       }
     }
     return true;
@@ -4977,15 +4986,16 @@
       toast("Espere a que cargue el Excel e intente otra vez");
       return;
     }
-    const prepared = list;
+
     let files = [];
     try {
-      files = prepared.map((item) => harvestShareFile(item)).filter(Boolean);
-    } catch {
+      files = list.map((item) => harvestShareFile(item)).filter(Boolean);
+    } catch (err) {
+      console.warn("shareExcelDocuments build", err);
       files = [];
     }
     if (!files.length) {
-      toast("No se pudo crear el Excel");
+      toast("No se pudo crear el Excel para compartir");
       return;
     }
 
@@ -5003,53 +5013,52 @@
     }
 
     if (typeof navigator.share !== "function") {
-      toast("Este celular no permite enviar el Excel directo. Instale la app.");
-          return;
+      toast("Este dispositivo no puede abrir Compartir. Use Chrome o la app instalada.");
+      return;
     }
 
     const payload = pickShareablePayload(files);
-    if (files.length > 1 && payload?.sequential) {
+    if (files.length > 1 && payload?.files?.length === 1 && list.length > 1) {
+      // Multi no soportado: enviar de uno en uno
       shareFilesSequential(files).catch(() =>
         toast("No se pudo enviar. Intente de uno en uno.")
       );
       return;
     }
 
-    if (!payload) {
-      toast("Este navegador no permite adjuntar el Excel. Instale la app.");
+    if (!payload?.files?.length) {
+      toast("No se pudo preparar el archivo para WhatsApp");
       return;
     }
 
+    toast("Abriendo compartir…");
     shareFilesNow(payload, {
       onOk: () =>
         toast(
-          files.length > 1
+          payload.files.length > 1
             ? "Elija WhatsApp para enviar los Excel"
             : "Elija WhatsApp para enviar el Excel"
         ),
       onFail: () => {
         if (files.length > 1) {
           shareFilesSequential(files).catch(() =>
-            toast("No se pudo enviar por WhatsApp. Intente de nuevo.")
+            toast("No se pudo abrir WhatsApp. Pruebe Descargar Excel y adjúntelo.")
           );
-      return;
+          return;
         }
-        toast("No se pudo abrir WhatsApp. Intente de nuevo.");
+        toast("No se pudo abrir WhatsApp. Pruebe Descargar Excel y adjúntelo.");
       },
     });
   }
 
+  /** Desde el resumen: SIEMPRE un solo Excel (el que se está viendo). */
   function shareHarvestFromPreview() {
-    const ready = availableExportSnapshots();
-    if (!ready.length) {
+    const current = state.activeExportSnapshot;
+    if (!current) {
       toast("No hay registro para enviar");
       return;
     }
-    if (ready.length === 1) {
-      shareExcelDocuments(ready);
-      return;
-    }
-    openReadyFilesModal("share", ready);
+    shareExcelDocuments([current]);
   }
 
   function shareHarvestSnapshot(snapshot, opts = {}) {
@@ -5057,13 +5066,7 @@
       toast("No hay registro para compartir");
       return;
     }
-    if (!opts.single) {
-      const ready = availableExportSnapshots();
-      if (ready.length > 1) {
-        openReadyFilesModal("share", ready);
-        return;
-      }
-    }
+    // Un solo documento; no abrir selector múltiple
     shareExcelDocuments([snapshot]);
   }
 
@@ -7075,18 +7078,22 @@
     on("#btnDownloadHarvest", "click", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      downloadHarvestSnapshot(state.activeExportSnapshot);
+      downloadHarvestSnapshot(state.activeExportSnapshot, { single: true });
     });
     on("#btnShareHarvest", "click", (e) => {
       e.preventDefault();
       e.stopPropagation();
       const snapshot = state.activeExportSnapshot;
-      if (!snapshot) return;
+      if (!snapshot) {
+        toast("No hay registro para enviar");
+        return;
+      }
       if (typeof XLSX === "undefined") {
         toast("Espere a que cargue el Excel e intente otra vez");
         return;
       }
-      shareHarvestFromPreview();
+      // Solo el Excel de ESTE resumen
+      shareExcelDocuments([snapshot]);
     });
     on("#exportPreviewTypes", "click", (e) => {
       const btn = e.target?.closest?.("[data-preview-type]");
