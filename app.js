@@ -28,7 +28,7 @@
   const JARRAS_POR_JABA = 12;
   const FUNDO_DEFAULT = "Licapa";
   const FUNDO_OPTIONS = ["Licapa", "Licapa II"];
-  const APP_VERSION = "v337";
+  const APP_VERSION = "v338";
 
   function normalizeFundo(value) {
     const raw = String(value || "").trim();

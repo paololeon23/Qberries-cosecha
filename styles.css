@@ -6150,81 +6150,84 @@ html.is-android body.kb-open .export-preview {
 
 /* ——— Responsive profesional · celular compacto / tablet aprovechada ——— */
 
-/* Phablet / tablet chica: más aire sin aún 2 columnas de Conteo */
+/* Phablet: ancho completo, sin columna angosta centrada */
 @media (min-width: 600px) and (max-width: 767px) {
   .harvest-scroll,
   .vinculo-scroll,
   .guides-scroll {
-    width: min(100%, 640px);
-    margin: 0 auto;
-    padding: 16px 18px max(22px, calc(14px + var(--safe-b)));
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 12px 16px max(16px, calc(10px + var(--safe-b)));
   }
   .harvest-head,
   .vinculo-head {
-    padding-left: max(18px, calc((100% - 640px) / 2 + 8px));
-    padding-right: max(18px, calc((100% - 640px) / 2 + 8px));
+    padding-left: 16px;
+    padding-right: 16px;
   }
   .app-topnav-inner {
-    max-width: 640px;
+    max-width: none;
+    width: 100%;
   }
   .harvest-field-card,
   .harvest-add-card,
   .harvest-register-card,
   .harvest-type-card {
-    padding: 18px 16px 16px;
+    padding: 14px 14px 12px;
+    margin-bottom: 10px;
   }
   .guides-summary-dialog {
-    width: min(100%, 520px);
+    width: min(100%, 100%);
   }
   .qr-frame {
     max-height: min(42vh, 340px);
   }
 }
 
-/* Tablet · layout de app (NO celular gigante): 2 columnas + ancho útil */
+/* Tablet: 1 columna a TODO el ancho · compacto para menos scroll */
 @media (min-width: 768px) {
   .app-topnav {
-    padding-left: 28px;
-    padding-right: 28px;
+    padding-left: 16px;
+    padding-right: 16px;
   }
   .app-topnav-inner {
-    max-width: 640px;
-    gap: 14px;
+    max-width: none;
+    width: 100%;
+    gap: 12px;
   }
   .app-topnav-pill button {
-    padding: 12px 20px;
-    font-size: 0.95rem;
+    padding: 11px 18px;
+    font-size: 0.92rem;
   }
   .app-topnav-tools button {
-    width: 48px;
-    height: 48px;
+    width: 46px;
+    height: 46px;
   }
   .harvest-head,
   .vinculo-head {
-    padding-left: max(28px, calc((100% - 640px) / 2 + 12px));
-    padding-right: max(28px, calc((100% - 640px) / 2 + 12px));
-    padding-bottom: 16px;
+    padding: max(12px, calc(6px + var(--safe-t))) 16px 10px;
   }
   .harvest-user h1,
   .vinculo-user h1 {
-    max-width: min(520px, 58vw);
-    font-size: clamp(1.2rem, 2.2vw, 1.4rem);
+    max-width: min(70vw, 640px);
+    font-size: clamp(1.15rem, 2vw, 1.32rem);
   }
   .harvest-logo,
   .vinculo-logo {
-    width: 56px;
-    height: 56px;
-    max-width: 56px;
-    flex-basis: 56px;
+    width: 48px;
+    height: 48px;
+    max-width: 48px;
+    flex-basis: 48px;
   }
 
-  /* Conteo: UNA sola columna (como celular), más ancha en tablet — sin Tipo|Ubicación ni Total|Resumen */
   .harvest-scroll {
     display: block;
-    width: min(100%, 640px);
-    max-width: 640px;
-    margin: 0 auto;
-    padding: 22px 24px max(32px, calc(20px + var(--safe-b)));
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 10px 16px max(14px, calc(8px + var(--safe-b)));
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
   .harvest-scroll > * {
     min-width: 0;
@@ -6235,8 +6238,8 @@ html.is-android body.kb-open .export-preview {
   .harvest-register-card,
   .harvest-type-card,
   .harvest-total-card {
-    margin-bottom: 16px;
-    padding: 22px 20px 20px;
+    margin-bottom: 10px;
+    padding: 14px 16px 12px;
   }
   #conteoPanel > .harvest-total-card,
   #conteoPanel > .harvest-save-btn,
@@ -6250,70 +6253,76 @@ html.is-android body.kb-open .export-preview {
   #conteoPanel > .harvest-total-card {
     min-height: 0;
     align-self: auto;
+    margin-bottom: 8px;
   }
   #conteoPanel > .harvest-save-btn {
-    margin: 4px 0 8px;
-    min-height: 56px;
+    margin: 0 0 4px;
+    min-height: 50px;
     align-self: auto;
-    font-size: 1.05rem;
+    font-size: 1.02rem;
     border-radius: 999px;
   }
   .harvest-total-card strong {
-    font-size: clamp(1.55rem, 3vw, 1.85rem);
+    font-size: clamp(1.4rem, 2.5vw, 1.7rem);
+  }
+  .harvest-section-title {
+    margin-bottom: 8px;
   }
   .harvest-section-title h2 {
-    font-size: 0.92rem;
+    font-size: 0.86rem;
   }
   .harvest-worker-form {
-    grid-template-columns: 148px minmax(0, 1fr) 56px;
-    gap: 14px;
+    grid-template-columns: minmax(120px, 0.85fr) minmax(0, 1.4fr) 52px;
+    gap: 10px;
   }
   .harvest-worker-form input,
   .harvest-lote-control .harvest-lote-trigger,
   .harvest-type-trigger {
-    min-height: 54px;
-    font-size: 1.02rem;
+    min-height: 48px;
+    font-size: 1rem;
   }
   .harvest-worker-form button {
-    width: 56px;
-    min-width: 56px;
-    height: 56px;
+    width: 52px;
+    min-width: 52px;
+    height: 52px;
   }
   .harvest-table-head,
   .harvest-worker-row {
-    grid-template-columns: minmax(0, 1.5fr) 96px 96px 64px 40px;
-    gap: 10px;
+    grid-template-columns: minmax(0, 1.5fr) 88px 88px 56px 36px;
+    gap: 8px;
   }
   .harvest-table-head {
-    padding: 14px 18px;
-    font-size: 0.78rem;
+    padding: 10px 14px;
+    font-size: 0.72rem;
   }
   .harvest-worker-row {
-    padding: 14px 10px;
+    padding: 10px 8px;
   }
   .harvest-worker-row input {
-    min-height: 46px;
-    font-size: 1.02rem;
+    min-height: 42px;
+    font-size: 1rem;
   }
   .harvest-location-grid {
-    gap: 12px;
+    gap: 8px;
   }
   .harvest-location-grid div {
-    padding: 14px 16px;
+    padding: 10px 12px;
   }
   .harvest-users-btn,
   .harvest-copy-btn {
-    width: 42px;
-    height: 42px;
+    width: 38px;
+    height: 38px;
+  }
+  .harvest-empty {
+    padding: 18px 12px;
   }
 
-  /* Guías / vínculo · misma columna útil que Conteo */
   .guides-scroll,
   .vinculo-scroll {
-    width: min(100%, 640px);
-    max-width: 640px;
-    margin: 0 auto;
-    padding: 22px 24px max(32px, calc(20px + var(--safe-b)));
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 10px 16px max(14px, calc(8px + var(--safe-b)));
   }
   .guides-meta-card {
     padding: 20px 18px 18px;
@@ -6354,16 +6363,18 @@ html.is-android body.kb-open .export-preview {
     gap: 12px;
   }
 
-  /* Vínculo · una sola columna */
+  /* Vínculo · una sola columna a todo el ancho */
   .vinculo-form {
-    max-width: 640px;
-    margin: 0 auto;
-    padding: 24px 22px 26px;
+    max-width: none;
+    width: 100%;
+    margin: 0;
+    padding: 16px 16px 18px;
   }
   .id-summary {
-    max-width: 640px;
-    margin-left: auto;
-    margin-right: auto;
+    max-width: none;
+    width: 100%;
+    margin-left: 0;
+    margin-right: 0;
   }
   .vin-grupo-pair,
   .session-form .pair {
@@ -6398,7 +6409,7 @@ html.is-android body.kb-open .export-preview {
     padding: clamp(20px, 4vw, 36px);
   }
   .export-preview {
-    width: min(100%, 640px);
+    width: min(100%, 720px);
     max-height: min(88dvh, 900px);
     margin: 0 auto;
     border-radius: 22px;
@@ -6411,12 +6422,12 @@ html.is-android body.kb-open .export-preview {
     gap: 10px;
   }
   .guides-summary-dialog {
-    width: min(100%, 640px);
-    max-width: 640px;
+    width: min(100% - 32px, 720px);
+    max-width: calc(100% - 32px);
     max-height: min(90dvh, 860px);
     margin: 0 auto;
     border-radius: 22px;
-    padding: 24px 22px 22px;
+    padding: 20px 18px 18px;
   }
   .guides-summary-head h2 {
     font-size: 1.28rem;
@@ -6465,8 +6476,8 @@ html.is-android body.kb-open .export-preview {
     font-size: 1.15rem;
   }
   .history-sheet {
-    padding-left: max(28px, calc((100% - 640px) / 2));
-    padding-right: max(28px, calc((100% - 640px) / 2));
+    padding-left: 16px;
+    padding-right: 16px;
   }
   .export-preview-table-wrap {
     max-height: min(52vh, 480px);
@@ -6475,35 +6486,34 @@ html.is-android body.kb-open .export-preview {
     grid-template-columns: 1fr;
   }
 
-  /* Escaneo QR · UNA sola columna (sin panel al lado) */
+  /* Escaneo QR · ancho completo, 1 columna */
   body[data-page="scan"] .security-screen,
   body[data-page="scan"] .lock-screen {
     display: block;
-    max-width: 640px;
+    max-width: none;
     width: 100%;
-    margin-left: auto;
-    margin-right: auto;
-    padding: max(16px, calc(10px + var(--safe-t))) 24px max(24px, calc(16px + var(--safe-b)));
+    margin: 0;
+    padding: max(12px, calc(8px + var(--safe-t))) 16px max(16px, calc(10px + var(--safe-b)));
   }
   body[data-page="scan"] .hero-head,
   body[data-page="scan"] .sec-card,
   body[data-page="scan"] .app-info {
     max-width: none;
     width: 100%;
-    margin: 0 0 16px;
+    margin: 0 0 12px;
   }
   body[data-page="scan"] .sec-card {
-    padding: 20px;
-    gap: 16px;
+    padding: 16px;
+    gap: 12px;
   }
   .qr-frame {
-    width: min(100%, 420px);
-    max-width: 420px;
+    width: min(100%, 480px);
+    max-width: 480px;
     aspect-ratio: 1;
-    max-height: min(48vh, 420px);
+    max-height: min(42vh, 420px);
     height: auto;
     margin: 0 auto;
-    border-radius: 24px;
+    border-radius: 22px;
   }
   .qr-overlay .ico {
     width: 48px;
@@ -6513,60 +6523,64 @@ html.is-android body.kb-open .export-preview {
     font-size: 1rem;
   }
   .sec-actions .btn {
-    min-height: 52px;
+    min-height: 50px;
     font-size: 1rem;
     width: 100%;
   }
 }
 
-/* Tablet grande / iPad landscape */
+/* Tablet grande: sigue ancho completo */
 @media (min-width: 1024px) {
   .app-topnav-inner,
   .harvest-scroll,
   .vinculo-scroll,
   .guides-scroll {
-    max-width: 680px;
-    width: min(100%, 680px);
+    max-width: none;
+    width: 100%;
   }
   .harvest-head,
   .vinculo-head {
-    padding-left: max(32px, calc((100% - 680px) / 2 + 14px));
-    padding-right: max(32px, calc((100% - 680px) / 2 + 14px));
+    padding-left: 20px;
+    padding-right: 20px;
   }
   .history-sheet {
-    padding-left: max(32px, calc((100% - 680px) / 2));
-    padding-right: max(32px, calc((100% - 680px) / 2));
+    padding-left: 20px;
+    padding-right: 20px;
   }
   .harvest-scroll {
     display: block;
+    padding-left: 20px;
+    padding-right: 20px;
   }
   .vinculo-form,
   .id-summary {
-    max-width: 680px;
+    max-width: none;
+    width: 100%;
   }
   body[data-page="scan"] .security-screen,
   body[data-page="scan"] .lock-screen {
-    max-width: 680px;
+    max-width: none;
+    width: 100%;
     display: block;
   }
   .qr-frame {
-    max-height: min(52vh, 480px);
-    width: min(100%, 440px);
-    max-width: 440px;
+    max-height: min(46vh, 460px);
+    width: min(100%, 480px);
+    max-width: 480px;
   }
   .guides-summary-dialog {
-    width: min(100%, 640px);
-    max-width: 640px;
+    width: min(100% - 40px, 760px);
+    max-width: calc(100% - 40px);
   }
   .export-preview {
-    width: min(100%, 720px);
+    width: min(100% - 40px, 800px);
   }
   .harvest-worker-form {
-    grid-template-columns: 160px minmax(0, 1fr) 56px;
+    grid-template-columns: minmax(140px, 0.9fr) minmax(0, 1.5fr) 56px;
   }
   .harvest-table-head,
   .harvest-worker-row {
-    grid-template-columns: minmax(0, 1.5fr) 96px 96px 64px 40px;
+    grid-template-columns: minmax(0, 1.6fr) 100px 100px 64px 40px;
   }
 }
 
