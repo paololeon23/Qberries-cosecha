@@ -163,21 +163,25 @@
     var session = d.session && typeof d.session === 'object' ? d.session : {};
     var guias = Array.isArray(d.guias) ? d.guias : [];
     var totals = d.totals && typeof d.totals === 'object' ? d.totals : {};
+    var operator = d.operator && typeof d.operator === 'object' ? d.operator : {};
     var supervisorNombre = clean_(
       d.supervisorNombre ||
         session.supervisorNombre ||
-        (d.operator && d.operator.nombre) ||
+        operator.nombre ||
         ''
     ).toUpperCase();
     var supervisorDni = digits_(
       d.supervisorDni ||
         session.supervisorDni ||
-        (d.operator && d.operator.dni) ||
+        operator.dni ||
         d.securityCode ||
         ''
     );
-    if (!supervisorNombre && !supervisorDni) {
-      throw new Error('Falta supervisor para guardar guías');
+    if (!supervisorDni) {
+      throw new Error('Falta DNI del supervisor');
+    }
+    if (!supervisorNombre) {
+      throw new Error('Falta nombre del supervisor');
     }
     if (!guias.length && !(Number(totals.jarras) > 0 || Number(totals.jabas) > 0)) {
       throw new Error('No hay guías para guardar');
@@ -189,7 +193,14 @@
       got = lock.tryLock(8000);
       if (!got) throw new Error('El servidor está ocupado. Intente de nuevo.');
       if (isDuplicateSend_(d)) {
-        return { created: false, updated: false, duplicate: true, rows: 0 };
+        return {
+          created: false,
+          updated: false,
+          duplicate: true,
+          rows: 0,
+          supervisorNombre: supervisorNombre,
+          supervisorDni: supervisorDni
+        };
       }
       var result = saveGuiasSummary_(d, session, guias, totals, supervisorNombre, supervisorDni);
       // Solo después de escribir en el Sheet
@@ -200,7 +211,9 @@
         duplicate: !!result.duplicate,
         rows: 1,
         fundo: normalizeFundo_(d.fundo || session.fundo),
-        grupoLic: normalizeGuidesLic_(d.grupoLic || session.grupoLic)
+        grupoLic: normalizeGuidesLic_(d.grupoLic || session.grupoLic),
+        supervisorNombre: supervisorNombre,
+        supervisorDni: supervisorDni
       };
     } finally {
       if (got) {
@@ -302,10 +315,14 @@
         return { created: false, updated: false, duplicate: true };
       }
       sh.getRange(rowIndex, 1, 1, HEADERS.length).setValues([row]);
+      // DNI siempre como texto (evita que 00000001 se vea como 1)
+      sh.getRange(rowIndex, 2).setNumberFormat('@').setValue(supervisorDni);
       return { created: false, updated: true, duplicate: false };
     }
 
-    sh.getRange(sh.getLastRow() + 1, 1, 1, HEADERS.length).setValues([row]);
+    var newRow = sh.getLastRow() + 1;
+    sh.getRange(newRow, 1, 1, HEADERS.length).setValues([row]);
+    sh.getRange(newRow, 2).setNumberFormat('@').setValue(supervisorDni);
     return { created: true, updated: false, duplicate: false };
   }
 
@@ -368,9 +385,20 @@
     if (first !== HEADERS[0]) {
       throw new Error('La hoja "' + sh.getName() + '" tiene encabezados incompatibles');
     }
-    // Migración: insertar columna GRUPO LIC después de FUNDO si falta
+
+    // Quitar columnas vacías en el medio del encabezado (ej. celda roja en blanco)
     var headerCount = Math.max(sh.getLastColumn(), 1);
     var headers = sh.getRange(1, 1, 1, headerCount).getDisplayValues()[0];
+    for (var col = headers.length; col >= 1; col--) {
+      if (!clean_(headers[col - 1])) {
+        try {
+          sh.deleteColumn(col);
+        } catch (_) {}
+      }
+    }
+
+    headerCount = Math.max(sh.getLastColumn(), 1);
+    headers = sh.getRange(1, 1, 1, headerCount).getDisplayValues()[0];
     var hasGrupoLic = false;
     var i;
     for (i = 0; i < headers.length; i++) {
@@ -380,20 +408,16 @@
       }
     }
     if (!hasGrupoLic) {
-      // Columna 4 = FUNDO → insertar a la derecha
       sh.insertColumnAfter(4);
-      sh.getRange(1, 5).setValue('GRUPO LIC');
-      sh.getRange(1, 5)
-        .setFontWeight('bold')
-        .setBackground('#e00b29')
-        .setFontColor('#ffffff');
     }
-    // Asegurar fila de encabezados completa (por si faltan columnas al final)
+
+    // Reescribir encabezados exactos (sin huecos)
     sh.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
     sh.getRange(1, 1, 1, HEADERS.length)
       .setFontWeight('bold')
       .setBackground('#e00b29')
       .setFontColor('#ffffff');
+    sh.getRange(2, 2, Math.max(sh.getLastRow(), 2), 2).setNumberFormat('@');
   }
 
   function writeHeaders_(sh) {

@@ -31,7 +31,7 @@
   const JARRAS_POR_JABA = 12;
   const FUNDO_DEFAULT = "Licapa";
   const FUNDO_OPTIONS = ["Licapa", "Licapa II"];
-  const APP_VERSION = "v364";
+  const APP_VERSION = "v365";
 
   function normalizeFundo(value) {
     const raw = String(value || "").trim();
@@ -4672,14 +4672,13 @@
     bindSessionToIdentity(id.dni);
     state.session.fundo = normalizeFundo(state.session.fundo || FUNDO_DEFAULT);
     state.session.fecha = todayISO();
-    if (!state.session.supervisorDni) {
-      state.session.supervisorDni = id.dni;
-      state.session.supervisorNombre = String(
-        identityFullName(id) || id.nombre || ""
-      )
-        .trim()
-        .toUpperCase();
-    }
+    // Siempre el supervisor del QR (no dejar nombre vacío ni viejo)
+    const dni = String(id.dni || "").replace(/\D/g, "");
+    const nombre = String(identityFullName(id) || id.nombre || "")
+      .trim()
+      .toUpperCase();
+    if (dni) state.session.supervisorDni = dni;
+    if (nombre) state.session.supervisorNombre = nombre;
     state.session.ready = true;
     saveStore();
   }
@@ -4860,12 +4859,23 @@
   }
 
   function buildGuiasSyncPayload() {
-    const identity = state.identity || getIdentity();
+    ensureGuidesSession();
+    const identity = state.identity || getIdentity() || {};
     const fecha = state.session.fecha || todayISO();
-    const supervisorDni =
-      state.session.supervisorDni || identity?.dni || "";
-    const supervisorNombre =
-      state.session.supervisorNombre || identity?.nombre || "";
+    // Nombre/DNI siempre desde el carnet QR (como en Grupo de Cosecha)
+    const supervisorDni = String(
+      identity.dni || state.session.supervisorDni || ""
+    ).replace(/\D/g, "");
+    const supervisorNombre = String(
+      identityFullName(identity) ||
+        identity.nombre ||
+        state.session.supervisorNombre ||
+        ""
+    )
+      .trim()
+      .toUpperCase();
+    if (supervisorDni) state.session.supervisorDni = supervisorDni;
+    if (supervisorNombre) state.session.supervisorNombre = supervisorNombre;
     const fundo = currentFundo();
     const grupoLic = currentGuidesLic();
     // Solo guías con dato real (no tarjetas vacías)
@@ -4908,10 +4918,13 @@
       fecha,
       fundo,
       grupoLic,
-      securityCode: identity?.dni || supervisorDni || "",
+      securityCode: supervisorDni,
       supervisorDni,
       supervisorNombre,
-      operator: identity,
+      operator: {
+        dni: supervisorDni,
+        nombre: supervisorNombre,
+      },
       session: {
         fecha,
         fundo,
@@ -4943,7 +4956,7 @@
   function persistAndQueueGuias() {
     saveStore();
     const payload = buildGuiasSyncPayload();
-    if (!payload.supervisorDni && !payload.supervisorNombre) return null;
+    if (!payload.supervisorDni || !payload.supervisorNombre) return null;
     if (!payload.guias?.length) return null;
     queueGuiasForCloud(payload);
     updateNetworkUI();
