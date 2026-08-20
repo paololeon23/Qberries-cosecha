@@ -132,7 +132,7 @@
 
   /**
    * ¿Este sendId ya se guardó bien?
-   * NO escribe en caché aquí (solo se marca después de guardar).
+   * Solo LEE la caché. Nunca marca aquí (si falla el Sheet, el reintento debe poder escribir).
    */
   function isDuplicateSend_(d) {
     var sendId = buildSendId_(d);
@@ -249,9 +249,21 @@
       if (numGuia) addUniqueLote_(numerosGuia, numGuia);
     }
 
-    if (Number(totals.jarras) > 0) jarras = number_(totals.jarras);
-    if (Number(totals.jabas) > 0) jabas = number_(totals.jabas);
-    if (Number(totals.guias) > 0) nGuias = number_(totals.guias);
+    // Totales: preferir lo calculado de las guías (evita contar tarjetas vacías).
+    // Solo usar totals del cliente si no hubo ítems útiles en el array.
+    if (nGuias === 0) {
+      if (Number(totals.jarras) > 0) jarras = number_(totals.jarras);
+      if (Number(totals.jabas) > 0) jabas = number_(totals.jabas);
+      if (Number(totals.guias) > 0) nGuias = number_(totals.guias);
+    } else {
+      // Jarras/jabas del cliente suelen venir del KPI (ok); N° guías = ítems reales
+      if (Number(totals.jarras) > 0) jarras = number_(totals.jarras);
+      if (Number(totals.jabas) > 0) jabas = number_(totals.jabas);
+    }
+
+    if (nGuias === 0 && !(jarras > 0 || jabas > 0)) {
+      throw new Error('No hay guías para guardar');
+    }
 
     var fecha =
       clean_(d.fecha || session.fecha) ||
@@ -416,12 +428,28 @@
   }
 
   function parseBody_(e) {
-    if (!e || !e.postData || !e.postData.contents) return {};
+    var raw = '';
+    if (e && e.postData && e.postData.contents != null) {
+      raw = String(e.postData.contents);
+    } else if (e && e.parameter && e.parameter.data) {
+      return {
+        action: String(e.parameter.action || 'registrarGuias').trim(),
+        data: e.parameter.data
+      };
+    }
+    raw = String(raw || '').trim();
+    if (!raw) return {};
     try {
-      return JSON.parse(e.postData.contents);
+      return JSON.parse(raw);
     } catch (err) {
+      var m = raw.match(/\{[\s\S]*\}/);
+      if (m) {
+        try {
+          return JSON.parse(m[0]);
+        } catch (ignore) {}
+      }
       var out = {};
-      var parts = String(e.postData.contents).split('&');
+      var parts = raw.split('&');
       for (var i = 0; i < parts.length; i++) {
         var kv = parts[i].split('=');
         if (kv.length >= 2) {
@@ -460,4 +488,36 @@
   /** Prueba rápida desde el editor */
   function testPing() {
     Logger.log(doGet({ parameter: { action: 'ping' } }).getContent());
+  }
+
+  /** Simula un POST de la app (sin escribir si falla validación). */
+  function testRegistrarGuias() {
+    var fake = {
+      postData: {
+        contents: JSON.stringify({
+          action: 'registrarGuias',
+          data: {
+            sendId: 'test-editor-' + Date.now(),
+            savedAt: new Date().toISOString(),
+            fecha: Utilities.formatDate(new Date(), 'America/Lima', 'yyyy-MM-dd'),
+            fundo: 'Licapa',
+            grupoLic: 'LIC 01',
+            supervisorNombre: 'TEST EDITOR',
+            supervisorDni: '00000000',
+            guias: [
+              {
+                numeroGuia: '123456',
+                lote: '5',
+                modulo: 'M1',
+                turno: '1',
+                jarras: 12,
+                jabas: 1
+              }
+            ],
+            totals: { guias: 1, jarras: 12, jabas: 1 }
+          }
+        })
+      }
+    };
+    Logger.log(doPost(fake).getContent());
   }

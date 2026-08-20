@@ -31,7 +31,7 @@
   const JARRAS_POR_JABA = 12;
   const FUNDO_DEFAULT = "Licapa";
   const FUNDO_OPTIONS = ["Licapa", "Licapa II"];
-  const APP_VERSION = "v361";
+  const APP_VERSION = "v364";
 
   function normalizeFundo(value) {
     const raw = String(value || "").trim();
@@ -165,19 +165,26 @@
   async function postGuiasToAppsScript(data) {
     const url = scriptGuiasUrl();
     if (!url) throw new Error("Falta URL de guías en api-config.js");
+    if (!data || typeof data !== "object") {
+      return { ok: false, message: "Payload de guías vacío" };
+    }
     const res = await fetch(url, {
       method: "POST",
       redirect: "follow",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({
         action: "registrarGuias",
-        data: data || {},
+        data,
       }),
     });
     const text = await res.text();
     const parsed = parseAppsScriptJson(text);
     if (!parsed) {
-      console.warn("postGuiasToAppsScript empty/invalid", res.status, text?.slice?.(0, 200));
+      console.warn(
+        "postGuiasToAppsScript empty/invalid",
+        res.status,
+        text?.slice?.(0, 200)
+      );
       return {
         ok: false,
         parsed: null,
@@ -185,6 +192,7 @@
         message: "El servidor no respondió bien. Reintente.",
       };
     }
+    // ok:true aunque sea duplicate (reintento seguro del mismo sendId)
     if (parsed.ok !== true) {
       return {
         ok: false,
@@ -4300,6 +4308,17 @@
       return;
     }
 
+    // Si aún no está guardado, exige selects (lote) antes de abrir vista previa
+    if (
+      !isSnapshotSaved(snapshot) &&
+      !validateHarvestSelectsBeforeSave(snapshot, {
+        requireWorkers: true,
+        focus: true,
+      })
+    ) {
+      return;
+    }
+
     if (!isSnapshotSaved(snapshot)) rememberPreviewDraft(snapshot);
     openExportPreview(snapshot, { saved: isSnapshotSaved(snapshot) });
   }
@@ -4769,12 +4788,60 @@
   }
 
   function openGuidesSummary() {
+    syncGuidesFromDom();
+    saveStore();
+    if (!validateGuidesSelectsBeforeSave()) return;
     const modal = $("#guidesSummaryModal");
     const card = $("#guidesSummaryCard");
     if (!modal || !card) return;
     renderGuidesSummaryCard();
     modal.hidden = false;
     hydrateIcons(modal);
+  }
+
+  /**
+   * Obliga a elegir los SELECT antes de resumen/guardar guías:
+   * Fundo, LIC y lote en cada guía con datos.
+   */
+  function validateGuidesSelectsBeforeSave() {
+    if (!String(state.session.fundo || "").trim()) {
+      toast("Seleccione el fundo");
+      openPicker("fundo");
+      return false;
+    }
+    if (!FUNDO_OPTIONS.includes(normalizeFundo(state.session.fundo))) {
+      toast("Seleccione el fundo");
+      openPicker("fundo");
+      return false;
+    }
+    if (!isValidGuidesLic_(state.session.grupoLic)) {
+      toast("Seleccione el LIC (01–50) o No tengo por ahora");
+      openPicker("guidesLic");
+      return false;
+    }
+
+    const guias = state.guias || [];
+    let withData = 0;
+    for (const g of guias) {
+      const numG = normalizeNumeroGuia(g.numeroGuia);
+      const lote = String(g.lote || "").trim();
+      const hasQty = num(g.jarras) > 0 || num(g.jabas) > 0;
+      const hasAny = !!(numG || lote || hasQty || String(g.horaRecojo || "").trim());
+      if (!hasAny) continue;
+      withData += 1;
+      if (!lote) {
+        toast("Seleccione el lote de cada guía");
+        state.expandedGuiaId = g.id;
+        renderCards();
+        openPicker("lote", g.id);
+        return false;
+      }
+    }
+    if (!withData) {
+      toast("Complete al menos una guía con lote");
+      return false;
+    }
+    return true;
   }
 
   function closeGuidesSummary() {
@@ -4801,7 +4868,35 @@
       state.session.supervisorNombre || identity?.nombre || "";
     const fundo = currentFundo();
     const grupoLic = currentGuidesLic();
-    const t0 = totals();
+    // Solo guías con dato real (no tarjetas vacías)
+    const guias = (state.guias || [])
+      .map((g) => ({
+        id: g.id,
+        numeroGuia: g.numeroGuia,
+        lote: g.lote,
+        modulo: g.modulo,
+        turno: g.turno,
+        variedad: g.variedad,
+        jarras: num(g.jarras),
+        jabas: num(g.jabas),
+        horaRecojo: g.horaRecojo,
+      }))
+      .filter(
+        (g) =>
+          normalizeNumeroGuia(g.numeroGuia) ||
+          String(g.lote || "").trim() ||
+          g.jarras > 0 ||
+          g.jabas > 0
+      );
+    const t0 = guias.reduce(
+      (acc, g) => {
+        acc.guias += 1;
+        acc.jarras += num(g.jarras);
+        acc.jabas += num(g.jabas);
+        return acc;
+      },
+      { guias: 0, jarras: 0, jabas: 0 }
+    );
     const id = guiasCloudQueueId(fecha, supervisorDni, fundo);
     const savedAt = new Date().toISOString();
     return {
@@ -4824,17 +4919,7 @@
         supervisorDni,
         supervisorNombre,
       },
-      guias: (state.guias || []).map((g) => ({
-        id: g.id,
-        numeroGuia: g.numeroGuia,
-        lote: g.lote,
-        modulo: g.modulo,
-        turno: g.turno,
-        variedad: g.variedad,
-        jarras: g.jarras,
-        jabas: g.jabas,
-        horaRecojo: g.horaRecojo,
-      })),
+      guias,
       totals: {
         guias: t0.guias,
         jarras: t0.jarras,
@@ -4859,6 +4944,7 @@
     saveStore();
     const payload = buildGuiasSyncPayload();
     if (!payload.supervisorDni && !payload.supervisorNombre) return null;
+    if (!payload.guias?.length) return null;
     queueGuiasForCloud(payload);
     updateNetworkUI();
     return payload;
@@ -4885,15 +4971,12 @@
     e?.stopPropagation?.();
     if (!requireQrLogin()) return;
     if (state.savingGuias) return;
+    syncGuidesFromDom();
     if (!state.guias.length) {
       toast("No hay guías para guardar");
       return;
     }
-    if (!isValidGuidesLic_(state.session.grupoLic)) {
-      toast("Seleccione LIC (01–50) o No tengo por ahora");
-      openPicker("guidesLic");
-      return;
-    }
+    if (!validateGuidesSelectsBeforeSave()) return;
 
     const btnSave = $("#btnSaveGuidesSummary");
     const btnCancel = $("#btnCancelGuidesSummary");
@@ -4921,6 +5004,9 @@
     // Tras guardar: limpiar inputs / guías de pantalla (sesión del supervisor se mantiene)
     state.guias = [emptyGuia()];
     state.expandedGuiaId = state.guias[0].id;
+    // Pedir LIC de nuevo en el próximo registro
+    state.session.grupoLic = "";
+    renderGuidesLicLabel();
     saveStore();
 
     closeGuidesSummary();
@@ -5411,25 +5497,59 @@
       focusNextMissingHarvestType();
       return null;
     }
-    if (!state.harvest.lote) {
-      toast("Seleccione el lote antes de continuar");
-      $("#btnHarvestLote")?.focus();
-      return null;
-    }
-    if (!(state.harvest.workers || []).length) {
-      toast("Agregue al menos un trabajador");
-      $("#harvestWorkerDni")?.focus();
-      return null;
-    }
-    if (harvestTotal() <= 0) {
-      toast("Ingrese las jarras de mañana o tarde");
+    if (!validateHarvestSelectsBeforeSave(null, { requireWorkers: true })) {
       return null;
     }
     const snapshot =
       snapshotFromTypeDraft(state.harvest.tipo) || makeHarvestSnapshot();
+    if (!validateHarvestSelectsBeforeSave(snapshot, { requireWorkers: true })) {
+      return null;
+    }
     rememberPreviewDraft(snapshot);
     openExportPreview(snapshot, { saved: false });
     return snapshot;
+  }
+
+  /**
+   * Obliga selects de conteo (tipo + lote) antes de resumen/guardar.
+   * No deja pasar Excel sin lote aunque el modal ya esté abierto.
+   */
+  function validateHarvestSelectsBeforeSave(snapshot, opts = {}) {
+    const requireWorkers = opts.requireWorkers !== false;
+    const focus = opts.focus !== false;
+    const tipo = normalizeHarvestType(
+      snapshot?.tipo || state.harvest?.tipo || ""
+    );
+    if (!HARVEST_TYPES.some((item) => item.key === tipo)) {
+      toast("Seleccione el tipo (Suma, Resta o Descarte)");
+      if (focus) openPicker("harvestType");
+      return false;
+    }
+    const lote = String(
+      snapshot?.lote || state.harvest?.lote || ""
+    ).trim();
+    if (!lote) {
+      toast("Seleccione el lote antes de continuar");
+      if (focus) {
+        $("#btnHarvestLote")?.focus();
+        openPicker("harvestLote");
+      }
+      return false;
+    }
+    if (requireWorkers) {
+      const workers = snapshot?.workers || state.harvest?.workers || [];
+      if (!workers.length) {
+        toast("Agregue al menos un trabajador");
+        if (focus) $("#harvestWorkerDni")?.focus();
+        return false;
+      }
+      const total = snapshot ? snapshotTotal(snapshot) : harvestTotal();
+      if (total <= 0) {
+        toast("Ingrese las jarras de mañana o tarde");
+        return false;
+      }
+    }
+    return true;
   }
 
   /** Guarda 1 sola tabla por tipo/día (reemplaza si existiera). */
@@ -5516,6 +5636,15 @@
       renderExportPreviewDayStatus();
       return snapshot;
     }
+    // Revalidar selects aunque el modal ya esté abierto
+    if (
+      !validateHarvestSelectsBeforeSave(snapshot, {
+        requireWorkers: true,
+        focus: true,
+      })
+    ) {
+      return null;
+    }
     const btn = $("#btnCommitHarvest");
     setBtnLoading(btn, true, "Guardando…");
     showAppLoader("Guardando registro…");
@@ -5585,21 +5714,9 @@
   function renderExportPreviewTypes(current) {
     const root = $("#exportPreviewTypes");
     if (!root) return;
-    const active = current || state.activeExportSnapshot;
-    const status = harvestDayTypeStatus();
-    const map = previewSnapshotsMap(active);
-    // Siempre visibles: así el supervisor ve qué archivos ya están listos.
-    root.hidden = false;
-    root.innerHTML = status
-      .map((item) => {
-        const snapshot = map[item.key] || item.snapshot;
-        const on = snapshot && snapshot.id === active?.id;
-        const mark = item.sent ? " ✓✓" : item.saved || snapshot ? " ✓" : "";
-        return `<button type="button" class="${on ? "is-on" : ""}" data-preview-type="${
-          item.key
-        }" ${snapshot ? "" : "disabled"}>${escapeHtml(item.short)}${mark}</button>`;
-      })
-      .join("");
+    // Ya no se muestran Suma/Resta/Descarte aquí: se elige en el checklist.
+    root.hidden = true;
+    root.innerHTML = "";
     renderExportPreviewDayStatus();
   }
 
