@@ -17,13 +17,27 @@
   const AUTH_SESSION_KEY = "qb-supervisores-auth-v1";
   const HARVEST_KEY = "qb-supervisores-harvest-v1";
   const HARVEST_HISTORY_KEY = "qb-supervisores-excel-history-v1";
+  const GUIAS_HISTORY_KEY = "qb-supervisores-guias-history-v1";
   const SESSION_MANUAL_PERSONAS_KEY = "qb-supervisores-manual-personas-v1";
   const SESSION_WORKERS_KEY = "qb-supervisores-session-workers-v1";
+  const SAVED_WORKERS_KEY = "qb-supervisores-saved-workers-v2";
   const LOGOUT_FLAG_KEY = "qb-supervisores-logout-v1";
   const CACHE_DAY_KEY = "qb-supervisores-cache-day-v1";
   const HISTORY_TTL_MS = 48 * 60 * 60 * 1000;
   const HISTORY_PAGE_SIZE = 8;
-  const APP_VERSION = "v247";
+  const JARRAS_POR_JABA = 12;
+  const FUNDO_DEFAULT = "Licapa";
+  const FUNDO_OPTIONS = ["Licapa", "Licapa II"];
+  const APP_VERSION = "v330";
+
+  function normalizeFundo(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return FUNDO_DEFAULT;
+    const hit = FUNDO_OPTIONS.find(
+      (f) => f.toLowerCase() === raw.toLowerCase()
+    );
+    return hit || FUNDO_DEFAULT;
+  }
   const HARVEST_TYPES = [
     { key: "suma-jarras", label: "Suma de jarras", short: "Suma", observacion: "SUMAR JARRAS" },
     { key: "descuento-jarras", label: "Descuento jarras", short: "Resta", observacion: "DESCUENTO JARRAS" },
@@ -34,15 +48,140 @@
   const PASSWORD_REQUIRED = false;
   /** Por ahora: tras vincular NO pasar a Datos de campo */
   const SESSION_FORM_ENABLED = false;
-  const PAGE = document.body?.dataset?.page || "scan";
+  function getPage() {
+    return document.body?.dataset?.page || "scan";
+  }
+  const TAB_SHELL_LS_KEY = "qb-tab-shells-v2";
+  const tabShellCache = new Map();
+
+  /** Unifica /registro/ y /registro/index.html para la caché de pestañas. */
+  function normalizeTabShellKey(pathname) {
+    try {
+      let p = String(pathname || "/");
+      if (!p.startsWith("/")) p = `/${p}`;
+      p = p.replace(/\/index\.html$/i, "/");
+      if (p.length > 1 && !p.endsWith("/")) p += "/";
+      return p;
+    } catch {
+      return String(pathname || "/");
+    }
+  }
+
+  function getTabShell(path) {
+    const key = normalizeTabShellKey(path);
+    return tabShellCache.get(key) || tabShellCache.get(path) || null;
+  }
+
+  function setTabShell(path, data) {
+    const key = normalizeTabShellKey(path);
+    if (!data?.html) return;
+    tabShellCache.set(key, data);
+    persistTabShellToStorage(key, data);
+  }
+
+  function clearTabShellStorage() {
+    tabShellCache.clear();
+    try {
+      localStorage.removeItem(TAB_SHELL_LS_KEY);
+      localStorage.removeItem("qb-tab-shells-v1");
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function loadTabShellsFromStorage() {
+    try {
+      const raw =
+        localStorage.getItem(TAB_SHELL_LS_KEY) ||
+        localStorage.getItem("qb-tab-shells-v1") ||
+        "{}";
+      const parsed = JSON.parse(raw);
+      Object.entries(parsed).forEach(([path, data]) => {
+        if (data && typeof data.html === "string" && data.html) {
+          const key = normalizeTabShellKey(path);
+          tabShellCache.set(key, {
+            html: data.html,
+            page: data.page || "",
+            title: data.title || "QBerries",
+          });
+        }
+      });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function persistTabShellToStorage(path, data) {
+    if (!path || !data?.html) return;
+    try {
+      const key = normalizeTabShellKey(path);
+      const stored = JSON.parse(localStorage.getItem(TAB_SHELL_LS_KEY) || "{}");
+      stored[key] = {
+        html: data.html,
+        page: data.page || "",
+        title: data.title || "QBerries",
+        savedAt: new Date().toISOString(),
+      };
+      localStorage.setItem(TAB_SHELL_LS_KEY, JSON.stringify(stored));
+    } catch {
+      /* ignore */
+    }
+  }
   const ROUTES = {
     scan: "/index.html",
-    inicio: "/inicio/index.html",
-    vinculo: "/vinculo/index.html",
     registro: "/registro/index.html",
+    vinculo: "/vinculo/index.html",
   };
   /** En APK la UI vive en localhost; las funciones van al sitio Netlify. */
   const CLOUD_ORIGIN = "https://qberries-cosecha.netlify.app";
+
+  /** Guías: fetch directo a Apps Script (no pasa por Netlify Functions). */
+  function scriptGuiasUrl() {
+    const fromCfg = String(window.QB_SCRIPT?.GUIAS || "").trim();
+    return (
+      fromCfg ||
+      "https://script.google.com/macros/s/AKfycbxVryHDgOjOdiYRhFjBN1dxy6ozSzCwRMFKRW-6QM9h97Fraclys4ftTCM6Z9-vL5BX/exec"
+    );
+  }
+
+  function isGuiasCloudAction(action) {
+    return (
+      action === "registrarGuias" || action === "sync_guias_cosecha"
+    );
+  }
+
+  /**
+   * POST directo al /exec de guías (como conteo en otras apps).
+   * text/plain evita preflight CORS con Apps Script.
+   */
+  async function postGuiasToAppsScript(data) {
+    const url = scriptGuiasUrl();
+    if (!url) throw new Error("Falta URL de guías en api-config.js");
+    const res = await fetch(url, {
+      method: "POST",
+      redirect: "follow",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        action: "registrarGuias",
+        data: data || {},
+      }),
+    });
+    const text = await res.text();
+    let parsed = null;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      const m = String(text || "").match(/\{[\s\S]*\}/);
+      if (m) {
+        try {
+          parsed = JSON.parse(m[0]);
+        } catch {
+          parsed = null;
+        }
+      }
+    }
+    return { ok: !!(parsed && parsed.ok === true), parsed, status: res.status };
+  }
   function isNativeApp() {
     try {
       const cap = window.Capacitor?.getPlatform?.() || "";
@@ -51,9 +190,91 @@
       return false;
     }
   }
+  let deferredInstallPrompt = null;
+  function isPwaInstalled() {
+    try {
+      if (isNativeApp()) return true;
+      if (window.matchMedia("(display-mode: standalone)").matches) return true;
+      if (window.matchMedia("(display-mode: fullscreen)").matches) return true;
+      if (navigator.standalone === true) return true;
+    } catch {
+      /* ignore */
+    }
+    return false;
+  }
+  function syncProfileAppTools() {
+    const ver = $("#profileAppVersion");
+    if (ver) ver.textContent = `Versión ${APP_VERSION}`;
+    const install = $("#btnProfileInstall");
+    const done = $("#profileAppInstalled");
+    const installed = isPwaInstalled();
+    if (install) {
+      install.hidden = installed;
+      if (installed) install.setAttribute("hidden", "");
+      else install.removeAttribute("hidden");
+    }
+    if (done) done.hidden = !installed;
+  }
+  async function installApp(button) {
+    if (isPwaInstalled()) {
+      toast("La app ya está instalada en este celular");
+      syncProfileAppTools();
+      return;
+    }
+    if (deferredInstallPrompt) {
+      try {
+        if (button) setBtnLoading(button, true, "Instalando…");
+        deferredInstallPrompt.prompt();
+        const choice = await deferredInstallPrompt.userChoice;
+        if (choice?.outcome === "accepted") {
+          deferredInstallPrompt = null;
+          toast("App instalada");
+          syncProfileAppTools();
+          if (button) setBtnLoading(button, false);
+          return;
+        }
+      } catch {
+        /* el sistema no mostró el diálogo */
+      }
+      if (button) setBtnLoading(button, false);
+    }
+    location.href = "/instalar/";
+  }
+  function isLocalDev() {
+    const host = String(location.hostname || "");
+    return host === "localhost" || host === "127.0.0.1";
+  }
   function apiUrl(path) {
     const rel = path.startsWith("/") ? path : `/${path}`;
-    return isNativeApp() ? `${CLOUD_ORIGIN}${rel}` : rel;
+    return isNativeApp() || isLocalDev() ? `${CLOUD_ORIGIN}${rel}` : rel;
+  }
+  /** Catálogos desde el mismo origen (PWA Netlify + service worker). */
+  function assetUrl(path) {
+    const rel = path.startsWith("/") ? path : `/${path}`;
+    return rel;
+  }
+  function reloadWithBust() {
+    const url = new URL(location.href);
+    url.searchParams.set("_cb", String(Date.now()));
+    setTimeout(() => location.replace(url.href), 350);
+  }
+  async function fetchTabShellHtml(route, forceCloud = false) {
+    const urls = [];
+    if ((forceCloud || isNativeApp()) && navigator.onLine) {
+      urls.push(`${CLOUD_ORIGIN}${route}?v=${APP_VERSION}&_=${Date.now()}`);
+    }
+    urls.push(route);
+    for (const url of urls) {
+      try {
+        const res = await fetch(url, {
+          cache: forceCloud || isNativeApp() ? "no-store" : "force-cache",
+        });
+        if (res.ok) return await res.text();
+      } catch {
+        /* siguiente origen */
+      }
+    }
+    throw new Error("tab shell fetch failed");
   }
   const API = {
     login: apiUrl("/.netlify/functions/login"),
@@ -70,7 +291,7 @@
   let loaderFailsafe = 0;
   const LOADER_MIN_MS = 520;
   const LOADER_MAX_MS = 2800;
-  const TAB_PAGES = ["inicio", "registro", "vinculo"];
+  const TAB_PAGES = ["registro", "vinculo"];
 
   function isTabPage(page) {
     return TAB_PAGES.includes(page);
@@ -247,7 +468,6 @@
   applyPlatformClass();
   syncComputerBlock();
   window.addEventListener("resize", syncComputerBlock);
-  paintGreeting("#homeSupervisor", getIdentity());
   paintGreeting("#harvestSupervisor", getIdentity());
 
   try {
@@ -304,10 +524,135 @@
   function isInternalTabUrl(target) {
     try {
       const path = new URL(target, location.origin).pathname.replace(/index\.html$/i, "");
-      return /^\/(inicio|registro|vinculo)\/?$/i.test(path);
+      return /^\/(registro|vinculo)\/?$/i.test(path);
     } catch {
       return false;
     }
+  }
+
+  function parseTabShell(html) {
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const phone = doc.querySelector("#phone");
+    return {
+      html: phone ? phone.innerHTML : "",
+      page: doc.body?.dataset?.page || "",
+      title: doc.title || "QBerries",
+    };
+  }
+
+  function cacheCurrentTabShell() {
+    const page = getPage();
+    if (!isTabPage(page)) return;
+    const phone = $("#phone");
+    if (!phone) return;
+    try {
+      const cacheKey = normalizeTabShellKey(
+        new URL(ROUTES[page], location.origin).pathname
+      );
+      // Guardar siempre con Conteo visible (no persistir Guías abierta)
+      const wasGuias =
+        page === "registro" &&
+        ($("#harvestScreen")?.dataset?.panel === "guias" ||
+          $("#guidesSheet")?.classList?.contains("is-active"));
+      if (wasGuias) applyGuidesPanel(false);
+      const entry = {
+        html: phone.innerHTML,
+        page,
+        title: document.title,
+      };
+      if (wasGuias) applyGuidesPanel(true);
+      setTabShell(cacheKey, entry);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function switchTabClient(target, replace = false) {
+    closePicker();
+    closeModal();
+    closeSheets();
+    const url = new URL(target, location.origin + "/");
+    const cacheKey = normalizeTabShellKey(url.pathname);
+    let cached = getTabShell(cacheKey);
+    if (!cached) {
+      loadTabShellsFromStorage();
+      cached = getTabShell(cacheKey);
+    }
+    if (!cached) {
+      try {
+        const html = await fetchTabShellHtml(
+          url.pathname + url.search,
+          false
+        );
+        cached = parseTabShell(html);
+        setTabShell(cacheKey, cached);
+      } catch {
+        loadTabShellsFromStorage();
+        cached = getTabShell(cacheKey);
+      }
+    }
+    const phone = $("#phone");
+    if (!phone || !cached?.html) throw new Error("tab shell missing phone");
+    cacheCurrentTabShell();
+    phone.innerHTML = cached.html;
+    document.body.dataset.page = cached.page;
+    document.title = cached.title;
+    state._guidesWarmed = false;
+    const href = url.pathname + url.search;
+    if (replace) history.replaceState({ qbTab: cached.page }, "", href);
+    else history.pushState({ qbTab: cached.page }, "", href);
+    bindPhoneHandlers();
+    activateTabPage(cached.page);
+    window.scrollTo(0, 0);
+  }
+
+  function activateTabPage(page) {
+    closePicker();
+    closeModal();
+    closeSheets();
+    closeWorkerIdModal();
+    hydrateIcons($("#phone") || document);
+    updateNetworkUI();
+    syncTopnavVisibility();
+    refreshTopnav();
+    if (!hasQrLogin()) return;
+    const id = state.identity || getIdentity();
+    if (page === "registro") {
+      paintGreeting("#harvestSupervisor", id);
+      showHarvestHome(id);
+      // Por defecto Conteo; openRequestedTab abre Guías solo si ?tab=guias
+      let wantGuias = false;
+      try {
+        wantGuias = new URLSearchParams(location.search).get("tab") === "guias";
+      } catch {
+        wantGuias = false;
+      }
+      if (!wantGuias) applyGuidesPanel(false);
+      loadCatalogs().catch(() => {});
+    } else if (page === "vinculo") {
+      showVinculoScreen(id);
+    }
+    openRequestedTab();
+  }
+
+  async function warmTabShells(forceCloud = false) {
+    const routes = [ROUTES.registro, ROUTES.vinculo];
+    await Promise.all(
+      routes.map(async (route) => {
+        try {
+          const path = normalizeTabShellKey(
+            new URL(route, location.origin).pathname
+          );
+          if (!forceCloud && getTabShell(path)) return;
+          const html = await fetchTabShellHtml(route, forceCloud);
+          const shell = parseTabShell(html);
+          setTabShell(path, shell);
+        } catch {
+          /* offline: la pestaña actual ya está en pantalla */
+        }
+      })
+    );
+    cacheCurrentTabShell();
   }
 
   function beginNavigation(target, replace = false, opts = {}) {
@@ -319,23 +664,40 @@
         document.documentElement.classList.contains("has-session"));
     if (tabSwitch) {
       try {
-        sessionStorage.setItem("qb-tab-nav", "1");
         sessionStorage.removeItem("qb-action-loader");
-      } catch {
-        /* ignore */
-      }
-      document.body.classList.add("app-tab-switch");
-    } else {
-      const msg = opts.loaderMsg || "Cargando…";
-      showAppLoader(msg);
-      try {
-        sessionStorage.setItem("qb-action-loader", msg);
         sessionStorage.removeItem("qb-tab-nav");
       } catch {
         /* ignore */
       }
-      document.body.classList.add("app-navigating");
+      document.body.classList.add("app-tab-switch");
+      switchTabClient(target, replace)
+        .catch(() => {
+          let href = target;
+          try {
+            href = new URL(target, location.origin + "/").href;
+          } catch {
+            href = target;
+          }
+          if (replace) location.replace(href);
+          else location.href = href;
+        })
+        .finally(() => {
+          window.setTimeout(() => {
+            navigationLocked = false;
+            document.body.classList.remove("app-tab-switch");
+          }, 32);
+        });
+      return;
     }
+    const msg = opts.loaderMsg || "Cargando…";
+    showAppLoader(msg);
+    try {
+      sessionStorage.setItem("qb-action-loader", msg);
+      sessionStorage.removeItem("qb-tab-nav");
+    } catch {
+      /* ignore */
+    }
+    document.body.classList.add("app-navigating");
     let href = target;
     try {
       href = new URL(target, location.origin + "/").href;
@@ -355,11 +717,11 @@
     const currentPath = location.pathname.replace(/index\.html$/, "");
     const targetPath = new URL(target, location.origin).pathname.replace(/index\.html$/, "");
     if (currentPath === targetPath && !location.search) return;
-    /* Sin loader solo al saltar entre pestañas ya abiertas (Inicio ↔ Registro ↔ Vincular). */
+    /* Sin loader solo al saltar entre pestañas ya abiertas (Registro ↔ Vincular). */
     const tabSwitch =
       opts.tabSwitch ??
       (isTabPage(page) &&
-        isTabPage(PAGE) &&
+        isTabPage(getPage()) &&
         document.documentElement.classList.contains("has-session"));
     beginNavigation(target, replace, { tabSwitch, loaderMsg: opts.loaderMsg });
   }
@@ -369,6 +731,63 @@
    * del documento (iPhone) o la cambia tarde (Android). Se mide la ventana
    * visible real para que la app ocupe justo ese alto y no quede un hueco.
    */
+  let applyViewportMetrics = () => {};
+
+  /** Lee env(safe-area-inset-*) y, en Android, refuerza con visualViewport. */
+  function readEnvInset(edge) {
+    const probe = document.createElement("div");
+    probe.style.cssText =
+      "position:fixed;visibility:hidden;pointer-events:none;padding-" +
+      edge +
+      ":env(safe-area-inset-" +
+      edge +
+      ", 0px);";
+    document.body.appendChild(probe);
+    const val =
+      parseFloat(
+        getComputedStyle(probe).getPropertyValue("padding-" + edge)
+      ) || 0;
+    probe.remove();
+    return val;
+  }
+
+  function syncSystemInsets() {
+    const root = document.documentElement;
+    if (!root.classList.contains("is-android")) return;
+    let bottom = readEnvInset("bottom");
+    const top = readEnvInset("top");
+    const vv = window.visualViewport;
+    if (vv && !document.body?.classList.contains("kb-open")) {
+      const layoutH = window.innerHeight;
+      const visibleH = Math.round(vv.height);
+      const topOff = Math.max(0, Math.round(vv.offsetTop));
+      const chrome = Math.max(0, layoutH - visibleH - topOff);
+      if (chrome > 0 && chrome < 140) bottom = Math.max(bottom, chrome);
+    }
+    root.style.setProperty("--nav-safe-bottom", `${bottom}px`);
+    root.style.setProperty("--nav-bar-total", `calc(var(--nav-inner-h) + ${bottom}px)`);
+    root.style.setProperty("--android-safe-top", `${top}px`);
+  }
+
+  function resetViewportLayout() {
+    document.body?.classList.remove("kb-open");
+    window.scrollTo(0, 0);
+    document.documentElement.scrollTop = 0;
+    if (document.body) document.body.scrollTop = 0;
+    applyViewportMetrics();
+    if (document.documentElement.classList.contains("is-android")) {
+      syncSystemInsets();
+      window.setTimeout(() => {
+        applyViewportMetrics();
+        syncSystemInsets();
+      }, 100);
+      window.setTimeout(() => {
+        applyViewportMetrics();
+        syncSystemInsets();
+      }, 320);
+    }
+  }
+
   function setupViewportMetrics() {
     const root = document.documentElement;
     const vv = window.visualViewport;
@@ -377,9 +796,20 @@
     const activeField = () =>
       document.activeElement?.closest?.("input, textarea, select") || null;
 
+    const isOverlayField = (field) =>
+      !!field?.closest?.(
+        ".manual-worker-backdrop, .modal-backdrop, .picker-backdrop, .export-preview-backdrop, .check-pick-backdrop, .profile-modal-backdrop"
+      );
+
     const scrollFieldIntoView = (field) => {
+      if (
+        document.documentElement.classList.contains("is-android") &&
+        isOverlayField(field)
+      ) {
+        return;
+      }
       const scroller = field.closest(
-        ".harvest-scroll, .vinculo-scroll, .home-scroll, .security-screen, .lock-screen, .export-preview, .picker, .manual-worker, .check-pick"
+        ".harvest-scroll, .guides-scroll, .guides-sheet, .vinculo-scroll, .home-scroll, .security-screen, .lock-screen, .export-preview, .picker, .manual-worker, .check-pick"
       );
       if (scroller) {
         const rect = field.getBoundingClientRect();
@@ -408,6 +838,7 @@
       const u = Math.max(0.82, Math.min(vw / 390, 1.14));
       root.style.setProperty("--u", `${u}px`);
       document.body?.classList.toggle("kb-open", open);
+      if (root.classList.contains("is-android") && !open) syncSystemInsets();
       // iPhone empuja toda la ventana hacia arriba para destapar el campo y
       // debajo asoma el fondo del sistema (franja negra). No resetear mientras
       // hay un campo enfocado: se veía rebote y el input quedaba tapado otra vez.
@@ -431,18 +862,31 @@
     };
 
     apply();
+    applyViewportMetrics = apply;
+    syncSystemInsets();
     if (vv) {
       vv.addEventListener("resize", schedule);
       vv.addEventListener("scroll", schedule);
     }
     window.addEventListener("resize", schedule);
     window.addEventListener("scroll", schedule, { passive: true });
-    window.addEventListener("orientationchange", () => setTimeout(apply, 250));
+    window.addEventListener("orientationchange", () => {
+      setTimeout(() => {
+        apply();
+        syncSystemInsets();
+      }, 250);
+    });
     document.addEventListener("focusin", (e) => {
       const field = e.target?.closest?.("input, textarea, select");
       if (!field) return;
-      setTimeout(() => {
-        apply();
+        setTimeout(() => {
+          apply();
+        if (
+          document.documentElement.classList.contains("is-android") &&
+          isOverlayField(field)
+        ) {
+          return;
+        }
         if (isFieldCovered(field)) scrollFieldIntoView(field);
       }, 280);
     });
@@ -450,7 +894,10 @@
       setTimeout(() => {
         if (activeField()) return;
         apply();
-      }, 80);
+        if (document.documentElement.classList.contains("is-android")) {
+          resetViewportLayout();
+        }
+      }, document.documentElement.classList.contains("is-android") ? 180 : 80);
     });
   }
 
@@ -500,16 +947,21 @@
     [
       "/",
       "/index.html",
-      "/inicio/index.html",
       "/registro/index.html",
       "/vinculo/index.html",
       "/styles.css",
       "/app.js",
       "/icons.js",
+      "/native-bridge.js",
       "/data/supervisores-cosecha.json",
       "/data/lotes-licapa.json",
       "/data/grupos-licapa.json",
       "/data/trabajadores.json",
+      "/vendor/jsQR.min.js",
+      "/vendor/xlsx.full.min.js",
+      "/vendor/qrcode.min.js",
+      "/vendor/jspdf.umd.min.js",
+      "/vendor/sweetalert2.all.min.js",
     ].forEach((url) => {
       fetch(url).catch(() => {});
     });
@@ -541,35 +993,86 @@
 
   /** @typedef {{
    *  id: string,
-   *  grupo: string,
+   *  numeroGuia: string,
+   *  lote: string,
+   *  codLote: string,
    *  modulo: string,
    *  turno: string,
-   *  lote: string,
    *  variedad: string,
    *  jarras: number|string,
-   *  jabas: number|string
+   *  jabas: number|string,
+   *  horaRecojo: string,
    * }} Guia */
 
+  const GUIA_NUM_LEN = 6;
+
+  function normalizeNumeroGuia(raw) {
+    return String(raw || "").replace(/\D/g, "").slice(0, GUIA_NUM_LEN);
+  }
+
+  function formatNumeroGuiaDisplay(raw) {
+    const digits = normalizeNumeroGuia(raw);
+    return digits ? `N° ${digits.padStart(GUIA_NUM_LEN, "0")}` : "";
+  }
+
+  function formatNumeroGuiaInput(raw) {
+    const digits = normalizeNumeroGuia(raw);
+    return digits ? digits.padStart(GUIA_NUM_LEN, "0") : "";
+  }
+
+  const emptyGuia = () => ({
+    id: uid(),
+    numeroGuia: "",
+    lote: "",
+    codLote: "",
+    modulo: "",
+    turno: "",
+    variedad: "",
+    jarras: "",
+    jabas: "",
+    horaRecojo: "",
+  });
+
+  function migrateGuiaList(raw) {
+    const g = raw && typeof raw === "object" ? raw : {};
+    const fromLinea = (ln, id) => ({
+      ...emptyGuia(),
+      id: id || ln?.id || uid(),
+      numeroGuia: normalizeNumeroGuia(ln?.numeroGuia || g.numeroGuia || ""),
+      lote: ln?.lote || "",
+      codLote: ln?.codLote || "",
+      modulo: ln?.modulo || "",
+      turno: ln?.turno || "",
+      variedad: ln?.variedad || "",
+      jarras: ln?.jarras ?? "",
+      jabas: ln?.jabas ?? "",
+      horaRecojo: ln?.horaRecojo || "",
+    });
+    if (Array.isArray(g.lineas) && g.lineas.length) {
+      return g.lineas.map((ln, i) => fromLinea(ln, i === 0 ? g.id : undefined));
+    }
+    if (
+      g.numeroGuia ||
+      g.lote ||
+      g.jarras ||
+      g.jabas ||
+      g.modulo ||
+      g.variedad ||
+      g.horaRecojo
+    ) {
+      return [fromLinea(g, g.id)];
+    }
+    return [emptyGuia()];
+  }
   const emptySession = () => ({
     ready: false,
     ownerDni: "",
-    fundo: "",
+    fundo: FUNDO_DEFAULT,
     supervisorDni: "",
     supervisorNombre: "",
     javeroDni: "",
     javeroNombre: "",
     fecha: todayISO(),
-  });
-
-  const emptyGuia = () => ({
-    id: uid(),
-    grupo: "",
-    modulo: "",
-    turno: "",
-    lote: "",
-    variedad: "",
-    jarras: "",
-    jabas: "",
   });
 
   const emptyHarvestTypeDraft = () => ({
@@ -589,15 +1092,15 @@
 
   const emptyHarvest = () => {
     const harvest = {
-      fecha: todayISO(),
-      tipo: "suma-jarras",
-      lote: "",
-      codLote: "",
-      modulo: "",
-      turno: "",
-      variedad: "",
+    fecha: todayISO(),
+    tipo: "suma-jarras",
+    lote: "",
+    codLote: "",
+    modulo: "",
+    turno: "",
+    variedad: "",
       byType: emptyHarvestByType(),
-      workers: [],
+    workers: [],
     };
     const bucket = harvest.byType[harvest.tipo];
     harvest.lote = bucket.lote;
@@ -620,6 +1123,10 @@
     identity: /** @type {null|{dni:string,nombre:string,cargo:string}} */ (null),
     pendingConfirm: /** @type {null | (() => void)} */ (null),
     picker: /** @type {null | { kind: "grupo"|"lote", guiaId: string }} */ (null),
+    timePicker: /** @type {null | { guiaId: string }} */ (null),
+    timePickerDraft: /** @type {null | { hh: number, mm: number }} */ (null),
+    /** Guía expandida en el acordeón (solo una abierta). */
+    expandedGuiaId: /** @type {string|null} */ (null),
     netlifyReady: false,
     /** true = /.netlify/functions disponibles */
     cloudApi: false,
@@ -639,6 +1146,7 @@
     readyFilesAction: "share",
     readyFilesItems: [],
     historyPage: 0,
+    guiasHistoryPage: 0,
     sessionManualPersonas: /** @type {Record<string,{nombre:string,manual?:boolean}>} */ ({}),
     /** Trabajadores agregados en esta sesión: viven hasta Cerrar sesión. */
     sessionWorkers: /** @type {Record<string,{nombre:string,manual?:boolean}>} */ ({}),
@@ -674,6 +1182,7 @@
       }
       const parsed = JSON.parse(raw);
       state.session = { ...emptySession(), ...(parsed.session || {}) };
+      state.session.fundo = normalizeFundo(state.session.fundo);
       state.guias = Array.isArray(parsed.guias) ? parsed.guias : [];
     } catch {
       state.session = emptySession();
@@ -784,53 +1293,60 @@
     return String(id.dni || "").replace(/\D/g, "");
   }
 
-  /** Listado de personal de la sesión: se borra solo al cerrar sesión. */
-  function loadSessionWorkers() {
+  /** Personal confirmado en registros: queda en el celular por supervisor. */
+  function loadAllSavedWorkersByOwner() {
     try {
-      const parsed = JSON.parse(
-        localStorage.getItem(SESSION_WORKERS_KEY) || "null"
-      );
-      const owner = sessionOwnerDni();
-      if (
-        !parsed ||
-        typeof parsed !== "object" ||
-        (owner && parsed.ownerDni && parsed.ownerDni !== owner)
-      ) {
-        state.sessionWorkers = {};
-        return;
-      }
-      const workers =
-        parsed.workers && typeof parsed.workers === "object"
-          ? parsed.workers
-          : {};
-      const clean = {};
-      Object.keys(workers).forEach((dni) => {
-        const key = String(dni || "").replace(/\D/g, "");
-        const nombre = String(workers[dni]?.nombre || "")
-          .trim()
-          .toUpperCase();
-        if (key.length === 8 && nombre.length >= 3) {
-          clean[key] = {
-            nombre,
-            manual: !!workers[dni]?.manual,
-          };
-        }
-      });
-      state.sessionWorkers = clean;
+      const v2 = JSON.parse(localStorage.getItem(SAVED_WORKERS_KEY) || "null");
+      if (v2?.byOwner && typeof v2.byOwner === "object") return { ...v2.byOwner };
     } catch {
-      state.sessionWorkers = {};
+      /* ignore */
     }
+    try {
+      const v1 = JSON.parse(localStorage.getItem(SESSION_WORKERS_KEY) || "null");
+      if (v1?.workers && typeof v1.workers === "object") {
+        const owner = String(v1.ownerDni || "").replace(/\D/g, "");
+        if (owner) return { [owner]: v1.workers };
+      }
+    } catch {
+      /* ignore */
+    }
+    return {};
+  }
+
+  function loadSessionWorkers() {
+    const owner = sessionOwnerDni();
+    const byOwner = loadAllSavedWorkersByOwner();
+    const workers =
+      owner && byOwner[owner] && typeof byOwner[owner] === "object"
+        ? byOwner[owner]
+        : {};
+    const clean = {};
+    Object.keys(workers).forEach((dni) => {
+      const key = String(dni || "").replace(/\D/g, "");
+      const nombre = String(workers[dni]?.nombre || "")
+        .trim()
+        .toUpperCase();
+      if (key.length === 8 && nombre.length >= 3) {
+        clean[key] = {
+          nombre,
+          manual: !!workers[dni]?.manual,
+        };
+      }
+    });
+    state.sessionWorkers = clean;
   }
 
   function saveSessionWorkers() {
     const owner = sessionOwnerDni();
+    if (!owner) return;
     try {
+      const byOwner = loadAllSavedWorkersByOwner();
+      byOwner[owner] = state.sessionWorkers || {};
       localStorage.setItem(
-        SESSION_WORKERS_KEY,
+        SAVED_WORKERS_KEY,
         JSON.stringify({
-          ownerDni: owner || "",
+          byOwner,
           savedAt: new Date().toISOString(),
-          workers: state.sessionWorkers || {},
         })
       );
     } catch {
@@ -840,26 +1356,48 @@
 
   function clearSessionWorkers() {
     state.sessionWorkers = {};
-    try {
-      localStorage.removeItem(SESSION_WORKERS_KEY);
-    } catch {
-      /* ignore */
-    }
   }
 
-  function rememberSessionWorker(dni, nombre, { manual = false } = {}) {
+  function rememberSessionWorker(dni, nombre, { manual = false, skipSave = false } = {}) {
     const key = String(dni || "").replace(/\D/g, "");
     const name = String(nombre || "")
       .trim()
       .replace(/\s+/g, " ")
       .toUpperCase();
-    if (key.length !== 8 || name.length < 3) return;
+    if (key.length !== 8 || name.length < 3) return false;
+    if (!state.sessionWorkers || typeof state.sessionWorkers !== "object") {
+      state.sessionWorkers = {};
+    }
     const prev = state.sessionWorkers[key];
     state.sessionWorkers[key] = {
       nombre: name,
       manual: !!(manual || prev?.manual),
     };
-    saveSessionWorkers();
+    if (!skipSave) saveSessionWorkers();
+    return true;
+  }
+
+  function captureSavedWorkers(workers) {
+    let added = false;
+    (workers || []).forEach((worker) => {
+      if (
+        rememberSessionWorker(worker?.dni, worker?.nombre, {
+          manual: !!worker?.manual,
+          skipSave: true,
+        })
+      ) {
+        added = true;
+      }
+    });
+    if (added) saveSessionWorkers();
+  }
+
+  function seedSavedWorkersFromHistory() {
+    try {
+      loadHarvestHistory().forEach((item) => captureSavedWorkers(item.workers));
+    } catch {
+      /* ignore */
+    }
   }
 
   function seedSessionWorkersFromHarvest() {
@@ -870,6 +1408,7 @@
         });
       });
     });
+    seedSavedWorkersFromHistory();
   }
 
   function lookupPersona(dni) {
@@ -958,16 +1497,27 @@
     return { grupos, lotes };
   }
 
+  async function fetchCatalogFile(path) {
+    const rel = path.startsWith("/") ? path : `/${path}`;
+    try {
+      const res = await fetch(rel, { cache: catalogFetchCache() });
+      if (res.ok) return await res.json();
+    } catch {
+      /* offline */
+    }
+    return [];
+  }
+
   async function loadCatalogs() {
     let baseGrupos = [];
     let baseLotes = [];
     try {
-      const [gRes, lRes] = await Promise.all([
-        fetch("/data/grupos-licapa.json", { cache: catalogFetchCache() }),
-        fetch("/data/lotes-licapa.json", { cache: catalogFetchCache() }),
+      const [grupos, lotes] = await Promise.all([
+        fetchCatalogFile("/data/grupos-licapa.json"),
+        fetchCatalogFile("/data/lotes-licapa.json"),
       ]);
-      if (gRes.ok) baseGrupos = await gRes.json();
-      if (lRes.ok) baseLotes = await lRes.json();
+      baseGrupos = Array.isArray(grupos) ? grupos : [];
+      baseLotes = Array.isArray(lotes) ? lotes : [];
     } catch {
       /* offline / file:// */
     }
@@ -1051,12 +1601,21 @@
 
   function closePicker() {
     state.picker = null;
+    $("#pickerQuery")?.blur();
+    if (document.activeElement?.closest?.("#picker")) {
+      try {
+        document.activeElement.blur();
+      } catch {
+        /* ignore */
+      }
+    }
     const el = $("#picker");
     if (el) el.hidden = true;
     const q = $("#pickerQuery");
     if (q) q.value = "";
     const addBtn = $("#pickerAdd");
     if (addBtn) addBtn.hidden = false;
+    resetViewportLayout();
   }
 
   function grupoLicList_() {
@@ -1163,7 +1722,8 @@
       kind === "grupoLic" ||
       kind === "grupoNum" ||
       kind === "harvestLote" ||
-      kind === "harvestType"
+      kind === "harvestType" ||
+      kind === "fundo"
     ) {
       state.picker = { kind, guiaId: "" };
       const title = $("#pickerTitle");
@@ -1171,23 +1731,27 @@
       const search = query?.closest(".picker-search");
       const addBtn = $("#pickerAdd");
       if (title) {
-        title.textContent = kind === "grupoLic"
-          ? "Buscar Grupo LIC"
-          : kind === "grupoNum"
-            ? "Buscar Grupo"
-            : kind === "harvestType"
-              ? "Tipo de registro"
-              : "Buscar lote";
+        title.textContent =
+          kind === "grupoLic"
+            ? "Buscar Grupo LIC"
+            : kind === "grupoNum"
+              ? "Buscar Grupo"
+              : kind === "harvestType"
+                ? "Tipo de registro"
+                : kind === "fundo"
+                  ? "Seleccionar fundo"
+                  : "Buscar lote";
       }
       if (query) {
-        query.placeholder = kind === "grupoLic"
+        query.placeholder =
+          kind === "grupoLic"
             ? "Buscar Grupo LIC 01, 02…"
             : kind === "grupoNum"
               ? "Buscar Grupo 01, 02…"
               : "Buscar lote...";
         query.value = "";
       }
-      if (search) search.hidden = kind === "harvestType";
+      if (search) search.hidden = kind === "harvestType" || kind === "fundo";
       if (addBtn) addBtn.hidden = true;
       renderPickerList();
       const backdrop = $("#picker");
@@ -1195,7 +1759,9 @@
         backdrop.hidden = false;
         hydrateIcons(backdrop);
       }
-      if (kind !== "harvestType") setTimeout(() => query?.focus(), 60);
+      if (kind !== "harvestType" && kind !== "fundo") {
+        setTimeout(() => query?.focus(), 60);
+      }
       return;
     }
 
@@ -1270,6 +1836,14 @@
         raw: item,
       }));
     }
+    if (ctx.kind === "fundo") {
+      return FUNDO_OPTIONS.map((f) => ({
+        key: f,
+        primary: f,
+        secondary: "",
+        raw: f,
+      }));
+    }
 
     if (ctx.kind === "grupo") {
       return state.grupos
@@ -1310,10 +1884,12 @@
     } else if (state.picker?.kind === "harvestType") {
       selected = state.harvest.tipo || "suma-jarras";
     } else if (state.picker && findGuia(state.picker.guiaId)) {
-      selected =
-        state.picker.kind === "lote"
-          ? findGuia(state.picker.guiaId).lote
-          : findGuia(state.picker.guiaId).grupo;
+      const guia = findGuia(state.picker.guiaId);
+      if (state.picker.kind === "lote") {
+        selected = guia?.lote || "";
+      } else {
+        selected = guia?.grupo || "";
+      }
     }
 
     if (!items.length) {
@@ -1368,6 +1944,15 @@
       toast(harvestTypeLabel(v));
       return;
     }
+    if (ctx.kind === "fundo") {
+      setGuidesFundo(v);
+      closePicker();
+      if ($("#guidesSummaryModal") && !$("#guidesSummaryModal").hidden) {
+        renderGuidesSummaryCard();
+      }
+      toast(`Fundo ${v}`);
+      return;
+    }
 
     const guia = findGuia(ctx.guiaId);
     if (!guia) return;
@@ -1381,6 +1966,7 @@
         if (row.modulo) guia.modulo = row.modulo;
         if (row.turno) guia.turno = row.turno;
         if (row.variedad) guia.variedad = row.variedad;
+        if (row.codLote) guia.codLote = row.codLote;
       }
     }
     saveStore();
@@ -1723,14 +2309,14 @@
       ) {
         state.identity = saved;
         setIdentity(saved);
-        // Vincular es opcional: con DNI ya puede usar Inicio / Registro
+        // Vincular es opcional: con DNI ya puede usar Registro
         showMainFlow();
         return;
       }
     } else {
       setIdentity(null);
     }
-    if (PAGE !== "scan") {
+    if (getPage() !== "scan") {
       goTo("scan", true);
       return;
     }
@@ -1815,7 +2401,7 @@
     }
     setIdentity(null);
     requestCacheRefresh();
-    if (PAGE === "scan") {
+    if (getPage() === "scan") {
       showSecurityLogin("Escanee su carnet QR", { force: true });
     } else {
       goTo("scan", true);
@@ -1841,21 +2427,17 @@
     const id = state.identity || getIdentity();
     bindSessionToIdentity(id.dni);
     // El DNI habilita toda la app. Vincular es una ficha opcional de Sistemas.
-    if (PAGE === "vinculo") {
+    if (getPage() === "vinculo") {
       showVinculoScreen(id);
       return;
     }
-    if (PAGE === "registro") {
+    if (getPage() === "registro") {
       showHarvestHome(id);
       return;
     }
-    if (PAGE === "inicio") {
-      renderHomeDashboard();
-      return;
-    }
-    // Desde el escáner: abrir Inicio (vincular es opcional desde la pestaña +).
+    // Desde el escáner: abrir Registro (vincular es opcional desde la pestaña).
     if (!SESSION_FORM_ENABLED) {
-      goTo("inicio", true);
+      goTo("registro", true);
       return;
     }
     if (needsVinculo(id)) {
@@ -2084,22 +2666,43 @@
         updateNetworkUI();
         return { sent: 0, remain: loadCloudDataQueue().length };
       }
-      if (!canUseCloudApi()) {
-        const ready = await ensureCloudReady_(3000);
-        if (!ready) {
-          updateNetworkUI();
-          return { sent: 0, remain: loadCloudDataQueue().length };
-        }
-      }
+
       const queue = loadCloudDataQueue();
       if (!queue.length) {
         updateNetworkUI();
         return { sent: 0, remain: 0 };
       }
+
+      const guiasItems = queue.filter((item) => isGuiasCloudAction(item.action));
+      const otherItems = queue.filter((item) => !isGuiasCloudAction(item.action));
+
+      // Guías: directo a Apps Script (no necesita Netlify Functions)
+      // Resto (cosecha/manuales): sí usa proxy Netlify
+      if (otherItems.length && !canUseCloudApi()) {
+        const ready = await ensureCloudReady_(3000);
+        if (!ready && !guiasItems.length) {
+          updateNetworkUI();
+          return { sent: 0, remain: loadCloudDataQueue().length };
+        }
+      }
+
       const remain = [];
       let sent = 0;
+
       for (const item of queue) {
         try {
+          if (isGuiasCloudAction(item.action)) {
+            const result = await postGuiasToAppsScript(item.data);
+            if (result.ok) sent += 1;
+            else remain.push(item);
+            continue;
+          }
+
+          if (!canUseCloudApi()) {
+            remain.push(item);
+            continue;
+          }
+
           const response = await fetch(API.sync, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -2116,6 +2719,7 @@
           remain.push(item);
         }
       }
+
       saveCloudDataQueue(mergeCloudQueueAfterFlush(queue, remain));
       updateNetworkUI();
       const pending = loadCloudDataQueue().length;
@@ -2144,11 +2748,11 @@
     if (mode === "is-ok" && state.thanksRedirect) scheduleRegistroRedirect(900);
   }
 
-  /** Tras vincular, Inicio se abre solo (el envío sigue en segundo plano). */
+  /** Tras vincular, Registro se abre solo (el envío sigue en segundo plano). */
   function scheduleRegistroRedirect(ms = 2000) {
     state.thanksRedirect = true;
     clearTimeout(state.thanksRedirectTimer);
-    state.thanksRedirectTimer = setTimeout(() => goTo("inicio", true), ms);
+    state.thanksRedirectTimer = setTimeout(() => goTo("registro", true), ms);
   }
 
   function cancelRegistroRedirect() {
@@ -2173,147 +2777,147 @@
 
   async function flushVinculoQueue() {
     return runVinculoFlushExclusive(async () => {
-      state.online = navigator.onLine;
-      if (!state.online) {
+    state.online = navigator.onLine;
+    if (!state.online) {
+      updateNetworkUI();
+      return {
+        sent: 0,
+        remain: loadVinculoQueue().length,
+        reason: "offline",
+        alreadyRegistered: false,
+      };
+    }
+    if (!canUseCloudApi()) {
+      const ready = await ensureCloudReady_(3000);
+      if (!ready) {
         updateNetworkUI();
         return {
           sent: 0,
           remain: loadVinculoQueue().length,
-          reason: "offline",
+          reason: "no-api",
           alreadyRegistered: false,
         };
       }
-      if (!canUseCloudApi()) {
-        const ready = await ensureCloudReady_(3000);
-        if (!ready) {
-          updateNetworkUI();
-          return {
-            sent: 0,
-            remain: loadVinculoQueue().length,
-            reason: "no-api",
-            alreadyRegistered: false,
-          };
-        }
-      }
-      ensureSessionGate();
-      const q = loadVinculoQueue();
-      if (!q.length) {
-        updateNetworkUI();
-        return { sent: 0, remain: 0, reason: "empty", alreadyRegistered: false };
-      }
+    }
+    ensureSessionGate();
+    const q = loadVinculoQueue();
+    if (!q.length) {
       updateNetworkUI();
-      const remain = [];
-      let sent = 0;
-      let lastError = "";
-      let alreadyRegistered = false;
-      let lastMessage = "";
-      for (let i = 0; i < q.length; i++) {
-        const item = q[i];
-        const data = buildVinculoPayload(item);
-        if (
-          !data.dni ||
-          !/^9\d{8}$/.test(data.celular) ||
-          !isValidGrupoNum_(data.grupo) ||
-          !isValidGrupoLic_(data.grupoLic) ||
-          !data.supervisorGlobal
-        ) {
-          continue;
+      return { sent: 0, remain: 0, reason: "empty", alreadyRegistered: false };
+    }
+    updateNetworkUI();
+    const remain = [];
+    let sent = 0;
+    let lastError = "";
+    let alreadyRegistered = false;
+    let lastMessage = "";
+    for (let i = 0; i < q.length; i++) {
+      const item = q[i];
+      const data = buildVinculoPayload(item);
+      if (
+        !data.dni ||
+        !/^9\d{8}$/.test(data.celular) ||
+        !isValidGrupoNum_(data.grupo) ||
+        !isValidGrupoLic_(data.grupoLic) ||
+        !data.supervisorGlobal
+      ) {
+        continue;
+      }
+      try {
+        const body = {
+          action: "registrarVinculo",
+          authToken: data.authToken || authenticatedToken(),
+          data,
+        };
+        const res = await fetch(API.sync, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (res.status === 405) {
+          state.cloudApi = false;
+          state.netlifyReady = false;
+          for (let j = i; j < q.length; j++) {
+            remain.push(buildVinculoPayload(q[j]));
+          }
+          lastError = "API no disponible (405)";
+          break;
         }
-        try {
-          const body = {
-            action: "registrarVinculo",
-            authToken: data.authToken || authenticatedToken(),
-            data,
-          };
-          const res = await fetch(API.sync, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body),
-          });
-          if (res.status === 405) {
-            state.cloudApi = false;
-            state.netlifyReady = false;
-            for (let j = i; j < q.length; j++) {
-              remain.push(buildVinculoPayload(q[j]));
-            }
-            lastError = "API no disponible (405)";
-            break;
-          }
-          const json = await res.json().catch(() => ({}));
-          const nested = json && typeof json.data === "object" ? json.data : null;
-          const nestedData =
-            nested && typeof nested.data === "object" ? nested.data : nested;
-          const ok = res.ok && (json.ok === true || nested?.ok === true);
-          if (ok) {
-            const msg = String(
-              json.message ||
-                nested?.message ||
-                nestedData?.message ||
-                ""
-            );
-            const wasRegistered = !!(
-              json.alreadyRegistered === true ||
-              nested?.alreadyRegistered === true ||
-              nestedData?.alreadyRegistered === true ||
-              /ya se tiene (este )?dni registrado/i.test(msg)
-            );
-            if (wasRegistered) alreadyRegistered = true;
-            lastMessage = wasRegistered
-              ? "Ya se tiene este DNI registrado"
-              : "Fue guardado correctamente";
-            markVinculoDone(
-              data.dni,
-              data.celular,
-              data.supervisorGlobal,
-              data.grupo,
-              data.grupoLic
-            );
-            sent += 1;
-          } else {
-            lastError =
-              json?.error ||
+        const json = await res.json().catch(() => ({}));
+        const nested = json && typeof json.data === "object" ? json.data : null;
+        const nestedData =
+          nested && typeof nested.data === "object" ? nested.data : nested;
+        const ok = res.ok && (json.ok === true || nested?.ok === true);
+        if (ok) {
+          const msg = String(
+            json.message ||
               nested?.message ||
-              nested?.error ||
-              json?.message ||
-              "Error al guardar";
-            if (
-              json?.code === "UNAUTHORIZED" ||
-              nested?.code === "UNAUTHORIZED"
-            ) {
-              lastError = "UNAUTHORIZED · revise API_TOKEN en Netlify";
-            }
-            remain.push({
-              ...data,
-              queuedAt: item.queuedAt || new Date().toISOString(),
-            });
+              nestedData?.message ||
+              ""
+          );
+          const wasRegistered = !!(
+            json.alreadyRegistered === true ||
+            nested?.alreadyRegistered === true ||
+            nestedData?.alreadyRegistered === true ||
+            /ya se tiene (este )?dni registrado/i.test(msg)
+          );
+          if (wasRegistered) alreadyRegistered = true;
+          lastMessage = wasRegistered
+            ? "Ya se tiene este DNI registrado"
+            : "Fue guardado correctamente";
+          markVinculoDone(
+            data.dni,
+            data.celular,
+            data.supervisorGlobal,
+            data.grupo,
+            data.grupoLic
+          );
+          sent += 1;
+        } else {
+          lastError =
+            json?.error ||
+            nested?.message ||
+            nested?.error ||
+            json?.message ||
+            "Error al guardar";
+          if (
+            json?.code === "UNAUTHORIZED" ||
+            nested?.code === "UNAUTHORIZED"
+          ) {
+            lastError = "UNAUTHORIZED · revise API_TOKEN en Netlify";
           }
-        } catch (err) {
-          lastError = String(err && err.message ? err.message : err);
           remain.push({
             ...data,
             queuedAt: item.queuedAt || new Date().toISOString(),
           });
         }
+      } catch (err) {
+        lastError = String(err && err.message ? err.message : err);
+        remain.push({
+          ...data,
+          queuedAt: item.queuedAt || new Date().toISOString(),
+        });
       }
+    }
       const mergedRemain = mergeVinculoQueueAfterFlush(q, remain);
       saveVinculoQueue(mergedRemain);
-      updateNetworkUI();
+    updateNetworkUI();
       if (sent > 0 && mergedRemain.length === 0) {
-        toast(
-          alreadyRegistered
-            ? "Ya se tiene este DNI registrado"
-            : "Fue guardado correctamente"
-        );
+      toast(
+        alreadyRegistered
+          ? "Ya se tiene este DNI registrado"
+          : "Fue guardado correctamente"
+      );
       } else if (sent > 0 && mergedRemain.length) {
         toast(`Enviado parcial · ${mergedRemain.length} pendiente(s)`);
-      }
-      return {
-        sent,
+    }
+    return {
+      sent,
         remain: mergedRemain.length,
-        reason: lastError || "ok",
-        alreadyRegistered,
-        message: lastMessage,
-      };
+      reason: lastError || "ok",
+      alreadyRegistered,
+      message: lastMessage,
+    };
     });
   }
 
@@ -2373,7 +2977,7 @@
   }
 
   function showVinculoScreen(identity) {
-    if (PAGE !== "vinculo") {
+    if (getPage() !== "vinculo") {
       goTo("vinculo");
       return;
     }
@@ -2423,14 +3027,14 @@
     loadSessionWorkers();
     seedSessionWorkersFromHarvest();
     toast(`Sesión · ${identity.nombre}`);
-    // Vincular es opcional: abre Inicio; el supervisor puede completar la ficha cuando quiera
+    // Vincular es opcional: abre Registro; el supervisor puede completar la ficha cuando quiera
     if (!SESSION_FORM_ENABLED) {
       stopCamera();
       try {
-        goTo("inicio", false, { loaderMsg: "Entrando a la app…" });
+        goTo("registro", false, { loaderMsg: "Entrando a la app…" });
       } catch {
         hideAppLoader(true);
-        location.href = new URL(ROUTES.inicio, location.origin + "/").href;
+        location.href = new URL(ROUTES.registro, location.origin + "/").href;
       }
       return;
     }
@@ -2606,20 +3210,20 @@
     try {
       const cached = localStorage.getItem(SUPERVISORES_KEY);
       if (!cached) return;
-      const parsed = JSON.parse(cached);
-      const next = {};
-      Object.entries(parsed || {}).forEach(([k, v]) => {
-        if (v && v.nombre) {
-          next[String(k).replace(/\D/g, "")] = {
-            nombre: String(v.nombre).toUpperCase(),
-            cargo: String(v.cargo || "SUPERVISOR DE COSECHA").toUpperCase(),
-            celular: String(v.celular || "").replace(/\D/g, ""),
-            supervisorGlobal: String(
-              v.supervisorGlobal || v.encargado || ""
-            ).toUpperCase(),
-          };
-        }
-      });
+        const parsed = JSON.parse(cached);
+        const next = {};
+        Object.entries(parsed || {}).forEach(([k, v]) => {
+          if (v && v.nombre) {
+            next[String(k).replace(/\D/g, "")] = {
+              nombre: String(v.nombre).toUpperCase(),
+              cargo: String(v.cargo || "SUPERVISOR DE COSECHA").toUpperCase(),
+              celular: String(v.celular || "").replace(/\D/g, ""),
+              supervisorGlobal: String(
+                v.supervisorGlobal || v.encargado || ""
+              ).toUpperCase(),
+            };
+          }
+        });
       if (Object.keys(next).length) state.supervisores = next;
     } catch {
       /* keep current */
@@ -2628,43 +3232,43 @@
 
   function applySupervisoresBundle(data) {
     const byDni = data?.byDni || data || {};
-    const next = {};
-    Object.entries(byDni).forEach(([dni, info]) => {
-      const key = String(dni).replace(/\D/g, "");
-      if (!key || !info) return;
-      const nombre = String(info.nombre || info || "").toUpperCase();
-      if (!nombre) return;
-      next[key] = {
-        nombre,
-        cargo: String(info.cargo || "SUPERVISOR DE COSECHA").toUpperCase(),
-        celular: String(info.celular || "").replace(/\D/g, ""),
-        supervisorGlobal: String(
-          info.supervisorGlobal || info.encargado || ""
-        ).toUpperCase(),
-      };
-    });
-    if (Object.keys(next).length) {
-      state.supervisores = next;
-      saveSupervisores();
-    }
+      const next = {};
+      Object.entries(byDni).forEach(([dni, info]) => {
+        const key = String(dni).replace(/\D/g, "");
+        if (!key || !info) return;
+        const nombre = String(info.nombre || info || "").toUpperCase();
+        if (!nombre) return;
+        next[key] = {
+          nombre,
+          cargo: String(info.cargo || "SUPERVISOR DE COSECHA").toUpperCase(),
+          celular: String(info.celular || "").replace(/\D/g, ""),
+          supervisorGlobal: String(
+            info.supervisorGlobal || info.encargado || ""
+          ).toUpperCase(),
+        };
+      });
+      if (Object.keys(next).length) {
+        state.supervisores = next;
+        saveSupervisores();
+      }
   }
 
   function hydratePersonasFromStorage() {
     try {
       const cached = localStorage.getItem(PERSONAS_KEY);
       if (!cached) return;
-      const parsed = JSON.parse(cached);
-      const next = {};
-      Object.entries(parsed || {}).forEach(([k, v]) => {
-        if (typeof v === "string") next[k] = { nombre: v, cargo: "", celular: "" };
-        else if (v && v.nombre) {
-          next[k] = {
-            nombre: v.nombre,
-            cargo: v.cargo || "",
-            celular: v.celular || "",
-          };
-        }
-      });
+        const parsed = JSON.parse(cached);
+        const next = {};
+        Object.entries(parsed || {}).forEach(([k, v]) => {
+          if (typeof v === "string") next[k] = { nombre: v, cargo: "", celular: "" };
+          else if (v && v.nombre) {
+            next[k] = {
+              nombre: v.nombre,
+              cargo: v.cargo || "",
+              celular: v.celular || "",
+            };
+          }
+        });
       if (Object.keys(next).length) state.personas = next;
     } catch {
       /* keep current */
@@ -2672,11 +3276,25 @@
   }
 
   async function fetchLocalJson(url) {
-    try {
-      const res = await fetch(url, { cache: catalogFetchCache() });
-      if (res.ok) return await res.json();
+    const path = url.startsWith("/") ? url : `/${url}`;
+    const tries = [];
+    if (isNativeApp() && navigator.onLine) {
+      tries.push(`${CLOUD_ORIGIN}${path}?v=${APP_VERSION}&_=${Date.now()}`);
+    }
+    tries.push(assetUrl(path));
+    tries.push(path);
+    for (const target of tries) {
+      try {
+        const res = await fetch(target, {
+          cache:
+            isNativeApp() && target.startsWith(CLOUD_ORIGIN)
+              ? "no-store"
+              : catalogFetchCache(),
+        });
+        if (res.ok) return await res.json();
     } catch {
-      /* offline: SW cache or localStorage already loaded */
+        /* offline: SW cache o localStorage ya cargados */
+      }
     }
     return null;
   }
@@ -2746,8 +3364,8 @@
 
     const data = await fetchLocalJson("/data/trabajadores.json");
     if (data && mergePersonaBundle(data) > 0) {
-      savePersonas();
-      setCount(" · local");
+          savePersonas();
+          setCount(" · local");
     } else {
       setCount(Object.keys(state.personas).length ? " · local" : "");
     }
@@ -3129,10 +3747,10 @@
           const total = manana + tarde;
           return `
             <article class="harvest-worker-row" data-worker-id="${w.id}">
-              <div class="harvest-worker-person">
+              <button type="button" class="harvest-worker-person" data-worker-id-open aria-label="Ver nombre completo">
                 <strong>${index + 1}. ${escapeHtml(w.nombre || "SIN NOMBRE")}</strong>
                 <span>DNI ${escapeHtml(w.dni)}</span>
-              </div>
+              </button>
               <input data-harvest-field="manana" type="number" inputmode="numeric" min="0" step="1" placeholder="00"${manana > 0 ? ` value="${manana}"` : ""} aria-label="Jarras mañana de ${escapeHtml(w.nombre)}" />
               <input data-harvest-field="tarde" type="number" inputmode="numeric" min="0" step="1" placeholder="00"${tarde > 0 ? ` value="${tarde}"` : ""} aria-label="Jarras tarde de ${escapeHtml(w.nombre)}" />
               <strong class="harvest-worker-total">${fmt(total)}</strong>
@@ -3171,106 +3789,6 @@
     updateNetworkUI();
   }
 
-  function renderHomeDashboard() {
-    if (PAGE !== "inicio") return;
-    const identity = state.identity || getIdentity() || {};
-    paintGreeting("#homeSupervisor", identity);
-    if ($("#homeDate")) {
-      $("#homeDate").textContent = new Date(`${todayISO()}T12:00:00`).toLocaleDateString(
-        "es-PE",
-        { weekday: "long", day: "2-digit", month: "long" }
-      );
-    }
-
-    const ready = todayReadySnapshots();
-    const readyTypes = new Set(
-      ready.map((item) => normalizeHarvestType(item.tipo))
-    );
-    const draftWorkers = HARVEST_TYPES.flatMap((item) => {
-      if (readyTypes.has(item.key)) return [];
-      return harvestTypeBucket(item.key).workers;
-    });
-    const workers = [
-      ...ready.flatMap((item) => item.workers || []),
-      ...draftWorkers,
-    ];
-    const total = workers.reduce(
-      (sum, worker) => sum + num(worker.manana) + num(worker.tarde),
-      0
-    );
-    const uniqueWorkers = new Set(
-      workers.map((worker) => String(worker.dni || "").replace(/\D/g, ""))
-    ).size;
-    if ($("#homeTodayTotal")) {
-      $("#homeTodayTotal").textContent = `${fmt(total)} ${total === 1 ? "jarra" : "jarras"}`;
-    }
-    if ($("#homeTodayWorkers")) {
-      $("#homeTodayWorkers").textContent = `${uniqueWorkers} ${
-        uniqueWorkers === 1 ? "trabajador" : "trabajadores"
-      }`;
-    }
-    if ($("#homeTodayLote")) {
-      $("#homeTodayLote").textContent = state.harvest.lote
-        ? `${harvestLoteCode(state.harvest)} · ${harvestTypeShort(state.harvest.tipo)}`
-        : "Lote pendiente";
-    }
-
-    const root = $("#homeRecentList");
-    if (root) {
-      const history = loadHarvestHistory().slice(0, 3);
-      if (!history.length) {
-        root.innerHTML = `
-          <div class="home-recent-empty">
-            ${ico("berry")}
-            <div><strong>Aún no hay registros guardados</strong><span>Su actividad de hoy y ayer aparecerá aquí.</span></div>
-          </div>`;
-      } else {
-        const yesterday = new Date();
-        yesterday.setDate(yesterday.getDate() - 1);
-        const yesterdayIso = [
-          yesterday.getFullYear(),
-          String(yesterday.getMonth() + 1).padStart(2, "0"),
-          String(yesterday.getDate()).padStart(2, "0"),
-        ].join("-");
-        root.innerHTML = history
-          .map((item) => {
-            const amount = snapshotTotal(item);
-            const loteCode = harvestLoteCode(item) || "Sin lote";
-            const dayLabel =
-              item.fecha === todayISO()
-                ? "Hoy"
-                : item.fecha === yesterdayIso
-                  ? "Ayer"
-                  : new Date(`${item.fecha || todayISO()}T12:00:00`).toLocaleDateString(
-                      "es-PE",
-                      { weekday: "short", day: "2-digit", month: "short" }
-                    );
-            const dayFull = new Date(
-              `${item.fecha || todayISO()}T12:00:00`
-            ).toLocaleDateString("es-PE", {
-              day: "2-digit",
-              month: "2-digit",
-              year: "numeric",
-            });
-            return `
-              <button type="button" class="home-recent-item" data-home-action="excel">
-                <span class="home-recent-icon">${ico("clipboard")}</span>
-                <span class="home-recent-main">
-                  <strong>${escapeHtml(loteCode)} · ${escapeHtml(
-              harvestTypeShort(item.tipo)
-            )}</strong>
-                  <small>${escapeHtml(dayLabel)} · ${escapeHtml(dayFull)} · ${(item.workers || []).length} trabajadores</small>
-                </span>
-                <span class="home-recent-total">${fmt(amount)}<small>jarras</small></span>
-              </button>`;
-          })
-          .join("");
-      }
-    }
-    hydrateIcons($("#homeDashboard"));
-    updateNetworkUI();
-  }
-
   function openProfileModal() {
     const identity = state.identity || getIdentity() || {};
     const sheet = $("#profileModal");
@@ -3298,6 +3816,8 @@
     sheet.removeAttribute("hidden");
     sheet.style.display = "flex";
     hydrateIcons(sheet);
+    syncProfileAppTools();
+    refreshTopnav();
   }
 
   function closeProfileModal() {
@@ -3306,19 +3826,19 @@
     sheet.hidden = true;
     sheet.setAttribute("hidden", "");
     sheet.style.display = "none";
+    refreshTopnav();
+    resetViewportLayout();
   }
 
-  /** La navegación solo existe con sesión iniciada: nunca en el escaneo. */
-  function syncTabbarVisibility() {
-    const bar = $("#appTabbar");
+  /** La navegación superior solo existe con sesión iniciada: nunca en el escaneo. */
+  function syncTopnavVisibility() {
+    const bar = $("#appTopnav");
     if (!bar) return;
-    if (PAGE === "scan") {
+    if (getPage() === "scan") {
       bar.hidden = true;
       bar.setAttribute("hidden", "");
       return;
     }
-    // En Inicio / Registro / Vincular la barra ya está en el HTML.
-    // No ocultarla ni un frame: eso es el pestañeo al cambiar de pestaña.
     const signedIn =
       !!(state.identity?.dni || getIdentity()?.dni) ||
       document.documentElement.classList.contains("has-session");
@@ -3327,21 +3847,9 @@
     else bar.setAttribute("hidden", "");
   }
 
-  function persistDraftBeforeNav() {
-    try {
-      if (PAGE === "registro" && state.harvest) saveHarvest();
-      if (typeof saveStore === "function") saveStore();
-      if (typeof saveSessionManualPersonas === "function") {
-        saveSessionManualPersonas();
-      }
-    } catch {
-      /* el cambio de pestaña no debe fallar por el borrador */
-    }
-  }
-
   function markTabPressed(tab) {
-    const bar = $("#appTabbar");
-    if (!bar || !tab || tab === "ayuda") return;
+    const bar = $("#appTopnav");
+    if (!bar || !tab) return;
     $$("[data-tab]", bar).forEach((btn) => {
       const on = btn.dataset.tab === tab;
       btn.classList.toggle("is-active", on);
@@ -3349,20 +3857,105 @@
     });
   }
 
+  function persistDraftBeforeNav() {
+    persistAllLocalDrafts();
+  }
+
+  /** Lee inputs visibles de guías por si el SO cerró sin blur. */
+  function syncGuidesFromDom() {
+    if (!state.guias?.length) return;
+    $$("#cards .guides-card").forEach((article) => {
+      const guia = findGuia(article.dataset.id);
+      if (!guia) return;
+      const ng = article.querySelector('[data-field="numeroGuia"]');
+      if (ng) guia.numeroGuia = normalizeNumeroGuia(ng.value);
+      const hr = article.querySelector('[data-field="horaRecojo"]');
+      if (hr) guia.horaRecojo = String(hr.value || "").trim();
+      const ja = article.querySelector('[data-field="jarras"]');
+      const jb = article.querySelector('[data-field="jabas"]');
+      if (ja) guia.jarras = num(ja.value);
+      if (jb) guia.jabas = num(jb.value);
+    });
+  }
+
+  /** Lee jarras mañana/tarde visibles del registro de cosecha. */
+  function syncHarvestWorkersFromDom() {
+    if (!state.harvest?.workers?.length) return;
+    $$("#harvestWorkers [data-worker-id]").forEach((row) => {
+      const worker = state.harvest.workers.find(
+        (w) => w.id === row.dataset.workerId
+      );
+      if (!worker) return;
+      row.querySelectorAll("[data-harvest-field]").forEach((input) => {
+        const field = input.dataset.harvestField;
+        if (!field) return;
+        const raw = String(input.value || "").trim();
+        worker[field] = raw === "" ? 0 : Math.max(0, num(raw));
+      });
+    });
+  }
+
+  /**
+   * Guarda todo en el celular (síncrono).
+   * Se usa al cerrar/minimizar la app y antes de cambiar de pantalla.
+   */
+  function persistAllLocalDrafts() {
+    try {
+      syncGuidesFromDom();
+      if (getPage() === "registro") {
+        syncHarvestWorkersFromDom();
+        if (state.harvest) saveHarvest();
+      }
+      saveStore();
+      if (typeof saveSessionManualPersonas === "function") {
+        saveSessionManualPersonas();
+      }
+    } catch {
+      /* no bloquear cierre de la app */
+    }
+  }
+
+  function setupLifecyclePersist() {
+    const flush = () => persistAllLocalDrafts();
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") flush();
+    });
+    window.addEventListener("pagehide", flush);
+    window.addEventListener("beforeunload", flush);
+
+    const App = window.Capacitor?.Plugins?.App;
+    if (App?.addListener) {
+      App.addListener("pause", flush).catch(() => {});
+      App.addListener("appStateChange", ({ isActive }) => {
+        if (!isActive) flush();
+      }).catch(() => {});
+    }
+
+    setInterval(() => {
+      if (document.visibilityState === "hidden") return;
+      flush();
+    }, 30000);
+  }
+
   function currentTab() {
+    const profile = $("#profileModal");
+    if (profile && !profile.hidden) return "perfil";
     const help = $("#helpSheet");
     if (help && !help.hidden) return "ayuda";
     const history = $("#historySheet");
     if (history && !history.hidden) return "excel";
-    if (PAGE === "inicio") return "inicio";
-    if (PAGE === "registro") return "registro";
-    if (PAGE === "vinculo") return "vincular";
+    const screen = $("#harvestScreen");
+    if (screen?.dataset?.panel === "guias") return "guias";
+    const guides = $("#guidesSheet");
+    if (guides?.classList?.contains("is-active")) return "guias";
+    if (getPage() === "registro") return "registro";
+    if (getPage() === "vinculo") return "vincular";
     return "";
   }
 
-  function refreshTabbar() {
-    syncTabbarVisibility();
-    const bar = $("#appTabbar");
+  function refreshTopnav() {
+    syncTopnavVisibility();
+    const bar = $("#appTopnav");
     if (!bar) return;
     const active = currentTab();
     $$("[data-tab]", bar).forEach((btn) => {
@@ -3374,11 +3967,380 @@
     });
   }
 
+  /** Cambia Conteo ↔ Guías sin reconstruir DOM (caché local, sin pestañeo). */
+  function applyGuidesPanel(open) {
+    const screen = $("#harvestScreen");
+    const sheet = $("#guidesSheet");
+    const conteo = $("#conteoPanel") || $(".harvest-scroll");
+    const harvestDate = $("#harvestDate");
+    const harvestHeadSmall = $(".harvest-head .harvest-user small");
+
+    if (screen) screen.dataset.panel = open ? "guias" : "conteo";
+    if (sheet) {
+      sheet.classList.toggle("is-active", !!open);
+      sheet.setAttribute("aria-hidden", open ? "false" : "true");
+      sheet.hidden = false;
+    }
+    if (conteo) {
+      conteo.classList.toggle("is-active", !open);
+      conteo.hidden = false;
+    }
+    if (harvestDate) {
+      harvestDate.textContent = open ? "Guía interna de cosecha" : "Registro del día";
+    }
+    if (harvestHeadSmall) {
+      harvestHeadSmall.textContent = open
+        ? "QBERRIES · GUÍAS"
+        : "QBERRIES · SUPERVISORES";
+    }
+  }
+
+  function closeGuidesSheet() {
+    applyGuidesPanel(false);
+    closeGuidesSummary();
+    refreshTopnav();
+  }
+
+  function ensureGuidesSession() {
+    if (!hasQrLogin()) return;
+    const id = state.identity || getIdentity();
+    if (!id?.dni) return;
+    bindSessionToIdentity(id.dni);
+    state.session.fundo = normalizeFundo(state.session.fundo || FUNDO_DEFAULT);
+    state.session.fecha = todayISO();
+    if (!state.session.supervisorDni) {
+      state.session.supervisorDni = id.dni;
+      state.session.supervisorNombre = String(
+        identityFullName(id) || id.nombre || ""
+      )
+        .trim()
+        .toUpperCase();
+    }
+    state.session.ready = true;
+    saveStore();
+  }
+
+  function currentFundo() {
+    return normalizeFundo(state.session.fundo || FUNDO_DEFAULT);
+  }
+
+  function setGuidesFundo(value) {
+    state.session.fundo = normalizeFundo(value);
+    saveStore();
+    const label = $("#guidesFundoLabel");
+    if (label) label.textContent = state.session.fundo;
+  }
+
+  function renderGuidesMeta() {
+    const s = state.session;
+    const fechaTxt = (s.fecha || todayISO()).split("-").reverse().join("/");
+    const fundo = currentFundo();
+    const label = $("#guidesFundoLabel");
+    if (label) label.textContent = fundo;
+    if ($("#guidesFecha")) $("#guidesFecha").textContent = fechaTxt;
+    if ($("#guidesSupervisor")) {
+      const nom = s.supervisorNombre || "Supervisor";
+      const dni = s.supervisorDni ? ` · ${s.supervisorDni}` : "";
+      $("#guidesSupervisor").textContent = `${nom}${dni}`;
+    }
+  }
+
+  /** Prepara Guías en segundo plano (queda en caché del DOM). */
+  function warmGuidesPanel() {
+    if (getPage() !== "registro" || !hasQrLogin()) return;
+    if (!$("#guidesSheet")) return;
+    ensureGuidesSession();
+    renderGuidesMeta();
+    if (!state.guias.length) state.guias.push(emptyGuia());
+    const cards = $("#cards");
+    const needsPaint =
+      !cards ||
+      !cards.children.length ||
+      !state._guidesWarmed;
+    if (needsPaint) {
+      renderCards();
+      updateKpis();
+      updateMeta();
+      hydrateIcons($("#guidesSheet"));
+      state._guidesWarmed = true;
+    } else {
+      updateKpis();
+      renderGuidesMeta();
+    }
+  }
+
+  function openGuidesSheet() {
+    if (getPage() !== "registro") {
+      persistDraftBeforeNav();
+      beginNavigation("/registro/index.html?tab=guias", false, { tabSwitch: true });
+      return;
+    }
+    closeHarvestHistory();
+    const help = $("#helpSheet");
+    if (help) help.hidden = true;
+    closeProfileModal();
+    const sheet = $("#guidesSheet");
+    if (!sheet) return;
+
+    markTabPressed("guias");
+    applyGuidesPanel(true);
+    refreshTopnav();
+
+    // Contenido ya en caché: solo refresca meta/kpis; no re-hidrata todo
+    warmGuidesPanel();
+  }
+
+  function guiaHasData(guia) {
+    return !!(
+      normalizeNumeroGuia(guia?.numeroGuia) ||
+      String(guia?.lote || "").trim() ||
+      num(guia?.jarras) > 0 ||
+      num(guia?.jabas) > 0
+    );
+  }
+
+  function openGuidesSummary() {
+    const modal = $("#guidesSummaryModal");
+    const card = $("#guidesSummaryCard");
+    if (!modal || !card) return;
+    renderGuidesSummaryCard();
+    modal.hidden = false;
+    hydrateIcons(modal);
+  }
+
+  function closeGuidesSummary() {
+    const modal = $("#guidesSummaryModal");
+    if (modal) modal.hidden = true;
+  }
+
+  /** Id estable cola nube: 1 pendiente por supervisor + día + fundo. */
+  function guiasCloudQueueId(fecha, dni, fundo) {
+    const day = String(fecha || todayISO()).trim();
+    const dig = String(dni || "").replace(/\D/g, "") || "x";
+    const f = normalizeFundo(fundo)
+      .toLowerCase()
+      .replace(/\s+/g, "-");
+    return `guias-${day}-${dig}-${f}`;
+  }
+
+  function buildGuiasSyncPayload() {
+    const identity = state.identity || getIdentity();
+    const fecha = state.session.fecha || todayISO();
+    const supervisorDni =
+      state.session.supervisorDni || identity?.dni || "";
+    const supervisorNombre =
+      state.session.supervisorNombre || identity?.nombre || "";
+    const fundo = currentFundo();
+    const t0 = totals();
+    const id = guiasCloudQueueId(fecha, supervisorDni, fundo);
+    const savedAt = new Date().toISOString();
+    return {
+      id,
+      /** Identifica este envío (anti doble-POST); distinto si vuelve a guardar */
+      sendId: `${id}|${savedAt}|${t0.jarras}|${t0.jabas}|${t0.guias}`,
+      savedAt,
+      horaGuardado: savedAt,
+      fecha,
+      fundo,
+      securityCode: identity?.dni || supervisorDni || "",
+      supervisorDni,
+      supervisorNombre,
+      operator: identity,
+      session: {
+        fecha,
+        fundo,
+        supervisorDni,
+        supervisorNombre,
+      },
+      guias: (state.guias || []).map((g) => ({
+        id: g.id,
+        numeroGuia: g.numeroGuia,
+        lote: g.lote,
+        modulo: g.modulo,
+        turno: g.turno,
+        variedad: g.variedad,
+        jarras: g.jarras,
+        jabas: g.jabas,
+        horaRecojo: g.horaRecojo,
+      })),
+      totals: {
+        guias: t0.guias,
+        jarras: t0.jarras,
+        jabas: t0.jabas,
+      },
+    };
+  }
+
+  /** Encola (reemplaza mismo id) y no pierde el dato si no hay internet. */
+  function queueGuiasForCloud(payload) {
+    if (!payload?.id) return false;
+    enqueueCloudData("registrarGuias", payload, payload.id);
+    return true;
+  }
+
+  /**
+   * Guarda guías en el celular y las encola para la nube.
+   * Nunca depende de internet: sin red queda pendiente y se sube al reconectar.
+   * @returns {null | object} payload listo para subir, o null si falta datos
+   */
+  function persistAndQueueGuias() {
+    saveStore();
+    const payload = buildGuiasSyncPayload();
+    if (!payload.supervisorDni && !payload.supervisorNombre) return null;
+    queueGuiasForCloud(payload);
+    updateNetworkUI();
+    return payload;
+  }
+
+  function flushGuiasInBackground() {
+    flushCloudDataQueue()
+      .then((result) => {
+        if (result?.sent > 0 && result.remain === 0) {
+          toast("Guías subidas al servidor");
+        } else if (result?.remain > 0 && navigator.onLine) {
+          toast("Pendiente de subir · se reintentará solo");
+        }
+      })
+      .catch(() => {
+        /* ya guardado en celular + cola */
+      });
+  }
+
+  function saveGuidesSummary() {
+    if (!requireQrLogin()) return;
+    if (state.savingGuias) return;
+    if (!state.guias.length) {
+      toast("No hay guías para guardar");
+      return;
+    }
+
+    state.savingGuias = true;
+    const payload = persistAndQueueGuias();
+    if (!payload) {
+      state.savingGuias = false;
+      toast("Falta supervisor para guardar");
+      return;
+    }
+
+    pushGuiasHistory(payload);
+
+    if (typeof XLSX !== "undefined") {
+      try {
+        exportExcel();
+      } catch (_) {
+        /* ok */
+      }
+    }
+
+    closeGuidesSummary();
+
+    if (!navigator.onLine) {
+      toast("Guardado en el celular · pendiente hasta tener internet");
+    } else {
+      toast("Guardado · subiendo al servidor…");
+    }
+
+    flushGuiasInBackground();
+    setTimeout(() => {
+      state.savingGuias = false;
+    }, 1500);
+  }
+
+  function formatGuiaLoteSummary(guia) {
+    const loteNum = String(guia?.lote || "")
+      .replace(/^Q/i, "")
+      .trim();
+    if (!loteNum) return "—";
+    const modRaw = String(guia?.modulo || "").trim().toUpperCase();
+    const modulo = modRaw ? (modRaw.startsWith("M") ? modRaw : `M${modRaw}`) : "";
+    const turno = String(guia?.turno || "").replace(/^T/i, "").trim();
+    const parts = [`LT${loteNum}`];
+    if (modulo) parts.push(modulo);
+    if (turno) parts.push(`T${turno}`);
+    return parts.join("-");
+  }
+
+  function renderGuidesSummaryCard() {
+    const card = $("#guidesSummaryCard");
+    if (!card) return;
+    const s = state.session;
+    const t = totals();
+    const fechaTxt = (s.fecha || todayISO()).split("-").reverse().join("/");
+    const sup = s.supervisorNombre || "Supervisor";
+    const rows = state.guias.filter(
+      (g) =>
+        normalizeNumeroGuia(g.numeroGuia) ||
+        g.lote ||
+        num(g.jarras) ||
+        num(g.jabas)
+    );
+    const tableRows = rows.length
+      ? rows
+          .map((g, idx) => {
+            const numTxt = formatNumeroGuiaInput(g.numeroGuia) || "—";
+            const loteTxt = formatGuiaLoteSummary(g);
+            return `
+            <tr>
+              <td class="gs-td-idx">${idx + 1}</td>
+              <td class="gs-td-num">${escapeHtml(numTxt)}</td>
+              <td class="gs-td-lote"><strong>${escapeHtml(loteTxt)}</strong></td>
+              <td class="gs-td-qty">${fmt(num(g.jarras))}</td>
+              <td class="gs-td-qty">${fmt(num(g.jabas))}</td>
+            </tr>`;
+          })
+          .join("")
+      : `<tr><td class="gs-empty" colspan="5">Sin guías registradas</td></tr>`;
+    card.innerHTML = `
+      <div class="gs-paper">
+        <div class="gs-paper-head">
+          <img src="/assets/logo-qberries.png" alt="" />
+          <div>
+            <small>REGISTRO DE GUÍA INTERNA DE COSECHA</small>
+            <h3>Q Berries · ${escapeHtml(currentFundo())}</h3>
+          </div>
+        </div>
+        <div class="gs-paper-meta">
+          <div><small>FECHA</small><strong>${fechaTxt}</strong></div>
+          <div><small>FUNDO</small><strong>${escapeHtml(currentFundo())}</strong></div>
+          <div><small>SUPERVISOR</small><strong>${escapeHtml(sup)}</strong></div>
+        </div>
+        <div class="gs-table-wrap">
+          <table class="gs-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>N° Guía</th>
+                <th>Lote</th>
+                <th>Jarras</th>
+                <th>Jabas</th>
+              </tr>
+            </thead>
+            <tbody>${tableRows}</tbody>
+          </table>
+        </div>
+        <footer class="gs-paper-total">
+          <span>TOTAL · ${rows.length} guía${rows.length === 1 ? "" : "s"}</span>
+          <strong>${fmt(t.jarras)} jarras · ${fmt(t.jabas)} jabas</strong>
+        </footer>
+      </div>`;
+  }
+
   function onTabbarClick(tab) {
     if (navigationLocked) return;
     cancelRegistroRedirect();
 
+    if (tab === "guias") {
+      openGuidesSheet();
+      return;
+    }
+    closeGuidesSheet();
+
     // Misma pestaña: no redirigir (salvo scroll suave / sheets).
+    if (tab === "perfil") {
+      openProfileModal();
+      refreshTopnav();
+      return;
+    }
     if (tab === "ayuda") {
       openAyuda();
       return;
@@ -3389,23 +4351,25 @@
         return;
       }
       persistDraftBeforeNav();
-      beginNavigation("/inicio/index.html?tab=excel", false, { tabSwitch: true });
+      beginNavigation("/registro/index.html?tab=excel", false, { tabSwitch: true });
       return;
     }
-    if (tab === "inicio" && PAGE === "inicio") {
-      $(".home-scroll")?.scrollTo?.({ top: 0, behavior: "smooth" });
-      return;
-    }
-    if (tab === "registro" && PAGE === "registro") {
+    if (tab === "registro" && getPage() === "registro") {
+      applyGuidesPanel(false);
+      $("#conteoPanel")?.scrollTo?.({ top: 0, behavior: "smooth" });
       $(".harvest-scroll")?.scrollTo?.({ top: 0, behavior: "smooth" });
+      refreshTopnav();
       return;
     }
-    if (tab === "vincular" && PAGE === "vinculo") return;
+    if (tab === "vincular" && getPage() === "vinculo") {
+      refreshTopnav();
+      return;
+    }
 
     const id = state.identity || getIdentity();
     if (!id?.dni || !hasQrLogin()) {
       toast("Escanee su carnet para continuar");
-      if (PAGE !== "scan") goTo("scan");
+      if (getPage() !== "scan") goTo("scan");
       return;
     }
 
@@ -3417,16 +4381,12 @@
       goTo("vinculo");
       return;
     }
-    if (tab === "inicio") {
-      goTo("inicio");
-      return;
-    }
     if (tab === "registro") {
       goTo("registro");
       return;
     }
     if (tab === "agregar") {
-      if (PAGE !== "registro") {
+      if (getPage() !== "registro") {
         beginNavigation("/registro/index.html?tab=agregar", false, { tabSwitch: true });
         return;
       }
@@ -3443,23 +4403,25 @@
     } catch {
       return;
     }
-    if (tab !== "agregar" && tab !== "excel") return;
+    if (tab !== "agregar" && tab !== "excel" && tab !== "guias") return;
     try {
       const clean =
-        PAGE === "inicio"
-          ? "/inicio/index.html"
-          : PAGE === "registro"
-            ? "/registro/index.html"
+        getPage() === "registro"
+          ? "/registro/index.html"
             : location.pathname;
       history.replaceState(null, "", clean);
     } catch {
       /* ignore */
     }
+    if (tab === "guias") {
+      openGuidesSheet();
+      return;
+    }
     if (tab === "excel" && $("#historySheet")) {
       openHarvestHistory();
       return;
     }
-    if (PAGE === "registro") onTabbarClick(tab);
+    if (getPage() === "registro") onTabbarClick(tab);
   }
 
   function loadHarvestHistory() {
@@ -3518,6 +4480,7 @@
 
   function buildHarvestSyncPayload(snapshot) {
     return {
+      localId: snapshot.id,
       id: snapshot.id,
       fecha: snapshot.fecha || todayISO(),
       horaGuardado: snapshot.savedAt || new Date().toISOString(),
@@ -3567,25 +4530,36 @@
     }));
   }
 
-  /** Nombre pedido en campo: supervisor de cosecha + día */
+  /** Primer nombre + apellido paterno (catálogo: APELLIDOS NOMBRES). */
+  function filePersonName(full) {
+    const parts = String(full || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^A-Za-z0-9 ]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toUpperCase()
+      .split(" ")
+      .filter(Boolean);
+    if (!parts.length) return "SUPERVISOR";
+    if (parts.length === 1) return parts[0];
+    if (parts.length === 2) return `${parts[1]} ${parts[0]}`;
+    return `${parts[2]} ${parts[0]}`;
+  }
+
+  /** Nombre: primer nombre y apellido · tipo · día-mes */
   function harvestFileName(snapshot) {
-    const supervisor = String(snapshot.supervisor || "SUPERVISOR")
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/[^A-Za-z0-9 ]+/g, " ")
-      .replace(/\s+/g, " ")
-      .trim()
-      .toUpperCase();
+    const supervisor = filePersonName(
+      snapshot.supervisor || identityFullName() || "SUPERVISOR"
+    );
     const [y, m, d] = String(snapshot.fecha || todayISO()).split("-");
-    const dia = y && m && d ? `${d}-${m}-${y}` : todayISO();
-    const tipo = harvestTypeLabel(snapshot.tipo)
+    const diaMes = m && d ? `${d}-${m}` : todayISO().slice(5).split("-").reverse().join("-");
+    const tipo = harvestTypeShort(snapshot.tipo)
       .normalize("NFD")
       .replace(/[\u0300-\u036f]/g, "")
-      .replace(/[^A-Za-z0-9 ]+/g, " ")
-      .replace(/\s+/g, " ")
-      .trim()
-      .toUpperCase();
-    return `${supervisor || "SUPERVISOR"} ${dia} ${tipo}.xlsx`;
+      .replace(/[^A-Za-z0-9]+/g, "")
+      .trim();
+    return `${supervisor} ${tipo || "Suma"} ${diaMes}.xlsx`;
   }
 
   function buildHarvestWorkbook(snapshot) {
@@ -3671,6 +4645,7 @@
         snapshot.id
       );
       if (!skipReset) resetHarvestTypeAfterSave(snapshot.tipo);
+      captureSavedWorkers(snapshot.workers);
       flushCloudDataQueue().catch(() => {});
       return snapshot;
     }
@@ -3695,6 +4670,7 @@
       state.previewDraftSnapshot = snapshot;
     }
     if (!silent) toast("Se guardó correctamente");
+    captureSavedWorkers(snapshot.workers);
     flushCloudDataQueue().catch(() => {});
     renderExportPreviewTypes(snapshot);
     return snapshot;
@@ -3823,6 +4799,7 @@
   function closeExportPreview() {
     const modal = $("#exportPreview");
     if (modal) modal.hidden = true;
+    resetViewportLayout();
   }
 
   function downloadHarvestSnapshot(snapshot, opts = {}) {
@@ -3843,65 +4820,205 @@
     }
   }
 
-  function harvestShareFileCandidates(snapshot) {
+  function harvestShareFile(snapshot) {
     const primary = buildHarvestFile(snapshot);
-    if (!primary) return [];
+    if (!primary) return null;
     const name = harvestFileName(snapshot);
     const blob =
-      primary instanceof Blob ? primary : new Blob([primary], { type: primary.type });
-    const types = [
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      "application/vnd.ms-excel",
-      "application/octet-stream",
-    ];
-    const seen = new Set();
-    const files = [];
-    types.forEach((type) => {
-      if (seen.has(type)) return;
-      seen.add(type);
+      primary instanceof Blob
+        ? primary
+        : new Blob([primary], {
+            type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          });
+    try {
+      return new File([blob], name, {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        lastModified: Date.now(),
+      });
+    } catch {
       try {
-        files.push(new File([blob], name, { type, lastModified: Date.now() }));
+        Object.defineProperty(blob, "name", { value: name });
       } catch {
         /* ignore */
       }
-    });
-    return files.length ? files : [primary];
+      return blob;
+    }
+  }
+
+  function harvestShareFileCandidates(snapshot) {
+    const file = harvestShareFile(snapshot);
+    return file ? [file] : [];
   }
 
   function pickShareablePayload(files) {
     if (!files?.length || typeof navigator.share !== "function") return null;
-    const full = { files: files.slice() };
-    if (typeof navigator.canShare === "function") {
+    const payload = { files: files.slice(), title: files[0]?.name || "Excel QBerries" };
+    if (typeof navigator.canShare !== "function") return payload;
+    try {
+      if (navigator.canShare(payload)) return payload;
+    } catch {
+      /* algunos navegadores fallan el chequeo y igual pueden compartir */
+    }
+    if (files.length > 1) {
       try {
-        if (navigator.canShare(full)) return full;
+        if (navigator.canShare({ files: [files[0]] })) {
+          return { files: [files[0]], title: files[0].name, sequential: true };
+        }
       } catch {
         /* ignore */
       }
-      for (const file of files) {
-        const one = { files: [file] };
-        try {
-          if (navigator.canShare(one)) return one;
-        } catch {
-          /* ignore */
-        }
-      }
     }
-    return files.length === 1 ? { files: [files[0]] } : full;
+    try {
+      if (navigator.canShare({ files: [files[0]] })) {
+        return { files: [files[0]], title: files[0].name };
+      }
+    } catch {
+      /* ignore */
+    }
+    return payload;
   }
 
-  /** Debe llamarse en el mismo clic del usuario (sin await previo). */
+  /** Solo abre el menú de compartir. Nunca descarga el archivo. */
   function shareFilesNow(payload, { onOk, onFail } = {}) {
-    if (!payload?.files?.length || typeof navigator.share !== "function") {
+    if (!payload?.files?.length) {
       onFail?.();
-      return;
+      return false;
+    }
+    const native = window.QBNative;
+    if (native?.isNative?.()) {
+      native
+        .shareExcelFiles(payload.files, {
+          title: payload.title || "Excel de cosecha QBerries",
+          text: "",
+        })
+        .then((res) => {
+          if (res?.ok) onOk?.();
+          else onFail?.();
+        })
+        .catch((err) => {
+          if (native.isShareCancelled?.(err)) return;
+          onFail?.(err);
+        });
+      return true;
+    }
+    if (typeof navigator.share !== "function") {
+      onFail?.();
+      return false;
     }
     navigator
-      .share(payload)
+      .share({
+        files: payload.files,
+        title: payload.title || payload.files[0]?.name || "Excel QBerries",
+      })
       .then(() => onOk?.())
       .catch((err) => {
         if (err?.name === "AbortError") return;
         onFail?.(err);
       });
+    return true;
+  }
+
+  async function shareFilesSequential(files) {
+    for (let i = 0; i < files.length; i += 1) {
+      const file = files[i];
+      toast(
+        files.length > 1
+          ? `Enviando ${i + 1} de ${files.length}… elija WhatsApp`
+          : "Elija WhatsApp para enviar el Excel"
+      );
+      try {
+        await navigator.share({ files: [file], title: file.name });
+      } catch (err) {
+        if (err?.name === "AbortError") return false;
+        throw err;
+      }
+    }
+    return true;
+  }
+
+  function shareExcelDocuments(snapshots) {
+    const list = (snapshots || []).filter(Boolean);
+    if (!list.length) {
+      toast("No hay registro para enviar");
+      return;
+    }
+    if (typeof XLSX === "undefined") {
+      toast("Espere a que cargue el Excel e intente otra vez");
+      return;
+    }
+    const prepared = list;
+    let files = [];
+    try {
+      files = prepared.map((item) => harvestShareFile(item)).filter(Boolean);
+    } catch {
+      files = [];
+    }
+    if (!files.length) {
+      toast("No se pudo crear el Excel");
+      return;
+    }
+
+    const native = window.QBNative;
+    if (native?.isNative?.()) {
+      shareFilesNow(
+        { files, title: files.length > 1 ? "Excel de cosecha" : files[0].name },
+        {
+          onOk: () => toast("Elija WhatsApp para enviar"),
+          onFail: () =>
+            toast("No se pudo abrir el envío. Intente otra vez."),
+        }
+      );
+      return;
+    }
+
+    if (typeof navigator.share !== "function") {
+      toast("Este celular no permite enviar el Excel directo. Instale la app.");
+          return;
+    }
+
+    const payload = pickShareablePayload(files);
+    if (files.length > 1 && payload?.sequential) {
+      shareFilesSequential(files).catch(() =>
+        toast("No se pudo enviar. Intente de uno en uno.")
+      );
+      return;
+    }
+
+    if (!payload) {
+      toast("Este navegador no permite adjuntar el Excel. Instale la app.");
+      return;
+    }
+
+    shareFilesNow(payload, {
+      onOk: () =>
+        toast(
+          files.length > 1
+            ? "Elija WhatsApp para enviar los Excel"
+            : "Elija WhatsApp para enviar el Excel"
+        ),
+      onFail: () => {
+        if (files.length > 1) {
+          shareFilesSequential(files).catch(() =>
+            toast("No se pudo enviar por WhatsApp. Intente de nuevo.")
+          );
+      return;
+        }
+        toast("No se pudo abrir WhatsApp. Intente de nuevo.");
+      },
+    });
+  }
+
+  function shareHarvestFromPreview() {
+    const ready = availableExportSnapshots();
+    if (!ready.length) {
+      toast("No hay registro para enviar");
+      return;
+    }
+    if (ready.length === 1) {
+      shareExcelDocuments(ready);
+      return;
+    }
+    openReadyFilesModal("share", ready);
   }
 
   function shareHarvestSnapshot(snapshot, opts = {}) {
@@ -3916,44 +5033,7 @@
         return;
       }
     }
-    if (typeof XLSX === "undefined") {
-      toast("Espere a que cargue el Excel e intente otra vez");
-      return;
-    }
-
-    if (
-      !opts.single &&
-      !state.activeExportSaved &&
-      state.activeExportSnapshot?.id === snapshot.id
-    ) {
-      snapshot = persistHarvestSnapshot(snapshot, { silent: true }) || snapshot;
-    }
-
-    let candidates = [];
-    try {
-      candidates = harvestShareFileCandidates(snapshot);
-    } catch {
-      candidates = [];
-    }
-    if (!candidates.length) {
-      toast("No se pudo crear el Excel");
-      return;
-    }
-
-    const payload = pickShareablePayload(candidates);
-    if (!payload) {
-      downloadHarvestSnapshot(snapshot, { single: true });
-      toast("Use Descargar y adjunte el Excel en WhatsApp (clip 📎)");
-      return;
-    }
-
-    shareFilesNow(payload, {
-      onOk: () => toast("Elija WhatsApp para enviar el Excel"),
-      onFail: () => {
-        downloadHarvestSnapshot(snapshot, { single: true });
-        toast("Excel guardado. Toque Compartir otra vez y elija WhatsApp");
-      },
-    });
+    shareExcelDocuments([snapshot]);
   }
 
   function openReadyFilesModal(action, files) {
@@ -3975,15 +5055,23 @@
       title.textContent =
         state.readyFilesAction === "download"
           ? "¿Qué Excel desea guardar?"
-          : "¿Qué desea compartir?";
+          : "Enviar por WhatsApp";
     }
     if ($("#readyFilesAll")) $("#readyFilesAll").checked = true;
     const copy = $("#readyFilesCopy");
     if (copy) {
       copy.textContent =
-        items.length > 1
-          ? "Marque Suma, Resta, Descarte o los que necesite. Puede enviar uno, dos o los tres juntos."
-          : "Este archivo ya está listo para enviar o guardar.";
+        state.readyFilesAction === "share" && items.length > 1
+          ? "Puede enviar todos juntos o marcar solo los que necesita (Suma, Resta o Descarte)."
+          : state.readyFilesAction === "download"
+            ? "Elija qué Excel guardar en el celular."
+            : "Este archivo se enviará por WhatsApp.";
+    }
+    const allSend = $("#btnReadyFilesAllSend");
+    if (allSend) {
+      const showMass = state.readyFilesAction === "share" && items.length > 1;
+      allSend.hidden = !showMass;
+      allSend.textContent = `Enviar todos (${items.length})`;
     }
     list.innerHTML = HARVEST_TYPES.map((type) => {
       const item = items.find(
@@ -4013,7 +5101,9 @@
       go.textContent =
         state.readyFilesAction === "download"
           ? "Guardar Excel"
-          : "Enviar por WhatsApp";
+          : items.length > 1
+            ? "Enviar los que marqué"
+            : "Enviar por WhatsApp";
     }
     sheet.hidden = false;
     sheet.removeAttribute("hidden");
@@ -4026,6 +5116,7 @@
     if (!sheet) return;
     sheet.hidden = true;
     sheet.setAttribute("hidden", "");
+    resetViewportLayout();
   }
 
   function selectedReadySnapshots() {
@@ -4050,56 +5141,16 @@
   }
 
   function confirmReadyFilesAction(selected) {
-    const picks = selected.map((item) => {
-      if (isSnapshotSaved(item)) return item;
-      if (
-        !state.activeExportSaved &&
-        state.activeExportSnapshot?.id === item.id
-      ) {
-        return persistHarvestSnapshot(item, { silent: true }) || item;
-      }
-      return item;
-    });
+    const picks = selected || [];
     if (state.readyFilesAction === "download") {
       picks.forEach((item) => downloadHarvestSnapshot(item, { single: true }));
       return;
     }
-    shareHarvestSnapshots(picks);
+    shareExcelDocuments(picks);
   }
 
   function shareHarvestSnapshots(snapshots) {
-    if (!snapshots?.length) return;
-    if (snapshots.length === 1) {
-      shareHarvestSnapshot(snapshots[0], { single: true });
-      return;
-    }
-    if (typeof XLSX === "undefined") {
-      toast("Espere a que cargue el Excel e intente otra vez");
-      return;
-    }
-    let candidates = [];
-    try {
-      candidates = snapshots.flatMap((item) => harvestShareFileCandidates(item));
-    } catch {
-      candidates = [];
-    }
-    if (!candidates.length) {
-      toast("No se pudo crear el Excel");
-      return;
-    }
-    const payload = pickShareablePayload(candidates);
-    if (!payload) {
-      snapshots.forEach((item) => downloadHarvestSnapshot(item, { single: true }));
-      toast("Use Descargar y adjunte los Excel en WhatsApp (clip 📎)");
-      return;
-    }
-    shareFilesNow(payload, {
-      onOk: () => toast("Elija WhatsApp para enviar los Excel"),
-      onFail: () => {
-        snapshots.forEach((item) => downloadHarvestSnapshot(item, { single: true }));
-        toast("Excel guardados. Toque Compartir otra vez y elija WhatsApp");
-      },
-    });
+    shareExcelDocuments(snapshots);
   }
 
   function renderHarvestHistory() {
@@ -4177,99 +5228,236 @@
     return loadHarvestHistory().find((item) => item.id === id) || null;
   }
 
+  /* ---------- Guías history ---------- */
+  function loadGuiasHistory() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(GUIAS_HISTORY_KEY) || "[]");
+      const list = Array.isArray(parsed) ? parsed : [];
+      const minTime = Date.now() - HISTORY_TTL_MS;
+      return list
+        .filter((item) => Date.parse(item?.savedAt || 0) >= minTime)
+        .sort((a, b) => Date.parse(b.savedAt) - Date.parse(a.savedAt))
+        .slice(0, 50);
+    } catch {
+      return [];
+    }
+  }
+
+  function saveGuiasHistory(list) {
+    try {
+      localStorage.setItem(GUIAS_HISTORY_KEY, JSON.stringify(list));
+    } catch { /* full */ }
+  }
+
+  function pushGuiasHistory(payload) {
+    if (!payload) return;
+    const entry = {
+      id: uid(),
+      savedAt: new Date().toISOString(),
+      fecha: payload.fecha || todayISO(),
+      fundo: payload.fundo || "",
+      supervisor: payload.supervisorNombre || "",
+      supervisorDni: payload.supervisorDni || "",
+      totalGuias: payload.totals?.guias || 0,
+      totalJarras: payload.totals?.jarras || 0,
+      totalJabas: payload.totals?.jabas || 0,
+      guias: (payload.guias || []).map((g) => ({
+        numeroGuia: g.numeroGuia || "",
+        lote: g.lote || "",
+        jarras: g.jarras || 0,
+        jabas: g.jabas || 0,
+      })),
+    };
+    const history = loadGuiasHistory();
+    history.unshift(entry);
+    saveGuiasHistory(history.slice(0, 50));
+  }
+
+  function renderGuiasHistory() {
+    const root = $("#guiasHistoryList");
+    const pager = $("#guiasHistoryPager");
+    if (!root) return;
+    const history = loadGuiasHistory();
+    if (!history.length) {
+      state.guiasHistoryPage = 0;
+      root.innerHTML = '<div class="history-empty">Aún no hay guías guardadas en las últimas 48 horas.</div>';
+      if (pager) pager.hidden = true;
+      return;
+    }
+    const totalPages = Math.max(1, Math.ceil(history.length / HISTORY_PAGE_SIZE));
+    const page = Math.min(Math.max(state.guiasHistoryPage || 0, 0), totalPages - 1);
+    state.guiasHistoryPage = page;
+    const start = page * HISTORY_PAGE_SIZE;
+    const slice = history.slice(start, start + HISTORY_PAGE_SIZE);
+
+    root.innerHTML = slice
+      .map((item) => {
+        const saved = new Date(item.savedAt);
+        const when = Number.isNaN(saved.getTime())
+          ? ""
+          : saved.toLocaleString("es-PE", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+        return `<article class="history-item">
+          <div class="history-item-top">
+            <h3>${escapeHtml(item.fundo || "Licapa")} · ${item.totalGuias || 0} guía(s)</h3>
+            <time>${escapeHtml(when)}</time>
+          </div>
+          <p>${fmt(item.totalJarras)} jarras · ${fmt(item.totalJabas)} jabas<br>${escapeHtml(item.supervisor || "")}</p>
+        </article>`;
+      })
+      .join("");
+
+    if (pager) {
+      pager.hidden = false;
+      const label = $("#guiasHistoryPageLabel");
+      const prev = $("#btnGuiasHistoryPrev");
+      const next = $("#btnGuiasHistoryNext");
+      if (label) label.textContent = `${start + 1}–${Math.min(start + HISTORY_PAGE_SIZE, history.length)} de ${history.length} · pág. ${page + 1}/${totalPages}`;
+      if (prev) prev.disabled = page <= 0;
+      if (next) next.disabled = page >= totalPages - 1;
+    }
+  }
+
+  function switchHistoryTab(tab) {
+    const conteoPanel = $("#historyPanelConteo");
+    const guiasPanel = $("#historyPanelGuias");
+    $$("#historyTabs .history-tab").forEach((btn) => {
+      btn.classList.toggle("is-active", btn.dataset.historyTab === tab);
+    });
+    if (conteoPanel) conteoPanel.hidden = tab !== "conteo";
+    if (guiasPanel) guiasPanel.hidden = tab !== "guias";
+    if (tab === "guias") renderGuiasHistory();
+    else renderHarvestHistory();
+  }
+
   function openHarvestHistory() {
     state.historyPage = 0;
+    state.guiasHistoryPage = 0;
+    closeGuidesSheet();
     const sheet = $("#historySheet");
     if (!sheet) return;
-    // Pintar lista e iconos ANTES de mostrar: si se hidrata después,
-    // el cierre (X) y el contenido aparecen un frame tarde (= pestañeo).
     renderHarvestHistory();
+    renderGuiasHistory();
+    switchHistoryTab("conteo");
     hydrateIcons(sheet);
     sheet.hidden = false;
-    refreshTabbar();
+    refreshTopnav();
   }
 
   function closeHarvestHistory() {
     const sheet = $("#historySheet");
     if (sheet) sheet.hidden = true;
-    refreshTabbar();
+    refreshTopnav();
+    resetViewportLayout();
   }
 
   async function clearAppCache(button) {
-    if (button) {
-      button.disabled = true;
-      button.textContent = "Borrando…";
-    }
+    setBtnLoading(button, true, "Borrando…");
     try {
-      // 1) Toda la Cache Storage de la PWA (todas las versiones).
-      if ("caches" in window) {
-        const keys = await caches.keys();
-        await Promise.all(keys.map((key) => caches.delete(key)));
-        const leftover = await caches.keys();
-        await Promise.all(leftover.map((key) => caches.delete(key)));
+      clearTabShellStorage();
+      try {
+        localStorage.removeItem(CACHE_DAY_KEY);
+      } catch {
+        /* ignore */
       }
 
-      // 2) Desregistrar todos los service workers (si no, vuelven a cachear).
-      if ("serviceWorker" in navigator) {
-        const regs = await navigator.serviceWorker.getRegistrations();
-        await Promise.all(regs.map((reg) => reg.unregister()));
+      if (!isNativeApp()) {
+        if ("caches" in window) {
+          const keys = await caches.keys();
+          await Promise.all(keys.map((key) => caches.delete(key)));
+          const leftover = await caches.keys();
+          await Promise.all(leftover.map((key) => caches.delete(key)));
+        }
+        if ("serviceWorker" in navigator) {
+          const regs = await navigator.serviceWorker.getRegistrations();
+          await Promise.all(regs.map((reg) => reg.unregister()));
+        }
+        if (typeof indexedDB !== "undefined" && indexedDB.databases) {
+          const dbs = await indexedDB.databases();
+          await Promise.all(
+            (dbs || []).map(
+              (db) =>
+                new Promise((resolve) => {
+                  if (!db?.name) {
+                    resolve();
+                    return;
+                  }
+                  const req = indexedDB.deleteDatabase(db.name);
+                  req.onsuccess = () => resolve();
+                  req.onerror = () => resolve();
+                  req.onblocked = () => resolve();
+                })
+            )
+          );
+        }
       }
 
-      // 3) Bases IndexedDB del origen (caché interna del navegador).
-      if (typeof indexedDB !== "undefined" && indexedDB.databases) {
-        const dbs = await indexedDB.databases();
-        await Promise.all(
-          (dbs || []).map(
-            (db) =>
-              new Promise((resolve) => {
-                if (!db?.name) {
-                  resolve();
-                  return;
-                }
-                const req = indexedDB.deleteDatabase(db.name);
-                req.onsuccess = () => resolve();
-                req.onerror = () => resolve();
-                req.onblocked = () => resolve();
-              })
-          )
-        );
-      }
-
-      toast("Caché borrada por completo · recargando…");
-      // Recarga limpia: sin service worker y con URL nueva para saltar caché HTTP.
-      const url = new URL(location.href);
-      url.searchParams.set("_cb", String(Date.now()));
-      setTimeout(() => location.replace(url.href), 350);
+      toast(
+        isNativeApp()
+          ? "Caché borrada · recargando app…"
+          : "Caché borrada por completo · recargando…"
+      );
+      reloadWithBust();
     } catch {
       toast("No se pudo borrar la caché");
-      if (button) {
-        button.disabled = false;
-        button.textContent = "Borrar caché";
-        hydrateIcons(button.parentElement || button);
-      }
+      setBtnLoading(button, false);
     }
   }
 
   async function updateApp(button) {
-    if (button) {
-      button.disabled = true;
-      button.textContent = "Actualizando…";
-    }
+    setBtnLoading(button, true, "Actualizando…");
     try {
-      if ("caches" in window) {
-        const keys = await caches.keys();
-        await Promise.all(keys.map((key) => caches.delete(key)));
+      clearTabShellStorage();
+      try {
+        localStorage.removeItem(CACHE_DAY_KEY);
+      } catch {
+        /* ignore */
       }
-      if ("serviceWorker" in navigator) {
-        const regs = await navigator.serviceWorker.getRegistrations();
-        await Promise.all(regs.map((reg) => reg.unregister()));
+
+      if (!isNativeApp()) {
+        // Mantener SW activo: refrescar assets y recargar (no unregister + refresh)
+        if ("caches" in window) {
+          const keys = await caches.keys();
+          await Promise.all(keys.map((key) => caches.delete(key)));
+        }
+        requestCacheRefresh();
+        try {
+          const reg = await navigator.serviceWorker?.getRegistration?.();
+          reg?.waiting?.postMessage?.({ type: "SKIP_WAITING" });
+          reg?.active?.postMessage?.({ type: "SKIP_WAITING" });
+        } catch {
+          /* ignore */
+        }
       }
+
+      if (navigator.onLine) {
+        await warmTabShells(true);
+        await detectNetlify(5000);
+        await Promise.all([
+          loadSupervisores(),
+          loadPersonas(),
+          loadCatalogs(),
+        ]);
+        if (canUseCloudApi()) {
+          await flushVinculoQueue().catch(() => {});
+          await flushCloudDataQueue().catch(() => {});
+        }
+        updateNetworkUI();
+        toast(
+          canUseCloudApi()
+            ? "Actualizado · Netlify conectado"
+            : navigator.onLine
+              ? "Actualizado · revise internet o Netlify"
+              : "Actualizado · sin internet"
+        );
+      } else {
+        toast("Sin internet · se recarga con datos del celular");
+      }
+
+      reloadWithBust();
     } catch {
-      /* la recarga de red sigue siendo el respaldo */
+      toast("No se pudo actualizar");
+      setBtnLoading(button, false);
     }
-    const url = new URL(location.href);
-    url.searchParams.set("_cb", String(Date.now()));
-    location.replace(url.href);
   }
 
   function openAyuda() {
@@ -4280,7 +5468,8 @@
       sheet.className = "help-sheet";
       sheet.innerHTML = `
         <div class="help-head">
-          <h2>Recomendaciones</h2>
+          <button type="button" class="app-back app-back--on-light help-back" aria-label="Volver">Atrás</button>
+          <h2>Ayuda</h2>
           <button type="button" class="help-settings" aria-label="Configuración de la app">
             ${ico("settings")}
           </button>
@@ -4288,13 +5477,13 @@
         <p class="help-lead">Guía rápida para el registro en campo.</p>
         <ul>
           <li><strong>Vincular:</strong> registre una sola vez su celular, grupo y supervisor global.</li>
-          <li><strong>Inicio:</strong> elija el lote; el modulo, turno y variedad se completan solos.</li>
+          <li><strong>Registro:</strong> elija el lote; el módulo, turno y variedad se completan solos.</li>
           <li><strong>Agregar:</strong> escriba el DNI (8 dígitos) y el nombre aparece del listado.</li>
           <li><strong>Sin base:</strong> toque usuarios, complete DNI y nombre; se guarda en Data Manuales cuando haya internet.</li>
           <li><strong>Jarras:</strong> anote mañana y tarde por separado; el total se suma solo.</li>
           <li><strong>Guardar:</strong> revise el resumen antes de compartirlo o descargarlo.</li>
           <li><strong>Excel:</strong> consulte las últimas 48 horas y comparta el archivo por WhatsApp.</li>
-          <li><strong>Sin internet:</strong> todo queda guardado en el celular y sube al reconectar.</li>
+          <li><strong>Sin internet:</strong> puede navegar, registrar guías y cosecha; todo queda en el celular y sube al reconectar.</li>
         </ul>
         <button type="button" class="help-close">Entendido</button>
         <div class="app-tools-backdrop" hidden>
@@ -4306,18 +5495,21 @@
               </div>
               <button type="button" class="app-tools-close" aria-label="Cerrar">${ico("x")}</button>
             </div>
-            <p>Borre toda la caché de la app (archivos, service worker e IndexedDB) y luego actualice. Sus registros de cosecha, historial y sesión no se eliminan.</p>
-            <a class="app-tools-install" href="/instalar/">${ico("download")} QR para instalar en otro celular</a>
+            <p>${
+              "Borre la caché de la app (service worker) y luego toque Actualizar app. Sus registros de cosecha, historial y sesión no se eliminan."
+            }</p>
+            <a class="app-tools-install" href="/instalar/">${ico("download")} Instalar en el celular</a>
             <button type="button" class="app-tools-cache">${ico("trash")} Borrar caché</button>
             <button type="button" class="app-tools-update">${ico("refresh")} Actualizar app</button>
-            <small class="app-version">Versión de la app: ${APP_VERSION}</small>
           </section>
         </div>`;
-      ($("#phone") || document.body).appendChild(sheet);
-      sheet.querySelector(".help-close")?.addEventListener("click", () => {
+      ($(".stage") || document.body).appendChild(sheet);
+      const closeHelp = () => {
         sheet.hidden = true;
-        refreshTabbar();
-      });
+        refreshTopnav();
+      };
+      sheet.querySelector(".help-close")?.addEventListener("click", closeHelp);
+      sheet.querySelector(".help-back")?.addEventListener("click", closeHelp);
       const tools = sheet.querySelector(".app-tools-backdrop");
       sheet.querySelector(".help-settings")?.addEventListener("click", () => {
         if (tools) tools.hidden = false;
@@ -4328,17 +5520,13 @@
       tools?.addEventListener("click", (event) => {
         if (event.target === tools) tools.hidden = true;
       });
-      const cacheButton = sheet.querySelector(".app-tools-cache");
-      cacheButton?.addEventListener("click", () => clearAppCache(cacheButton));
-      const updateButton = sheet.querySelector(".app-tools-update");
-      updateButton?.addEventListener("click", () => updateApp(updateButton));
     }
     sheet.hidden = false;
-    refreshTabbar();
+    refreshTopnav();
   }
 
   function showHarvestHome(identity) {
-    if (PAGE !== "registro") {
+    if (getPage() !== "registro") {
       goTo("registro");
       return;
     }
@@ -4349,8 +5537,20 @@
       bindSessionToIdentity(identity.dni);
     }
     const screen = $("#harvestScreen");
-    if (screen) screen.hidden = false;
+    if (screen) {
+      screen.hidden = false;
+    }
+    // Siempre Conteo al entrar; Guías solo si ?tab=guias (openRequestedTab)
+    applyGuidesPanel(false);
     renderHarvest();
+    // Guías queda montada en caché para el cambio de pestaña sin pestañeo
+    requestAnimationFrame(() => {
+      try {
+        warmGuidesPanel();
+      } catch {
+        /* ignore */
+      }
+    });
     Promise.all([loadCatalogs(), loadPersonas()])
       .then(renderHarvest)
       .catch(() => renderHarvest());
@@ -4413,11 +5613,14 @@
   }
 
   function closeManualWorker() {
+    $("#manualWorkerDni")?.blur();
+    $("#manualWorkerNombre")?.blur();
     const sheet = $("#manualWorker");
     if (!sheet) return;
     sheet.hidden = true;
     sheet.setAttribute("hidden", "");
     sheet.style.display = "none";
+    resetViewportLayout();
   }
 
   function pushHarvestWorker(dni, nombre, { fromManual = false } = {}) {
@@ -4476,7 +5679,7 @@
         return {
           dni: key,
           nombre,
-          source: info?.manual ? "Manual" : "Sesión",
+          source: info?.manual ? "Manual" : "Guardado",
         };
       })
       .filter(Boolean)
@@ -4492,7 +5695,7 @@
     }
     const pool = localSavedWorkersPool();
     if (!pool.length) {
-      toast("Agregue trabajadores primero; quedarán aquí hasta cerrar sesión");
+      toast("Aún no hay personal guardado. Confirme un registro y los DNI quedan aquí");
       return;
     }
     if ($("#workerPickAll")) $("#workerPickAll").checked = false;
@@ -4556,6 +5759,7 @@
     if (!sheet) return;
     sheet.hidden = true;
     sheet.setAttribute("hidden", "");
+    resetViewportLayout();
   }
 
   function applyWorkerPick() {
@@ -4671,6 +5875,13 @@
   }
 
   function onHarvestWorkersClick(e) {
+    const personBtn = e.target.closest("[data-worker-id-open]");
+    if (personBtn) {
+      const row = personBtn.closest("[data-worker-id]");
+      const worker = state.harvest.workers.find((w) => w.id === row?.dataset.workerId);
+      if (worker) openWorkerIdModal(worker);
+      return;
+    }
     const btn = e.target.closest("[data-harvest-remove]");
     if (!btn) return;
     const row = btn.closest("[data-worker-id]");
@@ -4685,8 +5896,31 @@
         );
         saveHarvest();
         renderHarvestWorkers();
+        alertOk("Trabajador quitado", worker.nombre || "");
       }
     );
+  }
+
+  function openWorkerIdModal(worker) {
+    const sheet = $("#workerIdModal");
+    if (!sheet || !worker) return;
+    const nombre = String(worker.nombre || "SIN NOMBRE").trim().toUpperCase();
+    const dni = String(worker.dni || "").replace(/\D/g, "") || "—";
+    if ($("#workerIdModalName")) $("#workerIdModalName").textContent = nombre;
+    if ($("#workerIdModalDni")) $("#workerIdModalDni").textContent = dni;
+    sheet.hidden = false;
+    sheet.removeAttribute("hidden");
+    sheet.style.display = "flex";
+    hydrateIcons(sheet);
+  }
+
+  function closeWorkerIdModal() {
+    const sheet = $("#workerIdModal");
+    if (!sheet) return;
+    sheet.hidden = true;
+    sheet.setAttribute("hidden", "");
+    sheet.style.display = "none";
+    resetViewportLayout();
   }
 
   function toast(msg) {
@@ -4700,22 +5934,88 @@
     }, 2200);
   }
 
+  function swalReady() {
+    return typeof window.Swal !== "undefined" && typeof window.Swal.fire === "function";
+  }
+
+  /** Confirmaciones bonitas (SweetAlert2). Si no carga, usa el modal clásico. */
   function confirmModal(title, body, onOk, okLabel = "Eliminar") {
+    const label = String(okLabel || "Eliminar");
+    const danger = /eliminar|quitar|vaciar|borrar|cerrar/i.test(
+      `${title} ${label}`
+    );
+
+    if (swalReady()) {
+      window.Swal.fire({
+        title: String(title || "Confirmar"),
+        text: String(body || ""),
+        icon: danger ? "warning" : "question",
+        showCancelButton: true,
+        focusCancel: true,
+        reverseButtons: true,
+        confirmButtonText: label,
+        cancelButtonText: "Cancelar",
+        buttonsStyling: false,
+        customClass: {
+          popup: "qb-swal",
+          title: "qb-swal-title",
+          htmlContainer: "qb-swal-text",
+          actions: "qb-swal-actions",
+          confirmButton: danger
+            ? "qb-swal-btn qb-swal-btn--danger"
+            : "qb-swal-btn qb-swal-btn--ok",
+          cancelButton: "qb-swal-btn qb-swal-btn--cancel",
+          icon: "qb-swal-icon",
+        },
+      }).then((result) => {
+        if (result.isConfirmed && typeof onOk === "function") onOk();
+      });
+      return;
+    }
+
     const modal = $("#modal");
     const modalTitle = $("#modalTitle");
     const modalBody = $("#modalBody");
     const modalOk = $("#modalOk");
-    if (!modal || !modalTitle || !modalBody) return;
+    if (!modal || !modalTitle || !modalBody) {
+      if (typeof onOk === "function" && window.confirm(`${title}\n\n${body}`)) {
+        onOk();
+      }
+      return;
+    }
     modalTitle.textContent = title;
     modalBody.textContent = body;
-    if (modalOk) modalOk.textContent = okLabel;
+    if (modalOk) modalOk.textContent = label;
     state.pendingConfirm = onOk;
     modal.hidden = false;
+  }
+
+  /** Aviso rápido OK (éxito / info) con SweetAlert si está disponible. */
+  function alertOk(title, text = "") {
+    if (!swalReady()) {
+      toast(text || title);
+      return;
+    }
+    window.Swal.fire({
+      icon: "success",
+      title: String(title || "Listo"),
+      text: String(text || ""),
+      timer: 1800,
+      showConfirmButton: false,
+      buttonsStyling: false,
+      customClass: {
+        popup: "qb-swal qb-swal--toastish",
+        title: "qb-swal-title",
+        htmlContainer: "qb-swal-text",
+        icon: "qb-swal-icon",
+      },
+    });
   }
   function closeModal() {
     const modal = $("#modal");
     if (modal) modal.hidden = true;
     state.pendingConfirm = null;
+    resetViewportLayout();
   }
   function closeSheets() {
     $$(".sheet").forEach((s) => (s.hidden = true));
@@ -4731,37 +6031,32 @@
       (acc, g) => {
         acc.jarras += num(g.jarras);
         acc.jabas += num(g.jabas);
-        acc.cantidad += num(g.jarras) + num(g.jabas);
+        acc.guias += 1;
         return acc;
       },
-      { guias: state.guias.length, jarras: 0, jabas: 0, cantidad: 0 }
+      { guias: 0, jarras: 0, jabas: 0, cantidad: 0 }
     );
   }
 
   function updateKpis() {
     const t = totals();
+    t.cantidad = t.jarras;
     const g = $("#kpiGuias");
     const gh = $("#kpiGuiasHero");
     const j = $("#kpiJarras");
     const b = $("#kpiJabas");
+    const fj = $("#guidesFooterJarras");
+    const fjb = $("#guidesFooterJabas");
     if (g) g.textContent = fmt(t.guias);
     if (gh) gh.textContent = `GUÍAS: ${String(t.guias).padStart(2, "0")}`;
     if (j) j.textContent = fmt(t.jarras);
     if (b) b.textContent = fmt(t.jabas);
+    if (fj) fj.textContent = fmt(t.jarras);
+    if (fjb) fjb.textContent = fmt(t.jabas);
   }
 
   function updateMeta() {
-    const s = state.session;
-    const t = totals();
-    const fechaTxt = s.fecha
-      ? s.fecha.split("-").reverse().join("/")
-      : "—";
-    const meta = $("#metaLine");
-    if (meta) {
-      meta.textContent = s.ready
-        ? `Fecha ${fechaTxt} · ${t.guias} guía(s) · ${fmt(t.jarras)} jarras + ${fmt(t.jabas)} jabas = ${fmt(t.cantidad)} · guardado`
-        : "Complete la sesión para registrar";
-    }
+    /* Totales solo en el panel inferior (KPI). */
   }
 
   function updateClock() {
@@ -4782,7 +6077,15 @@
     } else if (pending) {
       label = canUseCloudApi()
         ? `Pendiente · ${pending}`
+        : isNativeApp()
+          ? `Pendiente · ${pending} · sin nube`
         : `Pendiente · ${pending}`;
+      mode = "is-pending";
+    } else if (isNativeApp() && state.cloudApi) {
+      label = "Con internet · nube OK";
+      mode = "is-online";
+    } else if (isNativeApp() && !state.cloudApi) {
+      label = "Con internet · sin nube";
       mode = "is-pending";
     }
 
@@ -4860,70 +6163,271 @@
     const root = $("#cards");
     if (!root) return;
     if (!state.guias.length) {
-      root.innerHTML = `<div class="empty">${ico("clipboard", "ico")}<br/>Sin guías aún.<br/>Toque + para agregar (6 o más).</div>`;
+      root.innerHTML = `<div class="empty">${ico("clipboard", "ico")}<br/>Sin guías aún.<br/>Toque abajo para agregar una.</div>`;
+      state.expandedGuiaId = null;
+      state._guidesWarmed = true;
       updateKpis();
       updateMeta();
       return;
     }
 
+    // Si no hay expandida válida, abrir la primera (solo al cargar).
+    if (
+      !state.expandedGuiaId ||
+      !state.guias.some((g) => g.id === state.expandedGuiaId)
+    ) {
+      state.expandedGuiaId = state.guias[0].id;
+    }
+
     root.innerHTML = state.guias
       .map((g, idx) => {
-        const fecha = state.session.fecha
-          ? state.session.fecha.split("-").reverse().join("/")
-          : "—";
-        const sub = `Fecha ${fecha} · G${g.grupo || "—"} · L${g.lote || "—"}`;
-        const qJ = num(g.jarras);
-        const qB = num(g.jabas);
+        const loteTriggerLabel = g.lote
+          ? `Lote ${g.lote} · ${g.modulo || "—"} · T${g.turno || "—"}`
+          : "Buscar lote";
+        const numVal = formatNumeroGuiaInput(g.numeroGuia);
+        const isOpen = g.id === state.expandedGuiaId;
+        const collapsed = isOpen ? "" : " is-collapsed";
         return `
-        <article class="card guia-card" data-id="${g.id}">
-          <div class="guia-card-head">
-            <div class="guia-num">${idx + 1}</div>
-            <div class="titles">
-              <strong>Guía de cosecha</strong>
-              <span>${escapeHtml(sub)}</span>
+        <section class="guides-card harvest-field-card${collapsed}" data-id="${g.id}">
+          <header class="guides-card-head">
+            <div class="guides-card-index" aria-hidden="true">${String(idx + 1).padStart(2, "0")}</div>
+            <div class="guides-num-wrap">
+              <span class="guides-num-label">GUÍA</span>
+              <div class="guides-num-field${numVal ? " is-filled" : ""}">
+                <span class="guides-num-prefix">N°</span>
+                <input
+                  data-field="numeroGuia"
+                  type="text"
+                  inputmode="numeric"
+                  maxlength="${GUIA_NUM_LEN}"
+                  placeholder="000000"
+                  value="${escapeHtml(numVal)}"
+                  aria-label="Número de guía"
+                  autocomplete="off"
+                />
+              </div>
             </div>
-            <span class="tag-soft">${escapeHtml(g.modulo || "Mod")}</span>
-            <button type="button" class="btn btn-sm btn-danger-outline" data-act="del-guia" aria-label="Quitar">${ico("trash")}</button>
+            <label class="guides-hora-field">
+              <span class="guides-num-label">HORA</span>
+              <input data-field="horaRecojo" type="text" inputmode="numeric" placeholder="09:15" value="${escapeHtml(g.horaRecojo || "")}" autocomplete="off" aria-label="Hora recojo" readonly />
+            </label>
+            <button
+              type="button"
+              class="guides-card-toggle"
+              data-act="toggle-guia"
+              aria-label="Expandir o colapsar guía"
+              aria-expanded="${isOpen ? "true" : "false"}"
+            >
+              <span data-icon="chevronDown"></span>
+            </button>
+            <button type="button" class="guides-card-del" data-act="del-guia" aria-label="Quitar guía">
+              <span data-icon="trash"></span>
+            </button>
+          </header>
+
+          <div class="guides-card-body">
+            <div class="harvest-section-title">
+              <div>
+                <small>UBICACIÓN DE COSECHA</small>
+                <h2>Seleccione el lote</h2>
           </div>
-          <div class="guia-grid">
-            ${selectTrigger("layers", "Grupo", "grupo", g.grupo, "Elegir grupo")}
-            ${selectTrigger("tag", "Lote", "lote", g.lote, "Elegir lote")}
-            ${fieldRow("grid", "Modulo", "modulo", g.modulo, { placeholder: "Auto del lote" })}
-            ${fieldRow("hash", "Turno", "turno", g.turno, { placeholder: "Auto del lote" })}
-            ${fieldRow("leaf", "Variedad", "variedad", g.variedad, { placeholder: "Sekoya Pop" })}
-            <div class="qty-block">
-              <div class="qty-head">Cantidad · se guarda y se suma</div>
-              <div class="qty-row">
-                ${fieldRow("berry", "Jarras", "jarras", g.jarras, { type: "number", placeholder: "00", extra: 'inputmode="numeric" min="0" step="1" class="qty-input"' })}
-                ${fieldRow("package", "Jabas", "jabas", g.jabas, { type: "number", placeholder: "00", extra: 'inputmode="numeric" min="0" step="1" class="qty-input"' })}
+              </div>
+            <label class="harvest-lote-control">
+              <span class="sr-only">Lote</span>
+              <button type="button" class="select-trigger harvest-lote-trigger" data-pick="lote" aria-label="Seleccionar lote">
+                <span class="${g.lote ? "" : "ph"}">${escapeHtml(loteTriggerLabel)}</span>
+                <span class="chev" data-icon="search"></span>
+              </button>
+            </label>
+            <div class="harvest-location-grid">
+              <div><small>MODULO</small><strong>${escapeHtml(g.modulo || "—")}</strong></div>
+              <div><small>TURNO</small><strong>${escapeHtml(g.turno || "—")}</strong></div>
+              <div><small>VARIEDAD</small><strong>${escapeHtml(g.variedad || "—")}</strong></div>
+            </div>
+
+            <div class="harvest-section-title guides-section-gap">
+              <div>
+                <small>CANTIDADES</small>
+                <h2>1 jaba = 12 jarras</h2>
+          </div>
+          </div>
+            <div class="harvest-add-box guides-qty-box">
+              <div class="guides-qty-grid">
+              <label class="guides-qty-field">
+                <span>Jarras</span>
+                <input data-field="jarras" type="number" inputmode="numeric" min="0" step="1" placeholder="00" value="${num(g.jarras) > 0 ? num(g.jarras) : ""}" autocomplete="off" />
+              </label>
+              <label class="guides-qty-field">
+                <span>Jabas</span>
+                <input data-field="jabas" type="number" inputmode="numeric" min="0" step="1" placeholder="00" value="${num(g.jabas) > 0 ? num(g.jabas) : ""}" autocomplete="off" />
+              </label>
               </div>
             </div>
           </div>
-          <div class="guia-subtotal">
-            <span>SUBTOTAL GUÍA</span>
-            <b>${fmt(qJ)} jarras · ${fmt(qB)} jabas</b>
-          </div>
-        </article>`;
+        </section>`;
       })
       .join("");
 
+    hydrateIcons(root);
+    state._guidesWarmed = true;
     updateKpis();
     updateMeta();
+  }
+
+  function addGuiaAndOpen() {
+    const nueva = emptyGuia();
+    state.guias.push(nueva);
+    state.expandedGuiaId = nueva.id;
+    saveStore();
+    renderCards();
+    $("#cards")?.lastElementChild?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
 
   function findGuia(id) {
     return state.guias.find((g) => g.id === id);
   }
 
+  function parseHHMM(value) {
+    const m = String(value || "")
+      .trim()
+      .match(/^(\d{1,2})\s*:\s*(\d{1,2})/);
+    if (!m) return null;
+    const hh = Math.max(0, Math.min(23, num(m[1])));
+    const mm = Math.max(0, Math.min(59, num(m[2])));
+    return { hh, mm };
+  }
+
+  function formatHHMM(hh, mm) {
+    const H = String(Math.max(0, Math.min(23, num(hh)))).padStart(2, "0");
+    const M = String(Math.max(0, Math.min(59, num(mm)))).padStart(2, "0");
+    return `${H}:${M}`;
+  }
+
+  function roundMinutesTo5(hh, mm) {
+    const total = Math.max(0, Math.min(23, num(hh))) * 60 + Math.max(0, Math.min(59, num(mm)));
+    const rounded = Math.round(total / 5) * 5;
+    const hh2 = Math.floor(rounded / 60) % 24;
+    const mm2 = rounded % 60;
+    return { hh: hh2, mm: mm2 };
+  }
+
+  function syncHoraPickerUI() {
+    const modal = $("#horaPickerModal");
+    if (!modal || modal.hidden) return;
+    const draft = state.timePickerDraft;
+    if (!draft) return;
+    const hh = String(draft.hh).padStart(2, "0");
+    const mm = String(draft.mm).padStart(2, "0");
+    $("#horaPickerHour") && ($("#horaPickerHour").textContent = hh);
+    $("#horaPickerMin") && ($("#horaPickerMin").textContent = mm);
+    $("#horaPickerNow") && ($("#horaPickerNow").textContent = `${hh}:${mm}`);
+  }
+
+  function openHoraRecojoPicker(guiaId) {
+    const modal = $("#horaPickerModal");
+    if (!modal) return;
+    const guia = findGuia(guiaId);
+    if (!guia) return;
+    const parsed = parseHHMM(guia.horaRecojo);
+    const d = new Date();
+    const hh = parsed ? parsed.hh : d.getHours();
+    const mm = parsed ? parsed.mm : d.getMinutes();
+
+    state.timePicker = { guiaId };
+    state.timePickerDraft = { hh, mm };
+
+    modal.hidden = false;
+    modal.removeAttribute("hidden");
+    modal.style.display = "grid";
+    syncHoraPickerUI();
+    resetViewportLayout();
+  }
+
+  function closeHoraRecojoPicker() {
+    const modal = $("#horaPickerModal");
+    if (!modal) return;
+    modal.hidden = true;
+    modal.setAttribute("hidden", "");
+    modal.style.display = "none";
+    state.timePicker = null;
+    state.timePickerDraft = null;
+    resetViewportLayout();
+  }
+
+  function applyHoraRecojoFromPicker({ roundTo5 = false } = {}) {
+    const ctx = state.timePicker;
+    const guia = ctx ? findGuia(ctx.guiaId) : null;
+    const draft = state.timePickerDraft;
+    if (!guia || !draft) return;
+
+    let hh = draft.hh;
+    let mm = draft.mm;
+    if (roundTo5) {
+      const r = roundMinutesTo5(hh, mm);
+      hh = r.hh;
+      mm = r.mm;
+    }
+
+    guia.horaRecojo = formatHHMM(hh, mm);
+
+    const article = $(`#cards [data-id="${guia.id}"]`);
+    const input = article?.querySelector('input[data-field="horaRecojo"]');
+    if (input) input.value = guia.horaRecojo;
+
+    saveStore();
+    updateKpis();
+    updateMeta();
+    if ($("#guidesSummaryModal") && !$("#guidesSummaryModal").hidden) {
+      renderGuidesSummaryCard();
+    }
+
+    closeHoraRecojoPicker();
+  }
+
+  function applyJabaJarra(el, guia) {
+    const field = el.dataset.field;
+    if (field === "jabas") {
+      const raw = String(el.value || "").replace(/[^\d.]/g, "");
+      const n = raw === "" ? 0 : num(raw);
+      guia.jabas = n > 0 ? n : "";
+      if (!n) el.value = "";
+      const article = el.closest(".guides-card");
+      const jarrasInput = article?.querySelector('[data-field="jarras"]');
+      if (n > 0) {
+        guia.jarras = n * JARRAS_POR_JABA;
+        if (jarrasInput) jarrasInput.value = String(guia.jarras);
+      } else {
+        guia.jarras = "";
+        if (jarrasInput) jarrasInput.value = "";
+      }
+    } else if (field === "jarras") {
+      const raw = String(el.value || "").replace(/[^\d.]/g, "");
+      const n = raw === "" ? 0 : num(raw);
+      guia.jarras = n > 0 ? n : "";
+      if (!n) el.value = "";
+    }
+  }
+
   function onCardsClick(e) {
     const pickBtn = e.target.closest("[data-pick]");
     if (pickBtn) {
-      const article = pickBtn.closest(".card");
+      const article = pickBtn.closest(".guides-card");
       const guia = findGuia(article?.dataset.id);
       const kind = pickBtn.dataset.pick;
-      if (guia && (kind === "grupo" || kind === "lote")) {
+      if (guia && kind === "lote") {
         openPicker(kind, guia.id);
       }
+      return;
+    }
+
+    const horaInput = e.target?.closest?.('input[data-field="horaRecojo"]');
+    if (horaInput) {
+      const article = horaInput.closest(".guides-card");
+      const guia = findGuia(article?.dataset.id);
+      if (!guia) return;
+      e.preventDefault();
+      e.stopPropagation();
+      openHoraRecojoPicker(guia.id);
       return;
     }
 
@@ -4933,28 +6437,48 @@
 
     if (act === "add-guia") {
       if (!requireQrLogin()) return;
-      state.guias.push(emptyGuia());
-      saveStore();
-      renderCards();
-      $("#cards").lastElementChild?.scrollIntoView({ behavior: "smooth" });
+      addGuiaAndOpen();
       return;
     }
 
-    const article = btn.closest(".card");
+    const article = btn.closest(".guides-card");
+    if (act === "toggle-guia") {
+      if (!article) return;
+      const id = article.dataset.id || "";
+      const wasCollapsed = article.classList.contains("is-collapsed");
+      if (wasCollapsed) {
+        // Abrir solo esta; cerrar las demás
+        state.expandedGuiaId = id;
+        $$("#cards .guides-card").forEach((card) => {
+          const open = card.dataset.id === id;
+          card.classList.toggle("is-collapsed", !open);
+          const t = card.querySelector('[data-act="toggle-guia"]');
+          if (t) t.setAttribute("aria-expanded", open ? "true" : "false");
+        });
+      } else {
+        article.classList.add("is-collapsed");
+        btn.setAttribute("aria-expanded", "false");
+        if (state.expandedGuiaId === id) state.expandedGuiaId = null;
+      }
+      return;
+    }
+
     const guia = findGuia(article?.dataset.id);
     if (!guia) return;
 
     if (act === "del-guia") {
-      const hasData = Object.entries(guia).some(
-        ([k, v]) => k !== "id" && String(v || "").trim()
-      );
       const doDel = () => {
         state.guias = state.guias.filter((g) => g.id !== guia.id);
+        if (state.expandedGuiaId === guia.id) {
+          state.expandedGuiaId = state.guias.length
+            ? state.guias[state.guias.length - 1].id
+            : null;
+        }
         saveStore();
         renderCards();
-        toast("Guía quitada");
+        alertOk("Guía eliminada");
       };
-      if (hasData) {
+      if (guiaHasData(guia)) {
         confirmModal("Quitar guía", "Esta guía tiene datos. ¿Eliminarla?", doDel);
       } else doDel();
     }
@@ -4963,36 +6487,39 @@
   function onCardsInput(e) {
     const el = e.target;
     if (!el.dataset.field) return;
-    const article = el.closest(".card");
+    const article = el.closest(".guides-card");
     const guia = findGuia(article?.dataset.id);
     if (!guia) return;
     const field = el.dataset.field;
-    if (field === "jarras" || field === "jabas") {
-      const raw = String(el.value || "").replace(/[^\d.]/g, "");
-      const n = raw === "" ? 0 : num(raw);
-      guia[field] = n > 0 ? n : "";
-      if (!n) el.value = "";
-    } else {
-      guia[field] = el.value;
+
+    if (field === "numeroGuia") {
+      guia.numeroGuia = normalizeNumeroGuia(el.value);
+      el.value = guia.numeroGuia;
+      const wrap = el.closest(".guides-num-field");
+      wrap?.classList.toggle("is-filled", !!guia.numeroGuia);
+    } else if (field === "jabas" || field === "jarras") {
+      applyJabaJarra(el, guia);
+    } else if (field === "horaRecojo") {
+      guia.horaRecojo = el.value.trim();
     }
+
     saveStore();
-    const sub = article.querySelector(".guia-subtotal b");
-    if (sub) {
-      sub.textContent = `${fmt(num(guia.jarras))} jarras · ${fmt(num(guia.jabas))} jabas`;
-    }
-    const span = article.querySelector(".titles span");
-    if (span) {
-      const fecha = state.session.fecha
-        ? state.session.fecha.split("-").reverse().join("/")
-        : "—";
-      span.textContent = `Fecha ${fecha} · G${guia.grupo || "—"} · L${guia.lote || "—"}`;
-    }
-    const tag = article.querySelector(".tag-soft");
-    if (tag && field === "modulo") {
-      tag.textContent = guia.modulo || "Mod";
-    }
     updateKpis();
     updateMeta();
+    if ($("#guidesSummaryModal") && !$("#guidesSummaryModal").hidden) {
+      renderGuidesSummaryCard();
+    }
+  }
+
+  function onCardsBlur(e) {
+    const el = e.target;
+    if (el?.dataset?.field !== "numeroGuia") return;
+    const article = el.closest(".guides-card");
+    const guia = findGuia(article?.dataset.id);
+    if (!guia) return;
+    guia.numeroGuia = normalizeNumeroGuia(el.value);
+    el.value = formatNumeroGuiaInput(guia.numeroGuia);
+    saveStore();
   }
 
   function bindDniLookup(dniId, nombreId) {
@@ -5011,22 +6538,27 @@
 
   function rowsFromGuias() {
     const s = state.session;
-    return state.guias.map((g, i) => ({
-      Nro: i + 1,
-      Fundo: s.fundo,
+    const rows = [];
+    state.guias.forEach((g, gi) => {
+      rows.push({
+        Nro: String(gi + 1),
+        NumeroGuia: formatNumeroGuiaDisplay(g.numeroGuia),
+        Fundo: currentFundo(),
       SupervisorDNI: s.supervisorDni,
       Supervisor: s.supervisorNombre,
-      JaveroDNI: s.javeroDni,
-      Javero: s.javeroNombre,
-      Fecha: s.fecha,
-      Grupo: g.grupo,
+        JaveroDNI: "",
+        Javero: "",
+        Fecha: s.fecha || todayISO(),
       Modulo: g.modulo,
       Turno: g.turno,
       Lote: g.lote,
       Variedad: g.variedad,
       Jarras: num(g.jarras),
       Jabas: num(g.jabas),
-    }));
+        HoraRecojo: g.horaRecojo || "",
+      });
+    });
+    return rows;
   }
 
   function dateStamp() {
@@ -5048,19 +6580,20 @@
     const t = totals();
     rows.push({
       Nro: "",
+      NumeroGuia: "",
       Fundo: "",
       SupervisorDNI: "",
       Supervisor: "",
       JaveroDNI: "",
       Javero: "",
       Fecha: "",
-      Grupo: "TOTAL",
       Modulo: "",
       Turno: "",
-      Lote: "",
+      Lote: "TOTAL",
       Variedad: "",
       Jarras: t.jarras,
       Jabas: t.jabas,
+      HoraRecojo: "",
     });
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
@@ -5116,43 +6649,38 @@
 
   async function syncToCloud() {
     if (!requireQrLogin()) return;
-    if (!state.online) {
-      toast("Sin internet · intente al reconectar");
+    if (state.savingGuias) return;
+    if (!state.guias.length) {
+      toast("No hay guías para subir");
       return;
     }
-    const identity = state.identity || getIdentity();
-    if (!state.netlifyReady || !state.cloudApi) {
-      toast("Subida solo en Netlify · despliegue el sitio");
+
+    state.savingGuias = true;
+    const payload = persistAndQueueGuias();
+    if (!payload) {
+      state.savingGuias = false;
+      toast("Falta supervisor para subir");
       return;
     }
-    const pin = sessionPin();
-    if (!pin) {
-      toast("Bloquee e inicie sesión de nuevo");
+
+    if (!navigator.onLine) {
+      state.savingGuias = false;
+      toast("Guardado en el celular · pendiente hasta tener internet");
       return;
     }
+
     toast("Subiendo…");
     try {
-      const res = await fetch(API.sync, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          pin,
-          action: "sync_guias_cosecha",
-          payload: {
-            savedAt: new Date().toISOString(),
-            securityCode: identity.dni,
-            operator: identity,
-            session: state.session,
-            guias: state.guias,
-            totals: totals(),
-          },
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && data.ok) toast("Registro subido");
-      else toast(data.error || "Error al subir");
+      const result = await flushCloudDataQueue();
+      if (result?.sent > 0 && result.remain === 0) {
+        toast("Guías subidas al servidor");
+      } else if (result?.remain > 0) {
+        toast("Pendiente de subir · se reintentará solo");
+      }
     } catch {
-      toast("Sin conexión al servidor");
+      toast("Guardado en el celular · pendiente hasta tener internet");
+    } finally {
+      state.savingGuias = false;
     }
   }
 
@@ -5164,7 +6692,7 @@
         state.guias = [];
         saveStore();
         renderCards();
-        toast("Guías vaciadas");
+        alertOk("Guías vaciadas", "Puede volver a registrar");
       }
     );
   }
@@ -5321,93 +6849,11 @@
     toast(`${n} personas cargadas`);
   }
 
-  function bind() {
-    const scrollParent_ = (el) =>
-      el?.closest?.(
-        ".picker-list, #vinculoScreen:not(.is-thanks) .vinculo-scroll, #vinculoScreen:not(.is-thanks), .session-screen, .security-screen, .app-scroll, .harvest-scroll, .home-scroll, .export-preview, .history-sheet, .help-sheet"
-      );
-
-    document.addEventListener(
-      "touchstart",
-      (e) => {
-        const s = scrollParent_(e.target);
-        const tableWrap = e.target?.closest?.(".export-preview-table-wrap");
-        if (tableWrap && e.touches[0]) tableWrap._touchY = e.touches[0].clientY;
-        if (s && e.touches[0]) s._touchY = e.touches[0].clientY;
-      },
-      { passive: true }
-    );
-
-    const lockOverscroll = (e) => {
-      const tableWrap = e.target?.closest?.(".export-preview-table-wrap");
-      if (tableWrap) {
-        const canScrollY = tableWrap.scrollHeight > tableWrap.clientHeight + 1;
-        const canScrollX = tableWrap.scrollWidth > tableWrap.clientWidth + 1;
-        if (!canScrollY && !canScrollX) return;
-        if (canScrollY) {
-          const atTop = tableWrap.scrollTop <= 0;
-          const atBottom =
-            tableWrap.scrollTop + tableWrap.clientHeight >=
-            tableWrap.scrollHeight - 1;
-          let dy = 0;
-          if (e.type === "wheel") dy = e.deltaY;
-          else if (e.touches && e.touches[0]) {
-            dy =
-              (tableWrap._touchY || e.touches[0].clientY) -
-              e.touches[0].clientY;
-          }
-          if ((atTop && dy < 0) || (atBottom && dy > 0)) e.preventDefault();
-        }
-        return;
-      }
-      // El listado del select (Grupo / Grupo LIC) debe poder deslizar
-      const pickerList = e.target?.closest?.(".picker-list");
-      if (pickerList) {
-        const canScroll = pickerList.scrollHeight > pickerList.clientHeight + 1;
-        if (!canScroll) return;
-        const atTop = pickerList.scrollTop <= 0;
-        const atBottom =
-          pickerList.scrollTop + pickerList.clientHeight >=
-          pickerList.scrollHeight - 1;
-        let dy = 0;
-        if (e.type === "wheel") dy = e.deltaY;
-        else if (e.touches && e.touches[0]) {
-          dy =
-            (pickerList._touchY || e.touches[0].clientY) -
-            e.touches[0].clientY;
-        }
-        if ((atTop && dy < 0) || (atBottom && dy > 0)) e.preventDefault();
-        return;
-      }
-
-      if ($("#vinculoScreen")?.classList.contains("is-thanks")) {
-        e.preventDefault();
-        return;
-      }
-      const s = scrollParent_(e.target);
-      if (!s) {
-        e.preventDefault();
-        return;
-      }
-      const canScroll = s.scrollHeight > s.clientHeight + 1;
-      if (!canScroll) {
-        e.preventDefault();
-        return;
-      }
-      const atTop = s.scrollTop <= 0;
-      const atBottom = s.scrollTop + s.clientHeight >= s.scrollHeight - 1;
-      let dy = 0;
-      if (e.type === "wheel") dy = e.deltaY;
-      else if (e.touches && e.touches[0])
-        dy = (s._touchY || e.touches[0].clientY) - e.touches[0].clientY;
-      if ((atTop && dy < 0) || (atBottom && dy > 0)) e.preventDefault();
-    };
-    document.addEventListener("wheel", lockOverscroll, { passive: false });
-    document.addEventListener("touchmove", lockOverscroll, { passive: false });
-
+  function bindPhoneHandlers() {
     on("#cards", "click", onCardsClick);
     on("#cards", "input", onCardsInput);
     on("#cards", "change", onCardsInput);
+    on("#cards", "focusout", onCardsBlur);
 
     on("#pickerClose", "click", closePicker);
     on("#pickerAdd", "click", onPickerAdd);
@@ -5424,6 +6870,40 @@
     bindDniLookup("#sesSupDni", "#sesSupNombre");
     bindDniLookup("#sesJavDni", "#sesJavNombre");
 
+    on("#btnGuidesResumen", "click", () => {
+      if (!requireQrLogin()) return;
+      openGuidesSummary();
+    });
+    on("#btnCloseGuidesSummary", "click", closeGuidesSummary);
+    on("#btnCancelGuidesSummary", "click", closeGuidesSummary);
+    on("#btnSaveGuidesSummary", "click", saveGuidesSummary);
+    on("#btnGuidesFundo", "click", () => openPicker("fundo"));
+    on("#guidesSummaryModal", "click", (e) => {
+      if (e.target?.id === "guidesSummaryModal") closeGuidesSummary();
+    });
+
+    on("#horaPickerModal", "click", (e) => {
+      const step = e.target?.closest?.("[data-hora-act]");
+      if (!step || !state.timePickerDraft) return;
+      const act = step.dataset.horaAct;
+
+      if (act === "hour-inc") state.timePickerDraft.hh = (state.timePickerDraft.hh + 1) % 24;
+      if (act === "hour-dec") state.timePickerDraft.hh = (state.timePickerDraft.hh + 23) % 24;
+      if (act === "min-inc") state.timePickerDraft.mm = (state.timePickerDraft.mm + 1) % 60;
+      if (act === "min-dec") state.timePickerDraft.mm = (state.timePickerDraft.mm + 59) % 60;
+
+      syncHoraPickerUI();
+    });
+
+    on("#horaPickerModal", "click", (e) => {
+      // Cerrado si se toca el backdrop, no el contenido.
+      if (e.target?.id === "horaPickerModal") closeHoraRecojoPicker();
+    });
+
+    on("#btnHoraExacta", "click", () => applyHoraRecojoFromPicker({ roundTo5: false }));
+    on("#btnHoraCancelar", "click", closeHoraRecojoPicker);
+    on("#btnHoraConfirmar", "click", () => applyHoraRecojoFromPicker({ roundTo5: true }));
+
     on("#btnSecBack", "click", () => {
       stopCamera();
       lock();
@@ -5439,19 +6919,18 @@
     });
     on("#btnThanksContinue", "click", () => {
       cancelRegistroRedirect();
-      goTo("inicio");
+      goTo("registro");
     });
-    on("#appTabbar", "click", (e) => {
+    on("#btnVinculoBack", "click", () => {
+      cancelRegistroRedirect();
+      goTo("registro");
+    });
+    on("#appTopnav", "click", (e) => {
       const btn = e.target?.closest?.("[data-tab]");
       if (!btn) return;
       // Se marca al instante: la pestaña responde aunque la página tarde en abrir.
       markTabPressed(btn.dataset.tab);
       onTabbarClick(btn.dataset.tab);
-    });
-    on("#homeDashboard", "click", (e) => {
-      const button = e.target?.closest?.("[data-home-action]");
-      if (!button) return;
-      onTabbarClick(button.dataset.homeAction);
     });
     on("#btnHomeProfile", "click", openProfileModal);
     on("#btnCloseProfile", "click", closeProfileModal);
@@ -5485,7 +6964,7 @@
         toast("Espere a que cargue el Excel e intente otra vez");
         return;
       }
-      shareHarvestSnapshot(snapshot);
+      shareHarvestFromPreview();
     });
     on("#exportPreviewTypes", "click", (e) => {
       const btn = e.target?.closest?.("[data-preview-type]");
@@ -5524,7 +7003,22 @@
       allBox.checked = boxes.every((input) => input.checked);
     });
     on("#btnReadyFilesGo", "click", confirmReadyFiles);
+    on("#btnReadyFilesAllSend", "click", () => {
+      const all = state.readyFilesItems?.length
+        ? state.readyFilesItems
+        : availableExportSnapshots();
+      if (!all.length) {
+        toast("Aún no hay archivos listos");
+        return;
+      }
+      closeReadyFiles();
+      shareExcelDocuments(all);
+    });
     on("#btnCloseHistory", "click", closeHarvestHistory);
+    on("#historyTabs", "click", (e) => {
+      const btn = e.target?.closest?.("[data-history-tab]");
+      if (btn) switchHistoryTab(btn.dataset.historyTab);
+    });
     on("#btnHistoryPrev", "click", () => {
       if (state.historyPage <= 0) return;
       state.historyPage -= 1;
@@ -5535,6 +7029,15 @@
       state.historyPage += 1;
       renderHarvestHistory();
       $("#historyList")?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    });
+    on("#btnGuiasHistoryPrev", "click", () => {
+      if ((state.guiasHistoryPage || 0) <= 0) return;
+      state.guiasHistoryPage -= 1;
+      renderGuiasHistory();
+    });
+    on("#btnGuiasHistoryNext", "click", () => {
+      state.guiasHistoryPage = (state.guiasHistoryPage || 0) + 1;
+      renderGuiasHistory();
     });
     on("#historyList", "click", (e) => {
       const button = e.target?.closest?.("[data-history-action]");
@@ -5591,6 +7094,10 @@
     });
     on("#harvestWorkers", "input", onHarvestWorkersInput);
     on("#harvestWorkers", "click", onHarvestWorkersClick);
+    on("#btnCloseWorkerId", "click", closeWorkerIdModal);
+    on("#workerIdModal", "click", (e) => {
+      if (e.target?.id === "workerIdModal") closeWorkerIdModal();
+    });
     on("#btnStartCam", "click", () => startCamera());
     on("#btnStopCam", "click", stopCamera);
     on("#btnVinGrupoLic", "click", () => openPicker("grupoLic"));
@@ -5744,10 +7251,7 @@
 
     on("#btnAgregarGuia", "click", () => {
       if (!requireQrLogin()) return;
-      state.guias.push(emptyGuia());
-      saveStore();
-      renderCards();
-      $("#cards")?.lastElementChild?.scrollIntoView({ behavior: "smooth" });
+      addGuiaAndOpen();
     });
 
     const openSessionEdit = () => {
@@ -5861,6 +7365,155 @@
     });
   }
 
+  function bind() {
+    const scrollParent_ = (el) =>
+      el?.closest?.(
+        ".picker-list, #vinculoScreen:not(.is-thanks) .vinculo-scroll, #vinculoScreen:not(.is-thanks), .session-screen, .security-screen, .app-scroll, .harvest-scroll, .guides-scroll, .guides-sheet, .home-scroll, .export-preview, .history-sheet, .help-sheet"
+      );
+
+    if (!bind._global) {
+      bind._global = true;
+      window.addEventListener("beforeinstallprompt", (e) => {
+        e.preventDefault();
+        deferredInstallPrompt = e;
+        syncProfileAppTools();
+      });
+      window.addEventListener("appinstalled", () => {
+        deferredInstallPrompt = null;
+        syncProfileAppTools();
+        toast("App instalada en este celular");
+      });
+
+      document.addEventListener(
+        "touchstart",
+        (e) => {
+          const s = scrollParent_(e.target);
+          const tableWrap = e.target?.closest?.(".export-preview-table-wrap");
+          if (tableWrap && e.touches[0]) tableWrap._touchY = e.touches[0].clientY;
+          if (s && e.touches[0]) s._touchY = e.touches[0].clientY;
+        },
+        { passive: true }
+      );
+
+      const lockOverscroll = (e) => {
+        const tableWrap = e.target?.closest?.(".export-preview-table-wrap");
+        if (tableWrap) {
+          const canScrollY = tableWrap.scrollHeight > tableWrap.clientHeight + 1;
+          const canScrollX = tableWrap.scrollWidth > tableWrap.clientWidth + 1;
+          if (!canScrollY && !canScrollX) return;
+          if (canScrollY) {
+            const atTop = tableWrap.scrollTop <= 0;
+            const atBottom =
+              tableWrap.scrollTop + tableWrap.clientHeight >=
+              tableWrap.scrollHeight - 1;
+            let dy = 0;
+            if (e.type === "wheel") dy = e.deltaY;
+            else if (e.touches && e.touches[0]) {
+              dy =
+                (tableWrap._touchY || e.touches[0].clientY) -
+                e.touches[0].clientY;
+            }
+            if ((atTop && dy < 0) || (atBottom && dy > 0)) e.preventDefault();
+          }
+          return;
+        }
+        const pickerList = e.target?.closest?.(".picker-list");
+        if (pickerList) {
+          const canScroll = pickerList.scrollHeight > pickerList.clientHeight + 1;
+          if (!canScroll) return;
+          const atTop = pickerList.scrollTop <= 0;
+          const atBottom =
+            pickerList.scrollTop + pickerList.clientHeight >=
+            pickerList.scrollHeight - 1;
+          let dy = 0;
+          if (e.type === "wheel") dy = e.deltaY;
+          else if (e.touches && e.touches[0]) {
+            dy =
+              (pickerList._touchY || e.touches[0].clientY) -
+              e.touches[0].clientY;
+          }
+          if ((atTop && dy < 0) || (atBottom && dy > 0)) e.preventDefault();
+          return;
+        }
+
+        if ($("#vinculoScreen")?.classList.contains("is-thanks")) {
+          e.preventDefault();
+          return;
+        }
+        const s = scrollParent_(e.target);
+        if (!s) {
+          e.preventDefault();
+          return;
+        }
+        const canScroll = s.scrollHeight > s.clientHeight + 1;
+        if (!canScroll) {
+          e.preventDefault();
+          return;
+        }
+        const atTop = s.scrollTop <= 0;
+        const atBottom = s.scrollTop + s.clientHeight >= s.scrollHeight - 1;
+        let dy = 0;
+        if (e.type === "wheel") dy = e.deltaY;
+        else if (e.touches && e.touches[0])
+          dy = (s._touchY || e.touches[0].clientY) - e.touches[0].clientY;
+        if ((atTop && dy < 0) || (atBottom && dy > 0)) e.preventDefault();
+      };
+      document.addEventListener("wheel", lockOverscroll, { passive: false });
+      document.addEventListener("touchmove", lockOverscroll, { passive: false });
+
+      window.addEventListener("popstate", () => {
+        if (!document.documentElement.classList.contains("has-session")) return;
+        if (!isInternalTabUrl(location.pathname)) return;
+        if (navigationLocked) return;
+        navigationLocked = true;
+        document.body.classList.add("app-tab-switch");
+        switchTabClient(location.pathname + location.search, true)
+          .catch(() => {
+            location.reload();
+          })
+          .finally(() => {
+            navigationLocked = false;
+            document.body.classList.remove("app-tab-switch");
+          });
+      });
+
+      document.addEventListener("click", (e) => {
+        const cacheBtn = e.target?.closest?.(".app-tools-cache");
+        if (cacheBtn && !cacheBtn.disabled) {
+          e.preventDefault();
+          clearAppCache(cacheBtn);
+          return;
+        }
+        const updateBtn = e.target?.closest?.(".app-tools-update");
+        if (updateBtn && !updateBtn.disabled) {
+          e.preventDefault();
+          updateApp(updateBtn);
+          return;
+        }
+        const installBtn = e.target?.closest?.(".app-tools-install, #btnProfileInstall");
+        if (installBtn && installBtn.tagName !== "A") {
+          e.preventDefault();
+          installApp(installBtn);
+        }
+      });
+
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState !== "visible" || !navigator.onLine) return;
+        detectNetlify(2500)
+          .then((ok) => {
+            updateNetworkUI();
+            if (ok) {
+              flushVinculoQueue().catch(() => {});
+              flushCloudDataQueue().catch(() => {});
+            }
+          })
+          .catch(() => {});
+      });
+    }
+
+    bindPhoneHandlers();
+  }
+
   async function init() {
     try {
       let actionLoaderMsg = null;
@@ -5898,6 +7551,7 @@
       closeModal();
       closeSheets();
       loadStore();
+      loadTabShellsFromStorage();
       loadHarvest();
       loadSessionManualPersonas();
       loadSessionWorkers();
@@ -5912,13 +7566,7 @@
       Object.entries(state.sessionWorkers || {}).forEach(([dni, info]) => {
         if (info?.manual) rememberSessionPersona(dni, info.nombre);
       });
-      state.guias = (state.guias || []).map((g) => ({
-        ...emptyGuia(),
-        ...g,
-        id: g.id || uid(),
-        jarras: g.jarras ?? g.jarrasJabas ?? "",
-        jabas: g.jabas ?? "",
-      }));
+      state.guias = (state.guias || []).flatMap((g) => migrateGuiaList(g));
 
       // Data local al instante: DNI/QR validan sin esperar internet
       hydrateSupervisoresFromStorage();
@@ -5937,8 +7585,11 @@
       }
 
       bind();
-      refreshTabbar();
+      setupLifecyclePersist();
+      refreshTopnav();
       openRequestedTab();
+      cacheCurrentTabShell();
+      warmTabShells().catch(() => {});
       document.body.classList.remove("app-booting");
       document.body.classList.add("app-ready");
       if (actionLoaderMsg) hideAppLoader();
@@ -5964,35 +7615,35 @@
       }
 
       const trabEl = $("#trabCount");
-      if (trabEl && PAGE === "scan") {
+      if (trabEl && getPage() === "scan") {
         setInlineLoading(trabEl, true, "Cargando supervisores…");
       }
-      loadSupervisores()
-        .then(() => {
-          const el = $("#trabCount");
-          if (el && PAGE === "scan" && !SESSION_FORM_ENABLED) {
+        loadSupervisores()
+          .then(() => {
+            const el = $("#trabCount");
+          if (el && getPage() === "scan" && !SESSION_FORM_ENABLED) {
             setInlineLoading(el, false);
             el.textContent = navigator.onLine
               ? "Listo para escanear · solo Supervisores de Cosecha"
               : "Listo para escanear · sin internet";
-          }
-          updateNetworkUI();
-        })
+            }
+            updateNetworkUI();
+          })
         .catch(() => {
           const el = $("#trabCount");
-          if (el && PAGE === "scan") {
+          if (el && getPage() === "scan") {
             setInlineLoading(el, false);
             el.textContent = "Listo para escanear";
           }
         });
-      loadPersonas()
-        .then(() => {
-          if (PAGE === "registro" && $("#harvestScreen") && !$("#harvestScreen").hidden) {
-            renderHarvest();
-          }
-        })
-        .catch(() => {});
-      if (PAGE === "registro") {
+        loadPersonas()
+          .then(() => {
+          if (getPage() === "registro" && $("#harvestScreen") && !$("#harvestScreen").hidden) {
+              renderHarvest();
+            }
+          })
+          .catch(() => {});
+      if (getPage() === "registro") {
         loadCatalogs().catch(() => {});
       }
 
@@ -6054,17 +7705,15 @@
       setTimeout(() => {
         const expected = {
           scan: "#securityScreen",
-          inicio: "#homeDashboard",
           vinculo: "#vinculoScreen",
           registro: "#harvestScreen",
-        }[PAGE];
+        }[getPage()];
         if (!expected) return;
         const screen = $(expected);
         if (!screen || screen.hidden) {
-          if (PAGE === "scan") showSecurityLogin("");
-          else if (PAGE === "inicio" && hasQrLogin()) renderHomeDashboard();
-          else if (PAGE === "registro" && hasQrLogin()) showHarvestHome(getIdentity());
-          else if (PAGE === "vinculo" && hasQrLogin()) showVinculoScreen(getIdentity());
+          if (getPage() === "scan") showSecurityLogin("");
+          else if (getPage() === "registro" && hasQrLogin()) showHarvestHome(getIdentity());
+          else if (getPage() === "vinculo" && hasQrLogin()) showVinculoScreen(getIdentity());
           else goTo("scan", true);
         }
       }, 1200);
@@ -6085,7 +7734,7 @@
         }
       }
     } catch (err) {
-      if (PAGE === "scan") showSecurityLogin("");
+      if (getPage() === "scan") showSecurityLogin("");
       else goTo("scan", true);
       const msg = $("#secMsg") || $("#pinMsg");
       if (msg) msg.textContent = "Error al iniciar. Ctrl+F5 para recargar.";
@@ -6110,7 +7759,7 @@
     document.body.classList.remove("app-navigating", "app-tab-switch", "app-booting");
     document.body.classList.add("app-ready");
     hideAppLoader(true);
-    refreshTabbar();
+    refreshTopnav();
   });
 
   if (document.readyState === "loading") {

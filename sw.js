@@ -1,4 +1,4 @@
-const CACHE = "qb-supervisores-v247";
+const CACHE = "qb-supervisores-v330";
 const ASSETS = [
   "/",
   "/index.html",
@@ -11,8 +11,10 @@ const ASSETS = [
   "/instalar/",
   "/instalar/index.html",
   "/styles.css",
+  "/api-config.js",
   "/app.js",
   "/icons.js",
+  "/native-bridge.js",
   "/manifest.json",
   "/assets/logo-qberries.png",
   "/assets/icon-192.png",
@@ -26,6 +28,7 @@ const ASSETS = [
   "/vendor/xlsx.full.min.js",
   "/vendor/qrcode.min.js",
   "/vendor/jspdf.umd.min.js",
+  "/vendor/sweetalert2.all.min.js",
 ];
 
 function putInCache(req, res) {
@@ -51,10 +54,35 @@ async function refreshCachedAssets() {
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE).then(async (cache) => {
-      await Promise.all(ASSETS.map((url) => cache.add(url).catch(() => null)));
+    (async () => {
+      const cache = await caches.open(CACHE);
+      const required = [
+        "/",
+        "/index.html",
+        "/registro/index.html",
+        "/vinculo/index.html",
+        "/styles.css",
+        "/api-config.js",
+        "/app.js",
+        "/icons.js",
+        "/vendor/sweetalert2.all.min.js",
+        "/data/trabajadores.json",
+        "/data/supervisores-cosecha.json",
+      ];
+      const optional = ASSETS.filter((u) => !required.includes(u));
+      const requiredResults = await Promise.all(
+        required.map((url) =>
+          cache.add(url).then(() => true).catch(() => false)
+        )
+      );
+      const okRequired = requiredResults.every(Boolean);
+      await Promise.all(optional.map((url) => cache.add(url).catch(() => null)));
+      if (!okRequired) {
+        // No activar una instalación incompleta (offline rompería la app)
+        throw new Error("SW precache incomplete");
+      }
       await self.skipWaiting();
-    })
+    })()
   );
 });
 

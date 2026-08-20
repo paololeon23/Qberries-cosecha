@@ -441,12 +441,32 @@
       }
     }
 
+    function localIdKey_(id) {
+      return 'lid:' + String(id || '').trim();
+    }
+
+    /** Evita doble POST del mismo registro (reintentos / doble clic). */
+    function isDuplicateLocalId_(id) {
+      var key = localIdKey_(id);
+      if (!key || key === 'lid:') return false;
+      try {
+        var cache = CacheService.getScriptCache();
+        if (cache.get(key)) return true;
+        cache.put(key, '1', 21600);
+      } catch (_) {}
+      return false;
+    }
+
     /**
     * Guarda solamente el resumen solicitado en DATA-MANUAL.
     * No agrega filas por trabajador ni escribe IDs en la hoja.
     */
     function registrarCosecha_(d) {
       d = d || {};
+      var localId = clean_(d.localId || d.id);
+      if (localId && isDuplicateLocalId_(localId)) {
+        return { created: false, duplicate: true, rows: 0 };
+      }
       var workers = Array.isArray(d.workers) ? d.workers : [];
       var supervisorDni = digits_(d.supervisorDni);
       if (!workers.length) throw new Error('Faltan trabajadores');

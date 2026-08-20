@@ -37,10 +37,24 @@
   --u: 1px;
 }
 
-/* Solo Android APK (iPhone no se toca). */
+/* Solo Android APK / TWA (iPhone no se toca). */
 html.is-android {
-  --nav-safe-bottom: 18px;
-  --safe-t: max(env(safe-area-inset-top, 0px), 10px);
+  --nav-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --nav-bar-total: calc(var(--nav-inner-h) + var(--nav-safe-bottom));
+  --content-nav-pad: calc(var(--nav-bar-total) + 12px);
+}
+
+html.is-android .stage,
+html.is-android .phone {
+  height: var(--app-h, 100dvh);
+  min-height: 0;
+  max-height: var(--app-h, 100dvh);
+}
+
+html.is-android .home-scroll,
+html.is-android .harvest-scroll,
+html.is-android .vinculo-scroll {
+  padding-bottom: var(--content-nav-pad, calc(var(--nav-bar-total) + 12px));
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -153,6 +167,12 @@ html.has-session body.app-booting .phone {
   visibility: visible;
 }
 /* Cambio Inicio / Registro / Vincular: sin overlay ni bloqueo. */
+body.app-tab-switch .phone,
+body.app-tab-switch .stage,
+body.app-tab-switch .app-tabbar {
+  opacity: 1 !important;
+  visibility: visible !important;
+}
 body.app-tab-switch .phone {
   pointer-events: auto;
 }
@@ -373,25 +393,11 @@ html:not(.has-session) body.app-booting::before {
   background: var(--bg);
 }
 /*
- * Cambio de pestaña: se usa el snapshot para no dejar un frame en blanco,
- * pero SIN fundido. El fundido ocultaba la barra y se veía un “pestañeo”.
+ * Cambio de pestaña: sin transición del navegador (Inicio/Registro/Vincular
+ * cambian en el mismo documento, sin recargar).
  */
 @view-transition {
-  navigation: auto;
-}
-::view-transition {
-  background-color: #ffffff;
-}
-::view-transition-old(root),
-::view-transition-new(root) {
-  animation-duration: 0.01s;
-  animation-timing-function: step-end;
-}
-@media (prefers-reduced-motion: reduce) {
-  ::view-transition-old(root),
-  ::view-transition-new(root) {
-    animation: none;
-  }
+  navigation: none;
 }
 
 .stage {
@@ -407,6 +413,7 @@ html:not(.has-session) body.app-booting::before {
   padding: 0;
   background: #ffffff;
   resize: none;
+  position: relative;
 }
 
 .phone {
@@ -478,27 +485,27 @@ html:not(.has-session) body.app-booting::before {
   display: none;
 }
 
-/* Badges estilo Tarjeta Pallet · columna pegada a la derecha */
+/* Badges de red · fila horizontal (pantalla escaneo) */
 .hero-status {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: stretch;
-  gap: 4px;
-  width: max-content;
-  max-width: 100%;
+  gap: 8px;
+  width: 100%;
   flex: 0 0 auto;
-  margin-left: auto;
+  margin-left: 0;
 }
 .net-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  width: 100%;
+  flex: 1 1 0;
+  min-width: 0;
   box-sizing: border-box;
-  min-height: 26px;
-  padding: 0 8px;
-  border-radius: 8px;
+  min-height: 32px;
+  padding: 6px 10px;
+  border-radius: 10px;
   border: 1px solid var(--line);
   background: #fff;
   color: var(--muted);
@@ -1742,6 +1749,14 @@ body[data-page="scan"] .lock-screen {
   color: #7a8794;
   line-height: 1.4;
 }
+.app-info-version {
+  margin: 10px 0 0;
+  text-align: center;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: #8a9a8f;
+}
 
 /* Inicio post-escaneo · registro de jarras por trabajador */
 .harvest-screen {
@@ -2722,7 +2737,11 @@ body:has(.history-sheet:not([hidden]))::before {
 body:has(.history-sheet:not([hidden])) .app-tabbar,
 body:has(.help-sheet:not([hidden])) .app-tabbar,
 body:has(.app-tools-backdrop:not([hidden])) .app-tabbar,
-body:has(.check-pick-backdrop:not([hidden])) .app-tabbar {
+body:has(.check-pick-backdrop:not([hidden])) .app-tabbar,
+body:has(.picker-backdrop:not([hidden])) .app-tabbar,
+body:has(.modal-backdrop:not([hidden])) .app-tabbar,
+body:has(.manual-worker-backdrop:not([hidden])) .app-tabbar,
+body:has(.export-preview-backdrop:not([hidden])) .app-tabbar {
   visibility: hidden;
   pointer-events: none;
 }
@@ -2963,6 +2982,71 @@ body[data-page="scan"] .app-tabbar,
 .app-tabbar .tab-main.is-active::before,
 .app-tabbar .tab-main.active::before {
   content: none;
+}
+
+/* Android APK: iconos centrados y por encima de la navegación del sistema. */
+html.is-android .app-tabbar,
+html.is-android #appTabbar {
+  align-items: center !important;
+  justify-content: space-around !important;
+  bottom: 0 !important;
+  min-height: var(--nav-bar-total) !important;
+  height: var(--nav-bar-total) !important;
+  max-height: var(--nav-bar-total) !important;
+  padding: 8px 8px var(--nav-safe-bottom) !important;
+  transform: none !important;
+}
+html.is-android .app-tabbar::after {
+  content: none;
+  display: none;
+}
+html.is-android .app-tabbar button,
+html.is-android .app-tabbar .nav-btn {
+  justify-content: center;
+  flex: 0 1 auto;
+  max-height: var(--nav-inner-h);
+}
+html.is-android .app-tabbar .tab-main {
+  height: auto;
+  align-self: center;
+}
+html.is-android .app-tabbar .tab-main .tab-main-circle {
+  position: relative;
+  left: auto;
+  bottom: auto;
+  transform: none;
+  margin-top: 0;
+  width: 48px;
+  height: 48px;
+  border-radius: 16px;
+}
+html.is-android .app-tabbar .tab-main:active .tab-main-circle {
+  transform: scale(0.94);
+}
+html.is-android .picker-backdrop {
+  padding-bottom: calc(12px + var(--nav-safe-bottom));
+}
+html.is-android .picker,
+html.is-android .manual-worker,
+html.is-android .check-pick,
+html.is-android .export-preview {
+  max-height: min(82dvh, calc(var(--app-h, 100dvh) - 24px));
+}
+html.is-android .modal-backdrop,
+html.is-android .manual-worker-backdrop,
+html.is-android .export-preview-backdrop,
+html.is-android .check-pick-backdrop {
+  max-height: var(--app-h, 100dvh);
+}
+html.is-android .home-hero {
+  padding-top: calc(18px + var(--android-safe-top, env(safe-area-inset-top, 0px)));
+}
+/* Pantallas angostas Android: 2×2 sin ocultar botones. */
+@media (max-width: 380px) {
+  html.is-android .home-action-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
 }
 
 @media (min-width: 900px) {
@@ -3662,14 +3746,12 @@ body[data-page="scan"] .app-tabbar,
   background: #fff;
   color: var(--ink);
   border-radius: 16px;
-  padding: calc(10 * var(--u));
+  padding: calc(12 * var(--u));
   margin-bottom: calc(10 * var(--u));
   display: flex;
-  flex-direction: row;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: calc(8 * var(--u));
+  flex-direction: column;
+  align-items: stretch;
+  gap: calc(10 * var(--u));
   border: 1px solid #e6ebf0;
   box-shadow: 0 2px 10px rgba(15, 35, 55, 0.04);
   width: 100%;
@@ -3682,11 +3764,11 @@ body[data-page="scan"] .app-tabbar,
   flex-direction: column;
   align-items: stretch;
   gap: 6px;
-  flex: 0 1 auto;
-  width: auto;
+  flex: 0 0 auto;
+  width: 100%;
   max-width: 100%;
   min-width: 0;
-  margin-left: auto;
+  margin-left: 0;
 }
 .hero-logout {
   appearance: none;
@@ -3718,10 +3800,10 @@ body[data-page="scan"] .app-tabbar,
 .hero-head-left {
   display: flex;
   align-items: center;
-  gap: calc(8 * var(--u));
+  gap: calc(10 * var(--u));
   min-width: 0;
-  flex: 1 1 160px;
-  width: auto;
+  flex: 0 0 auto;
+  width: 100%;
   padding-right: 0;
 }
 .hero-head-copy {
@@ -4416,7 +4498,43 @@ body.kb-open .stage {
 }
 
 body.kb-open .app-tabbar {
-  display: none;
+  display: none !important;
+  visibility: hidden !important;
+}
+html.is-android body:not(.kb-open):not([data-page="scan"]) .app-tabbar:not([hidden]),
+html.is-android body:not(.kb-open):not([data-page="scan"]) #appTabbar:not([hidden]) {
+  display: flex !important;
+  visibility: visible !important;
+}
+html.is-android body[data-page="scan"] .app-tabbar,
+html.is-android body[data-page="scan"] #appTabbar,
+html.is-android .app-tabbar[hidden],
+html.is-android #appTabbar[hidden] {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+html.is-android body[data-page="scan"] .security-screen,
+html.is-android body[data-page="scan"] .lock-screen {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: var(--app-h, 100dvh);
+  padding-top: max(calc(14 * var(--u)), calc(12px + var(--android-safe-top, env(safe-area-inset-top, 0px))));
+  padding-bottom: max(calc(14 * var(--u)), calc(12px + var(--nav-safe-bottom, env(safe-area-inset-bottom, 0px))));
+  padding-left: max(calc(10 * var(--u)), 12px);
+  padding-right: max(calc(10 * var(--u)), 12px);
+  box-sizing: border-box;
+}
+html.is-android body[data-page="scan"] .lock-badge {
+  top: max(48px, calc(12px + var(--android-safe-top, env(safe-area-inset-top, 0px))));
+}
+body:not(.kb-open) .stage {
+  position: relative;
+  top: auto;
+  left: auto;
+  right: auto;
+  width: 100%;
 }
 body.kb-open .lock-screen {
   overflow-y: auto;
@@ -4440,6 +4558,42 @@ body.kb-open .picker {
 body.kb-open .picker-backdrop,
 body.kb-open .manual-worker-backdrop {
   padding-bottom: var(--kb-h, 0px);
+}
+
+/* Android: --app-h ya excluye el teclado; no restar --kb-h otra vez. Overlays centrados. */
+html.is-android body.kb-open .stage {
+  top: 0;
+}
+/* Android: al fijar la `.stage` durante teclado, se ve su `background` base (#fff).
+ * Mantenemos el fondo de app para que no aparezca “fondo blanco” al escribir. */
+html.is-android body.kb-open,
+html.is-android body.kb-open .stage {
+  background: var(--bg);
+}
+html.is-android body.kb-open .manual-worker-backdrop,
+html.is-android body.kb-open .modal-backdrop,
+html.is-android body.kb-open .export-preview-backdrop,
+html.is-android body.kb-open .check-pick-backdrop,
+html.is-android body.kb-open .profile-modal-backdrop {
+  padding: max(12px, var(--safe-t)) 14px max(12px, var(--safe-b));
+  align-items: center;
+  justify-content: center;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+html.is-android body.kb-open .picker-backdrop {
+  padding: 12px 14px max(12px, var(--safe-b));
+  align-items: flex-end;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+html.is-android body.kb-open .manual-worker,
+html.is-android body.kb-open .modal,
+html.is-android body.kb-open .check-pick,
+html.is-android body.kb-open .export-preview {
+  max-height: calc(var(--app-h, 100dvh) - 24px);
+  overflow-y: auto;
+  flex-shrink: 0;
 }
 
 /* ——— AJUSTE FINO PARA PANTALLAS DE CELULAR ——— */
@@ -4536,31 +4690,14 @@ body.kb-open .manual-worker-backdrop {
   .harvest-worker-form { grid-template-columns: 0.85fr 1.25fr 42px; }
 }
 
-/* Teléfonos angostos: una columna donde dos ya no entran. */
+/* Teléfonos angostos: badges siguen en fila (ya ocupan ancho completo). */
 @media (max-width: 400px) {
   .hero-head {
-    align-items: stretch;
+    padding: calc(11 * var(--u));
   }
-  .hero-head-left {
-    flex: 1 1 100%;
-  }
-  .hero-aside {
-    width: 100%;
-    margin-left: 0;
-    flex-direction: row;
-    flex-wrap: wrap;
-    align-items: center;
-  }
-  .hero-status {
-    flex: 1 1 auto;
-    flex-direction: row;
-    width: 100%;
-    margin-left: 0;
-    gap: 6px;
-  }
-  .hero-status .net-badge {
-    width: auto;
-    flex: 1 1 calc(50% - 6px);
+  .net-badge {
+    font-size: 0.62rem;
+    padding: 5px 8px;
   }
 }
 @media (max-width: 360px) {

@@ -1,12 +1,22 @@
 [build]
   publish = "."
   functions = "backend/netlify/functions"
-  # Sitio estático; Functions: LOGIN_PIN, API_TOKEN, APPS_SCRIPT_URL, TRABAJADORES_SCRIPT_URL
+  # Sitio estático; Functions: LOGIN_PIN, API_TOKEN, APPS_SCRIPT_URL, APPS_SCRIPT_GUIAS_URL, TRABAJADORES_SCRIPT_URL
 
 [build.environment]
   NODE_VERSION = "20"
   # No escanear plantillas de ejemplo (sin secretos reales)
   SECRETS_SCAN_OMIT_PATHS = ".env.example"
+
+[[redirects]]
+  from = "/inicio"
+  to = "/registro/"
+  status = 301
+
+[[redirects]]
+  from = "/inicio/*"
+  to = "/registro/"
+  status = 301
 
 [[redirects]]
   from = "/api/*"
@@ -21,6 +31,37 @@
     Referrer-Policy = "strict-origin-when-cross-origin"
 
 [[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/manifest.json"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/app.js"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/api-config.js"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/styles.css"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/icons.js"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
   for = "/.netlify/functions/*"
   [headers.values]
     Cache-Control = "no-store"
+

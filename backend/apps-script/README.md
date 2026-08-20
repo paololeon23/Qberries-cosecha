@@ -1,20 +1,69 @@
-# Apps Script · DATA-SUPERVISORES
+# Apps Script · DATA-SUPERVISORES + GUÍAS (separado)
 
-Misma lógica/seguridad que **Tarjeta Pallet** (token + proxy Netlify).
-
-## Setup
-1. Pegue `Code.gs` completo en el Sheet **DATA-SUPERVISORES**
-2. Propiedades del script → `API_TOKEN` = mismo que Netlify
-3. Implementar → **Nueva versión** → Aplicación web
+## 1) Supervisores / cosecha / manuales → `Code.gs`
+1. Pegue `Code.gs` en el Sheet **DATA-SUPERVISORES**
+2. Propiedades → `API_TOKEN` = mismo que Netlify
+3. Implementar → Nueva versión → Aplicación web
 4. URL `/exec` → Netlify `APPS_SCRIPT_URL`
 
-## Columnas
-| DNI | NOMBRE | CELULAR | GRUPO LIC | GRUPO | NOMBRE SUPERVISOR GLOBAL | DNI INICIO SESION | ULTIMA HORA REGISTRO |
+La app llega ahí vía **Netlify Functions** (`/.netlify/functions/sync`).
 
-## Endpoints
+## 2) Guías (OTRO script, OTRO Sheet) → `Code-guias.gs`
+Para no juntar ni ralentizar vínculos/cosecha:
+
+```
+Celular (app en Netlify)
+        ↓
+api-config.js     ← QB_SCRIPT.GUIAS = …/exec
+        ↓
+app.js            ← fetch POST directo
+        ↓
+Code-guias.gs     ← doPost → registrarGuias_
+        ↓
+Google Sheet DATA-GUIAS
+```
+
+**Netlify solo sirve HTML/JS.** Guías **no** pasan por Netlify Functions.
+
+1. Cree un Sheet nuevo, ej. **DATA-GUIAS-QBERIES**
+2. Pegue **solo** `Code-guias.gs`
+3. Implementar → Nueva versión → Aplicación web  
+   - Ejecutar como: **Yo**  
+   - Quién tiene acceso: **Cualquier persona**
+4. Pegue la URL `/exec` en **`api-config.js`** → `QB_SCRIPT.GUIAS`
+5. Suba de nuevo el sitio a Netlify
+
+**Sin API_TOKEN.** POST: `{ action: "registrarGuias", data: {...} }`
+
+### URL actual (Guías)
+```
+https://script.google.com/macros/s/AKfycbxVryHDgOjOdiYRhFjBN1dxy6ozSzCwRMFKRW-6QM9h97Fraclys4ftTCM6Z9-vL5BX/exec
+```
+
+### Prueba ping (sin token)
+```
+…/exec?action=ping
+```
+Debe devolver: `{"ok":true,"api":"guias",…}`  
+Si dice `UNAUTHORIZED` / `Falta configurar API_TOKEN`, el deploy en Google es viejo: pegue de nuevo `Code-guias.gs` y **Nueva versión → Implementar**.
+
+### Columnas DATA-GUIAS (1 fila por supervisor + día + fundo)
+| NOMBRE | DNI | FECHA | FUNDO | TOTAL JARRAS | TOTAL JABAS | TOTAL GUIAS | LOTES | N° GUIAS | HORA |
+|---|---|---|---|---|---|---|---|---|---|
+| … | … | … | Licapa / Licapa II | 156 | 13 | 2 | LT5-M1-T1 | 111111 | hora |
+
+### Anti-duplicado / offline
+- **Sheet:** 1 fila por `DNI + FECHA + FUNDO` (si vuelve a guardar, **actualiza**).
+- **App:** cola local; si no hay internet, no se pierde y se reenvía al reconectar.
+
+## Endpoints supervisores (`Code.gs`)
 - `ping`
-- `registrarVinculo` (POST, upsert por DNI)
-- `listarVinculos` / `existeVinculo`
+- `registrarVinculo` / `listarVinculos` / `existeVinculo`
+- `registrarCosecha` / `registrarManual`
+
+## Endpoints guías (`Code-guias.gs`)
+- `ping`
+- `registrarGuias`
 
 ## Prueba en editor
-Solo `testPing` / `myFunction` (rápido). **No** hay `testRegistrar`.
+Solo `testPing` / `myFunction` (rápido).

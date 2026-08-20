@@ -5,7 +5,7 @@ $dest = Join-Path $root "mobile\www"
 
 New-Item -ItemType Directory -Force -Path $dest | Out-Null
 
-$files = @("app.js", "styles.css", "sw.js", "manifest.json", "icons.js", "index.html")
+$files = @("app.js", "styles.css", "sw.js", "manifest.json", "icons.js", "index.html", "native-bridge.js")
 foreach ($f in $files) {
   Copy-Item (Join-Path $root $f) (Join-Path $dest $f) -Force
 }

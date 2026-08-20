@@ -2,9 +2,11 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 
 /**
  * Proxy seguro a Google Apps Script · vínculos, cosecha y altas manuales.
- * Env Netlify: APPS_SCRIPT_URL + API_TOKEN
- * POST { action, data|payload, pin }
- * El celular hace POST a esta function; esta function hace GET a Apps Script (más rápido).
+ * Env Netlify: APPS_SCRIPT_URL + API_TOKEN (supervisores)
+ *
+ * Guías: la app (v329+) llama DIRECTO a Apps Script vía api-config.js
+ * (QB_SCRIPT.GUIAS). Este proxy aún acepta registrarGuias por compatibilidad
+ * con clientes viejos, pero no es el camino principal.
  */
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -152,15 +154,14 @@ export async function handler(event) {
   }
 
   const scriptUrl = String(process.env.APPS_SCRIPT_URL || "").trim();
+  // Guías: env opcional; si no está en Netlify, usa el deploy fijo (sin token)
+  const DEFAULT_GUIAS_SCRIPT_URL =
+    "https://script.google.com/macros/s/AKfycbxVryHDgOjOdiYRhFjBN1dxy6ozSzCwRMFKRW-6QM9h97Fraclys4ftTCM6Z9-vL5BX/exec";
+  const guiasScriptUrl = String(
+    process.env.APPS_SCRIPT_GUIAS_URL || DEFAULT_GUIAS_SCRIPT_URL || ""
+  ).trim();
   const apiToken = String(process.env.API_TOKEN || "").trim();
   void process.env.LOGIN_PIN;
-
-  if (!scriptUrl || !apiToken) {
-    return json(500, {
-      ok: false,
-      error: "APPS_SCRIPT_URL o API_TOKEN no configurados en Netlify",
-    });
-  }
 
   let body;
   try {
@@ -170,6 +171,26 @@ export async function handler(event) {
   }
 
   const action = String(body.action || "registrarVinculo").trim();
+  const isGuias =
+    action === "registrarGuias" || action === "sync_guias_cosecha";
+
+  // Guías usa OTRO Apps Script (no mezcla con vínculos/cosecha)
+  const targetUrl = isGuias ? guiasScriptUrl : scriptUrl;
+  if (!apiToken && !isGuias) {
+    return json(500, {
+      ok: false,
+      error: "API_TOKEN no configurado en Netlify",
+    });
+  }
+  if (!targetUrl) {
+    return json(500, {
+      ok: false,
+      error: isGuias
+        ? "APPS_SCRIPT_GUIAS_URL no configurado en Netlify (script separado de guías)"
+        : "APPS_SCRIPT_URL no configurado en Netlify",
+    });
+  }
+
   const rawData = body.data ?? body.payload ?? body;
   const data =
     action === "registrarVinculo" ? sanitizeVinculo(rawData) : rawData;
@@ -233,6 +254,20 @@ export async function handler(event) {
       });
     }
   }
+  if (action === "registrarGuias" || action === "sync_guias_cosecha") {
+    const guias = Array.isArray(data?.guias) ? data.guias : [];
+    const totals = data?.totals || {};
+    const hasTotals =
+      Number(totals.jarras) > 0 ||
+      Number(totals.jabas) > 0 ||
+      Number(totals.guias) > 0;
+    if (!guias.length && !hasTotals) {
+      return json(400, {
+        ok: false,
+        error: "No hay guías para guardar",
+      });
+    }
+  }
 
   const params =
     action === "registrarVinculo"
@@ -255,12 +290,20 @@ export async function handler(event) {
             token: apiToken,
             dni: digits(rawData?.dni || data?.dni),
           }
-        : action === "registrarCosecha" || action === "registrarManual"
+        : action === "registrarCosecha" ||
+            action === "registrarManual"
           ? {
               action,
               token: apiToken,
               data: JSON.stringify(data),
             }
+          : action === "registrarGuias" ||
+              action === "sync_guias_cosecha"
+            ? {
+                action:
+                  action === "sync_guias_cosecha" ? "registrarGuias" : action,
+                data: JSON.stringify(data),
+              }
         : { action, token: apiToken };
 
   try {
@@ -282,9 +325,12 @@ export async function handler(event) {
     }
 
     const usePost =
-      action === "registrarCosecha" || action === "registrarManual";
+      action === "registrarCosecha" ||
+      action === "registrarManual" ||
+      action === "registrarGuias" ||
+      action === "sync_guias_cosecha";
     const { res, text, parsed } = await callAppsScript(
-      scriptUrl,
+      targetUrl,
       params,
       usePost ? "POST" : "GET"
     );

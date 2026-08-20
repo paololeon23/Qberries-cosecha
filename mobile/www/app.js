@@ -23,7 +23,7 @@
   const CACHE_DAY_KEY = "qb-supervisores-cache-day-v1";
   const HISTORY_TTL_MS = 48 * 60 * 60 * 1000;
   const HISTORY_PAGE_SIZE = 8;
-  const APP_VERSION = "v247";
+  const APP_VERSION = "v256";
   const HARVEST_TYPES = [
     { key: "suma-jarras", label: "Suma de jarras", short: "Suma", observacion: "SUMAR JARRAS" },
     { key: "descuento-jarras", label: "Descuento jarras", short: "Resta", observacion: "DESCUENTO JARRAS" },
@@ -34,7 +34,10 @@
   const PASSWORD_REQUIRED = false;
   /** Por ahora: tras vincular NO pasar a Datos de campo */
   const SESSION_FORM_ENABLED = false;
-  const PAGE = document.body?.dataset?.page || "scan";
+  function getPage() {
+    return document.body?.dataset?.page || "scan";
+  }
+  const tabShellCache = new Map();
   const ROUTES = {
     scan: "/index.html",
     inicio: "/inicio/index.html",
@@ -54,6 +57,35 @@
   function apiUrl(path) {
     const rel = path.startsWith("/") ? path : `/${path}`;
     return isNativeApp() ? `${CLOUD_ORIGIN}${rel}` : rel;
+  }
+  /** En APK: datos estáticos desde Netlify si hay internet; si no, del paquete local. */
+  function assetUrl(path) {
+    const rel = path.startsWith("/") ? path : `/${path}`;
+    if (isNativeApp() && navigator.onLine) return `${CLOUD_ORIGIN}${rel}`;
+    return rel;
+  }
+  function reloadWithBust() {
+    const url = new URL(location.href);
+    url.searchParams.set("_cb", String(Date.now()));
+    setTimeout(() => location.replace(url.href), 350);
+  }
+  async function fetchTabShellHtml(route, forceCloud = false) {
+    const urls = [];
+    if ((forceCloud || isNativeApp()) && navigator.onLine) {
+      urls.push(`${CLOUD_ORIGIN}${route}?v=${APP_VERSION}&_=${Date.now()}`);
+    }
+    urls.push(route);
+    for (const url of urls) {
+      try {
+        const res = await fetch(url, {
+          cache: forceCloud || isNativeApp() ? "no-store" : "force-cache",
+        });
+        if (res.ok) return await res.text();
+      } catch {
+        /* siguiente origen */
+      }
+    }
+    throw new Error("tab shell fetch failed");
   }
   const API = {
     login: apiUrl("/.netlify/functions/login"),
@@ -310,6 +342,103 @@
     }
   }
 
+  function parseTabShell(html) {
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const phone = doc.querySelector("#phone");
+    return {
+      html: phone ? phone.innerHTML : "",
+      page: doc.body?.dataset?.page || "",
+      title: doc.title || "QBerries",
+    };
+  }
+
+  function cacheCurrentTabShell() {
+    const page = getPage();
+    if (!isTabPage(page)) return;
+    const phone = $("#phone");
+    if (!phone) return;
+    try {
+      const cacheKey = new URL(ROUTES[page], location.origin).pathname;
+      tabShellCache.set(cacheKey, {
+        html: phone.innerHTML,
+        page,
+        title: document.title,
+      });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function switchTabClient(target, replace = false) {
+    closePicker();
+    closeModal();
+    closeSheets();
+    const url = new URL(target, location.origin + "/");
+    const cacheKey = url.pathname;
+    let cached = tabShellCache.get(cacheKey);
+    if (!cached) {
+      const html = await fetchTabShellHtml(
+        url.pathname + url.search,
+        false
+      );
+      cached = parseTabShell(html);
+      tabShellCache.set(cacheKey, cached);
+    }
+    const phone = $("#phone");
+    if (!phone || !cached.html) throw new Error("tab shell missing phone");
+    cacheCurrentTabShell();
+    phone.innerHTML = cached.html;
+    document.body.dataset.page = cached.page;
+    document.title = cached.title;
+    const href = url.pathname + url.search;
+    if (replace) history.replaceState({ qbTab: cached.page }, "", href);
+    else history.pushState({ qbTab: cached.page }, "", href);
+    bindPhoneHandlers();
+    activateTabPage(cached.page);
+    window.scrollTo(0, 0);
+  }
+
+  function activateTabPage(page) {
+    closePicker();
+    closeModal();
+    closeSheets();
+    hydrateIcons($("#phone") || document);
+    updateNetworkUI();
+    syncTabbarVisibility();
+    refreshTabbar();
+    if (!hasQrLogin()) return;
+    const id = state.identity || getIdentity();
+    if (page === "inicio") {
+      paintGreeting("#homeSupervisor", id);
+      renderHomeDashboard();
+    } else if (page === "registro") {
+      paintGreeting("#harvestSupervisor", id);
+      showHarvestHome(id);
+      loadCatalogs().catch(() => {});
+    } else if (page === "vinculo") {
+      showVinculoScreen(id);
+    }
+    openRequestedTab();
+  }
+
+  async function warmTabShells(forceCloud = false) {
+    if (!document.documentElement.classList.contains("has-session")) return;
+    const routes = [ROUTES.inicio, ROUTES.registro, ROUTES.vinculo];
+    await Promise.all(
+      routes.map(async (route) => {
+        try {
+          const path = new URL(route, location.origin).pathname;
+          if (!forceCloud && tabShellCache.has(path)) return;
+          const html = await fetchTabShellHtml(route, forceCloud);
+          tabShellCache.set(path, parseTabShell(html));
+        } catch {
+          /* offline: la pestaña actual ya está en pantalla */
+        }
+      })
+    );
+    cacheCurrentTabShell();
+  }
+
   function beginNavigation(target, replace = false, opts = {}) {
     if (navigationLocked) return;
     navigationLocked = true;
@@ -319,23 +448,40 @@
         document.documentElement.classList.contains("has-session"));
     if (tabSwitch) {
       try {
-        sessionStorage.setItem("qb-tab-nav", "1");
         sessionStorage.removeItem("qb-action-loader");
-      } catch {
-        /* ignore */
-      }
-      document.body.classList.add("app-tab-switch");
-    } else {
-      const msg = opts.loaderMsg || "Cargando…";
-      showAppLoader(msg);
-      try {
-        sessionStorage.setItem("qb-action-loader", msg);
         sessionStorage.removeItem("qb-tab-nav");
       } catch {
         /* ignore */
       }
-      document.body.classList.add("app-navigating");
+      document.body.classList.add("app-tab-switch");
+      switchTabClient(target, replace)
+        .catch(() => {
+          let href = target;
+          try {
+            href = new URL(target, location.origin + "/").href;
+          } catch {
+            href = target;
+          }
+          if (replace) location.replace(href);
+          else location.href = href;
+        })
+        .finally(() => {
+          window.setTimeout(() => {
+            navigationLocked = false;
+            document.body.classList.remove("app-tab-switch");
+          }, 32);
+        });
+      return;
     }
+    const msg = opts.loaderMsg || "Cargando…";
+    showAppLoader(msg);
+    try {
+      sessionStorage.setItem("qb-action-loader", msg);
+      sessionStorage.removeItem("qb-tab-nav");
+    } catch {
+      /* ignore */
+    }
+    document.body.classList.add("app-navigating");
     let href = target;
     try {
       href = new URL(target, location.origin + "/").href;
@@ -359,7 +505,7 @@
     const tabSwitch =
       opts.tabSwitch ??
       (isTabPage(page) &&
-        isTabPage(PAGE) &&
+        isTabPage(getPage()) &&
         document.documentElement.classList.contains("has-session"));
     beginNavigation(target, replace, { tabSwitch, loaderMsg: opts.loaderMsg });
   }
@@ -369,6 +515,63 @@
    * del documento (iPhone) o la cambia tarde (Android). Se mide la ventana
    * visible real para que la app ocupe justo ese alto y no quede un hueco.
    */
+  let applyViewportMetrics = () => {};
+
+  /** Lee env(safe-area-inset-*) y, en Android, refuerza con visualViewport. */
+  function readEnvInset(edge) {
+    const probe = document.createElement("div");
+    probe.style.cssText =
+      "position:fixed;visibility:hidden;pointer-events:none;padding-" +
+      edge +
+      ":env(safe-area-inset-" +
+      edge +
+      ", 0px);";
+    document.body.appendChild(probe);
+    const val =
+      parseFloat(
+        getComputedStyle(probe).getPropertyValue("padding-" + edge)
+      ) || 0;
+    probe.remove();
+    return val;
+  }
+
+  function syncSystemInsets() {
+    const root = document.documentElement;
+    if (!root.classList.contains("is-android")) return;
+    let bottom = readEnvInset("bottom");
+    const top = readEnvInset("top");
+    const vv = window.visualViewport;
+    if (vv && !document.body?.classList.contains("kb-open")) {
+      const layoutH = window.innerHeight;
+      const visibleH = Math.round(vv.height);
+      const topOff = Math.max(0, Math.round(vv.offsetTop));
+      const chrome = Math.max(0, layoutH - visibleH - topOff);
+      if (chrome > 0 && chrome < 140) bottom = Math.max(bottom, chrome);
+    }
+    root.style.setProperty("--nav-safe-bottom", `${bottom}px`);
+    root.style.setProperty("--nav-bar-total", `calc(var(--nav-inner-h) + ${bottom}px)`);
+    root.style.setProperty("--android-safe-top", `${top}px`);
+  }
+
+  function resetViewportLayout() {
+    document.body?.classList.remove("kb-open");
+    window.scrollTo(0, 0);
+    document.documentElement.scrollTop = 0;
+    if (document.body) document.body.scrollTop = 0;
+    applyViewportMetrics();
+    if (document.documentElement.classList.contains("is-android")) {
+      syncSystemInsets();
+      window.setTimeout(() => {
+        applyViewportMetrics();
+        syncSystemInsets();
+      }, 100);
+      window.setTimeout(() => {
+        applyViewportMetrics();
+        syncSystemInsets();
+      }, 320);
+    }
+  }
+
   function setupViewportMetrics() {
     const root = document.documentElement;
     const vv = window.visualViewport;
@@ -377,7 +580,18 @@
     const activeField = () =>
       document.activeElement?.closest?.("input, textarea, select") || null;
 
+    const isOverlayField = (field) =>
+      !!field?.closest?.(
+        ".manual-worker-backdrop, .modal-backdrop, .picker-backdrop, .export-preview-backdrop, .check-pick-backdrop, .profile-modal-backdrop"
+      );
+
     const scrollFieldIntoView = (field) => {
+      if (
+        document.documentElement.classList.contains("is-android") &&
+        isOverlayField(field)
+      ) {
+        return;
+      }
       const scroller = field.closest(
         ".harvest-scroll, .vinculo-scroll, .home-scroll, .security-screen, .lock-screen, .export-preview, .picker, .manual-worker, .check-pick"
       );
@@ -408,6 +622,7 @@
       const u = Math.max(0.82, Math.min(vw / 390, 1.14));
       root.style.setProperty("--u", `${u}px`);
       document.body?.classList.toggle("kb-open", open);
+      if (root.classList.contains("is-android") && !open) syncSystemInsets();
       // iPhone empuja toda la ventana hacia arriba para destapar el campo y
       // debajo asoma el fondo del sistema (franja negra). No resetear mientras
       // hay un campo enfocado: se veía rebote y el input quedaba tapado otra vez.
@@ -431,18 +646,31 @@
     };
 
     apply();
+    applyViewportMetrics = apply;
+    syncSystemInsets();
     if (vv) {
       vv.addEventListener("resize", schedule);
       vv.addEventListener("scroll", schedule);
     }
     window.addEventListener("resize", schedule);
     window.addEventListener("scroll", schedule, { passive: true });
-    window.addEventListener("orientationchange", () => setTimeout(apply, 250));
+    window.addEventListener("orientationchange", () => {
+      setTimeout(() => {
+        apply();
+        syncSystemInsets();
+      }, 250);
+    });
     document.addEventListener("focusin", (e) => {
       const field = e.target?.closest?.("input, textarea, select");
       if (!field) return;
       setTimeout(() => {
         apply();
+        if (
+          document.documentElement.classList.contains("is-android") &&
+          isOverlayField(field)
+        ) {
+          return;
+        }
         if (isFieldCovered(field)) scrollFieldIntoView(field);
       }, 280);
     });
@@ -450,7 +678,10 @@
       setTimeout(() => {
         if (activeField()) return;
         apply();
-      }, 80);
+        if (document.documentElement.classList.contains("is-android")) {
+          resetViewportLayout();
+        }
+      }, document.documentElement.classList.contains("is-android") ? 180 : 80);
     });
   }
 
@@ -958,16 +1189,39 @@
     return { grupos, lotes };
   }
 
+  async function fetchCatalogFile(path) {
+    const rel = path.startsWith("/") ? path : `/${path}`;
+    const sources = isNativeApp()
+      ? navigator.onLine
+        ? [`${CLOUD_ORIGIN}${rel}`, rel]
+        : [rel]
+      : [rel];
+    for (const url of sources) {
+      try {
+        const res = await fetch(url, {
+          cache:
+            url.startsWith("http") && isNativeApp()
+              ? "no-store"
+              : catalogFetchCache(),
+        });
+        if (res.ok) return await res.json();
+      } catch {
+        /* siguiente origen */
+      }
+    }
+    return [];
+  }
+
   async function loadCatalogs() {
     let baseGrupos = [];
     let baseLotes = [];
     try {
-      const [gRes, lRes] = await Promise.all([
-        fetch("/data/grupos-licapa.json", { cache: catalogFetchCache() }),
-        fetch("/data/lotes-licapa.json", { cache: catalogFetchCache() }),
+      const [grupos, lotes] = await Promise.all([
+        fetchCatalogFile("/data/grupos-licapa.json"),
+        fetchCatalogFile("/data/lotes-licapa.json"),
       ]);
-      if (gRes.ok) baseGrupos = await gRes.json();
-      if (lRes.ok) baseLotes = await lRes.json();
+      baseGrupos = Array.isArray(grupos) ? grupos : [];
+      baseLotes = Array.isArray(lotes) ? lotes : [];
     } catch {
       /* offline / file:// */
     }
@@ -1051,12 +1305,21 @@
 
   function closePicker() {
     state.picker = null;
+    $("#pickerQuery")?.blur();
+    if (document.activeElement?.closest?.("#picker")) {
+      try {
+        document.activeElement.blur();
+      } catch {
+        /* ignore */
+      }
+    }
     const el = $("#picker");
     if (el) el.hidden = true;
     const q = $("#pickerQuery");
     if (q) q.value = "";
     const addBtn = $("#pickerAdd");
     if (addBtn) addBtn.hidden = false;
+    resetViewportLayout();
   }
 
   function grupoLicList_() {
@@ -1730,7 +1993,7 @@
     } else {
       setIdentity(null);
     }
-    if (PAGE !== "scan") {
+    if (getPage() !== "scan") {
       goTo("scan", true);
       return;
     }
@@ -1815,7 +2078,7 @@
     }
     setIdentity(null);
     requestCacheRefresh();
-    if (PAGE === "scan") {
+    if (getPage() === "scan") {
       showSecurityLogin("Escanee su carnet QR", { force: true });
     } else {
       goTo("scan", true);
@@ -1841,15 +2104,15 @@
     const id = state.identity || getIdentity();
     bindSessionToIdentity(id.dni);
     // El DNI habilita toda la app. Vincular es una ficha opcional de Sistemas.
-    if (PAGE === "vinculo") {
+    if (getPage() === "vinculo") {
       showVinculoScreen(id);
       return;
     }
-    if (PAGE === "registro") {
+    if (getPage() === "registro") {
       showHarvestHome(id);
       return;
     }
-    if (PAGE === "inicio") {
+    if (getPage() === "inicio") {
       renderHomeDashboard();
       return;
     }
@@ -2373,7 +2636,7 @@
   }
 
   function showVinculoScreen(identity) {
-    if (PAGE !== "vinculo") {
+    if (getPage() !== "vinculo") {
       goTo("vinculo");
       return;
     }
@@ -2672,11 +2935,25 @@
   }
 
   async function fetchLocalJson(url) {
-    try {
-      const res = await fetch(url, { cache: catalogFetchCache() });
-      if (res.ok) return await res.json();
-    } catch {
-      /* offline: SW cache or localStorage already loaded */
+    const path = url.startsWith("/") ? url : `/${url}`;
+    const tries = [];
+    if (isNativeApp() && navigator.onLine) {
+      tries.push(`${CLOUD_ORIGIN}${path}?v=${APP_VERSION}&_=${Date.now()}`);
+    }
+    tries.push(assetUrl(path));
+    tries.push(path);
+    for (const target of tries) {
+      try {
+        const res = await fetch(target, {
+          cache:
+            isNativeApp() && target.startsWith(CLOUD_ORIGIN)
+              ? "no-store"
+              : catalogFetchCache(),
+        });
+        if (res.ok) return await res.json();
+      } catch {
+        /* offline: SW cache o localStorage ya cargados */
+      }
     }
     return null;
   }
@@ -3172,7 +3449,7 @@
   }
 
   function renderHomeDashboard() {
-    if (PAGE !== "inicio") return;
+    if (getPage() !== "inicio") return;
     const identity = state.identity || getIdentity() || {};
     paintGreeting("#homeSupervisor", identity);
     if ($("#homeDate")) {
@@ -3306,13 +3583,14 @@
     sheet.hidden = true;
     sheet.setAttribute("hidden", "");
     sheet.style.display = "none";
+    resetViewportLayout();
   }
 
   /** La navegación solo existe con sesión iniciada: nunca en el escaneo. */
   function syncTabbarVisibility() {
     const bar = $("#appTabbar");
     if (!bar) return;
-    if (PAGE === "scan") {
+    if (getPage() === "scan") {
       bar.hidden = true;
       bar.setAttribute("hidden", "");
       return;
@@ -3329,7 +3607,7 @@
 
   function persistDraftBeforeNav() {
     try {
-      if (PAGE === "registro" && state.harvest) saveHarvest();
+      if (getPage() === "registro" && state.harvest) saveHarvest();
       if (typeof saveStore === "function") saveStore();
       if (typeof saveSessionManualPersonas === "function") {
         saveSessionManualPersonas();
@@ -3354,9 +3632,9 @@
     if (help && !help.hidden) return "ayuda";
     const history = $("#historySheet");
     if (history && !history.hidden) return "excel";
-    if (PAGE === "inicio") return "inicio";
-    if (PAGE === "registro") return "registro";
-    if (PAGE === "vinculo") return "vincular";
+    if (getPage() === "inicio") return "inicio";
+    if (getPage() === "registro") return "registro";
+    if (getPage() === "vinculo") return "vincular";
     return "";
   }
 
@@ -3392,20 +3670,20 @@
       beginNavigation("/inicio/index.html?tab=excel", false, { tabSwitch: true });
       return;
     }
-    if (tab === "inicio" && PAGE === "inicio") {
+    if (tab === "inicio" && getPage() === "inicio") {
       $(".home-scroll")?.scrollTo?.({ top: 0, behavior: "smooth" });
       return;
     }
-    if (tab === "registro" && PAGE === "registro") {
+    if (tab === "registro" && getPage() === "registro") {
       $(".harvest-scroll")?.scrollTo?.({ top: 0, behavior: "smooth" });
       return;
     }
-    if (tab === "vincular" && PAGE === "vinculo") return;
+    if (tab === "vincular" && getPage() === "vinculo") return;
 
     const id = state.identity || getIdentity();
     if (!id?.dni || !hasQrLogin()) {
       toast("Escanee su carnet para continuar");
-      if (PAGE !== "scan") goTo("scan");
+      if (getPage() !== "scan") goTo("scan");
       return;
     }
 
@@ -3426,7 +3704,7 @@
       return;
     }
     if (tab === "agregar") {
-      if (PAGE !== "registro") {
+      if (getPage() !== "registro") {
         beginNavigation("/registro/index.html?tab=agregar", false, { tabSwitch: true });
         return;
       }
@@ -3446,9 +3724,9 @@
     if (tab !== "agregar" && tab !== "excel") return;
     try {
       const clean =
-        PAGE === "inicio"
+        getPage() === "inicio"
           ? "/inicio/index.html"
-          : PAGE === "registro"
+          : getPage() === "registro"
             ? "/registro/index.html"
             : location.pathname;
       history.replaceState(null, "", clean);
@@ -3459,7 +3737,7 @@
       openHarvestHistory();
       return;
     }
-    if (PAGE === "registro") onTabbarClick(tab);
+    if (getPage() === "registro") onTabbarClick(tab);
   }
 
   function loadHarvestHistory() {
@@ -3823,6 +4101,7 @@
   function closeExportPreview() {
     const modal = $("#exportPreview");
     if (modal) modal.hidden = true;
+    resetViewportLayout();
   }
 
   function downloadHarvestSnapshot(snapshot, opts = {}) {
@@ -3889,11 +4168,32 @@
     return files.length === 1 ? { files: [files[0]] } : full;
   }
 
-  /** Debe llamarse en el mismo clic del usuario (sin await previo). */
+  /** Compartir Excel: Web Share API en PWA; Capacitor Share en APK. */
   function shareFilesNow(payload, { onOk, onFail } = {}) {
-    if (!payload?.files?.length || typeof navigator.share !== "function") {
+    if (!payload?.files?.length) {
       onFail?.();
-      return;
+      return false;
+    }
+    const native = window.QBNative;
+    if (native?.isNative?.()) {
+      native
+        .shareExcelFiles(payload.files, {
+          title: "Excel de cosecha QBerries",
+          text: "Registro de cosecha",
+        })
+        .then((res) => {
+          if (res?.ok) onOk?.();
+          else onFail?.();
+        })
+        .catch((err) => {
+          if (native.isShareCancelled?.(err)) return;
+          onFail?.(err);
+        });
+      return true;
+    }
+    if (typeof navigator.share !== "function") {
+      onFail?.();
+      return false;
     }
     navigator
       .share(payload)
@@ -3902,6 +4202,7 @@
         if (err?.name === "AbortError") return;
         onFail?.(err);
       });
+    return true;
   }
 
   function shareHarvestSnapshot(snapshot, opts = {}) {
@@ -3941,13 +4242,13 @@
     }
 
     const payload = pickShareablePayload(candidates);
-    if (!payload) {
+    if (!payload && !window.QBNative?.isNative?.()) {
       downloadHarvestSnapshot(snapshot, { single: true });
       toast("Use Descargar y adjunte el Excel en WhatsApp (clip 📎)");
       return;
     }
 
-    shareFilesNow(payload, {
+    shareFilesNow(payload || { files: candidates.slice(0, 1) }, {
       onOk: () => toast("Elija WhatsApp para enviar el Excel"),
       onFail: () => {
         downloadHarvestSnapshot(snapshot, { single: true });
@@ -4026,6 +4327,7 @@
     if (!sheet) return;
     sheet.hidden = true;
     sheet.setAttribute("hidden", "");
+    resetViewportLayout();
   }
 
   function selectedReadySnapshots() {
@@ -4088,12 +4390,12 @@
       return;
     }
     const payload = pickShareablePayload(candidates);
-    if (!payload) {
+    if (!payload && !window.QBNative?.isNative?.()) {
       snapshots.forEach((item) => downloadHarvestSnapshot(item, { single: true }));
       toast("Use Descargar y adjunte los Excel en WhatsApp (clip 📎)");
       return;
     }
-    shareFilesNow(payload, {
+    shareFilesNow(payload || { files: candidates }, {
       onOk: () => toast("Elija WhatsApp para enviar los Excel"),
       onFail: () => {
         snapshots.forEach((item) => downloadHarvestSnapshot(item, { single: true }));
@@ -4193,83 +4495,113 @@
     const sheet = $("#historySheet");
     if (sheet) sheet.hidden = true;
     refreshTabbar();
+    resetViewportLayout();
   }
 
   async function clearAppCache(button) {
-    if (button) {
-      button.disabled = true;
-      button.textContent = "Borrando…";
-    }
+    setBtnLoading(button, true, "Borrando…");
     try {
-      // 1) Toda la Cache Storage de la PWA (todas las versiones).
-      if ("caches" in window) {
-        const keys = await caches.keys();
-        await Promise.all(keys.map((key) => caches.delete(key)));
-        const leftover = await caches.keys();
-        await Promise.all(leftover.map((key) => caches.delete(key)));
+      tabShellCache.clear();
+      try {
+        localStorage.removeItem(CACHE_DAY_KEY);
+      } catch {
+        /* ignore */
       }
 
-      // 2) Desregistrar todos los service workers (si no, vuelven a cachear).
-      if ("serviceWorker" in navigator) {
-        const regs = await navigator.serviceWorker.getRegistrations();
-        await Promise.all(regs.map((reg) => reg.unregister()));
+      if (!isNativeApp()) {
+        if ("caches" in window) {
+          const keys = await caches.keys();
+          await Promise.all(keys.map((key) => caches.delete(key)));
+          const leftover = await caches.keys();
+          await Promise.all(leftover.map((key) => caches.delete(key)));
+        }
+        if ("serviceWorker" in navigator) {
+          const regs = await navigator.serviceWorker.getRegistrations();
+          await Promise.all(regs.map((reg) => reg.unregister()));
+        }
+        if (typeof indexedDB !== "undefined" && indexedDB.databases) {
+          const dbs = await indexedDB.databases();
+          await Promise.all(
+            (dbs || []).map(
+              (db) =>
+                new Promise((resolve) => {
+                  if (!db?.name) {
+                    resolve();
+                    return;
+                  }
+                  const req = indexedDB.deleteDatabase(db.name);
+                  req.onsuccess = () => resolve();
+                  req.onerror = () => resolve();
+                  req.onblocked = () => resolve();
+                })
+            )
+          );
+        }
       }
 
-      // 3) Bases IndexedDB del origen (caché interna del navegador).
-      if (typeof indexedDB !== "undefined" && indexedDB.databases) {
-        const dbs = await indexedDB.databases();
-        await Promise.all(
-          (dbs || []).map(
-            (db) =>
-              new Promise((resolve) => {
-                if (!db?.name) {
-                  resolve();
-                  return;
-                }
-                const req = indexedDB.deleteDatabase(db.name);
-                req.onsuccess = () => resolve();
-                req.onerror = () => resolve();
-                req.onblocked = () => resolve();
-              })
-          )
-        );
-      }
-
-      toast("Caché borrada por completo · recargando…");
-      // Recarga limpia: sin service worker y con URL nueva para saltar caché HTTP.
-      const url = new URL(location.href);
-      url.searchParams.set("_cb", String(Date.now()));
-      setTimeout(() => location.replace(url.href), 350);
+      toast(
+        isNativeApp()
+          ? "Caché borrada · recargando app…"
+          : "Caché borrada por completo · recargando…"
+      );
+      reloadWithBust();
     } catch {
       toast("No se pudo borrar la caché");
-      if (button) {
-        button.disabled = false;
-        button.textContent = "Borrar caché";
-        hydrateIcons(button.parentElement || button);
-      }
+      setBtnLoading(button, false);
     }
   }
 
   async function updateApp(button) {
-    if (button) {
-      button.disabled = true;
-      button.textContent = "Actualizando…";
-    }
+    setBtnLoading(button, true, "Actualizando…");
     try {
-      if ("caches" in window) {
-        const keys = await caches.keys();
-        await Promise.all(keys.map((key) => caches.delete(key)));
+      tabShellCache.clear();
+      try {
+        localStorage.removeItem(CACHE_DAY_KEY);
+      } catch {
+        /* ignore */
       }
-      if ("serviceWorker" in navigator) {
-        const regs = await navigator.serviceWorker.getRegistrations();
-        await Promise.all(regs.map((reg) => reg.unregister()));
+
+      if (!isNativeApp()) {
+        if ("caches" in window) {
+          const keys = await caches.keys();
+          await Promise.all(keys.map((key) => caches.delete(key)));
+        }
+        if ("serviceWorker" in navigator) {
+          const regs = await navigator.serviceWorker.getRegistrations();
+          await Promise.all(regs.map((reg) => reg.unregister()));
+        }
+        requestCacheRefresh();
       }
+
+      if (navigator.onLine) {
+        await warmTabShells(true);
+        await detectNetlify(5000);
+        await Promise.all([
+          loadSupervisores(),
+          loadPersonas(),
+          loadCatalogs(),
+        ]);
+        if (canUseCloudApi()) {
+          await flushVinculoQueue().catch(() => {});
+          await flushCloudDataQueue().catch(() => {});
+        }
+        updateNetworkUI();
+        toast(
+          canUseCloudApi()
+            ? "Actualizado · Netlify conectado"
+            : navigator.onLine
+              ? "Actualizado · revise internet o Netlify"
+              : "Actualizado · sin internet"
+        );
+      } else {
+        toast("Sin internet · se recarga con datos del celular");
+      }
+
+      reloadWithBust();
     } catch {
-      /* la recarga de red sigue siendo el respaldo */
+      toast("No se pudo actualizar");
+      setBtnLoading(button, false);
     }
-    const url = new URL(location.href);
-    url.searchParams.set("_cb", String(Date.now()));
-    location.replace(url.href);
   }
 
   function openAyuda() {
@@ -4306,14 +4638,17 @@
               </div>
               <button type="button" class="app-tools-close" aria-label="Cerrar">${ico("x")}</button>
             </div>
-            <p>Borre toda la caché de la app (archivos, service worker e IndexedDB) y luego actualice. Sus registros de cosecha, historial y sesión no se eliminan.</p>
-            <a class="app-tools-install" href="/instalar/">${ico("download")} QR para instalar en otro celular</a>
+            <p>${
+              isNativeApp()
+                ? "En el APK: borre caché de pantallas o actualice desde Netlify (supervisores, lotes y subidas). Sus registros, historial y sesión no se eliminan."
+                : "Borre toda la caché de la app (archivos, service worker e IndexedDB) y luego actualice. Sus registros de cosecha, historial y sesión no se eliminan."
+            }</p>
+            <a class="app-tools-install" href="${isNativeApp() ? CLOUD_ORIGIN + "/instalar/" : "/instalar/"}">${ico("download")} QR para instalar en otro celular</a>
             <button type="button" class="app-tools-cache">${ico("trash")} Borrar caché</button>
             <button type="button" class="app-tools-update">${ico("refresh")} Actualizar app</button>
-            <small class="app-version">Versión de la app: ${APP_VERSION}</small>
           </section>
         </div>`;
-      ($("#phone") || document.body).appendChild(sheet);
+      ($(".stage") || document.body).appendChild(sheet);
       sheet.querySelector(".help-close")?.addEventListener("click", () => {
         sheet.hidden = true;
         refreshTabbar();
@@ -4328,17 +4663,13 @@
       tools?.addEventListener("click", (event) => {
         if (event.target === tools) tools.hidden = true;
       });
-      const cacheButton = sheet.querySelector(".app-tools-cache");
-      cacheButton?.addEventListener("click", () => clearAppCache(cacheButton));
-      const updateButton = sheet.querySelector(".app-tools-update");
-      updateButton?.addEventListener("click", () => updateApp(updateButton));
     }
     sheet.hidden = false;
     refreshTabbar();
   }
 
   function showHarvestHome(identity) {
-    if (PAGE !== "registro") {
+    if (getPage() !== "registro") {
       goTo("registro");
       return;
     }
@@ -4413,11 +4744,14 @@
   }
 
   function closeManualWorker() {
+    $("#manualWorkerDni")?.blur();
+    $("#manualWorkerNombre")?.blur();
     const sheet = $("#manualWorker");
     if (!sheet) return;
     sheet.hidden = true;
     sheet.setAttribute("hidden", "");
     sheet.style.display = "none";
+    resetViewportLayout();
   }
 
   function pushHarvestWorker(dni, nombre, { fromManual = false } = {}) {
@@ -4556,6 +4890,7 @@
     if (!sheet) return;
     sheet.hidden = true;
     sheet.setAttribute("hidden", "");
+    resetViewportLayout();
   }
 
   function applyWorkerPick() {
@@ -4716,6 +5051,7 @@
     const modal = $("#modal");
     if (modal) modal.hidden = true;
     state.pendingConfirm = null;
+    resetViewportLayout();
   }
   function closeSheets() {
     $$(".sheet").forEach((s) => (s.hidden = true));
@@ -4782,7 +5118,15 @@
     } else if (pending) {
       label = canUseCloudApi()
         ? `Pendiente · ${pending}`
-        : `Pendiente · ${pending}`;
+        : isNativeApp()
+          ? `Pendiente · ${pending} · sin nube`
+          : `Pendiente · ${pending}`;
+      mode = "is-pending";
+    } else if (isNativeApp() && state.cloudApi) {
+      label = "Con internet · nube OK";
+      mode = "is-online";
+    } else if (isNativeApp() && !state.cloudApi) {
+      label = "Con internet · sin nube";
       mode = "is-pending";
     }
 
@@ -5122,7 +5466,11 @@
     }
     const identity = state.identity || getIdentity();
     if (!state.netlifyReady || !state.cloudApi) {
-      toast("Subida solo en Netlify · despliegue el sitio");
+      toast(
+        isNativeApp()
+          ? "Sin conexión a Netlify · revise internet"
+          : "Subida solo en Netlify · despliegue el sitio"
+      );
       return;
     }
     const pin = sessionPin();
@@ -5321,90 +5669,7 @@
     toast(`${n} personas cargadas`);
   }
 
-  function bind() {
-    const scrollParent_ = (el) =>
-      el?.closest?.(
-        ".picker-list, #vinculoScreen:not(.is-thanks) .vinculo-scroll, #vinculoScreen:not(.is-thanks), .session-screen, .security-screen, .app-scroll, .harvest-scroll, .home-scroll, .export-preview, .history-sheet, .help-sheet"
-      );
-
-    document.addEventListener(
-      "touchstart",
-      (e) => {
-        const s = scrollParent_(e.target);
-        const tableWrap = e.target?.closest?.(".export-preview-table-wrap");
-        if (tableWrap && e.touches[0]) tableWrap._touchY = e.touches[0].clientY;
-        if (s && e.touches[0]) s._touchY = e.touches[0].clientY;
-      },
-      { passive: true }
-    );
-
-    const lockOverscroll = (e) => {
-      const tableWrap = e.target?.closest?.(".export-preview-table-wrap");
-      if (tableWrap) {
-        const canScrollY = tableWrap.scrollHeight > tableWrap.clientHeight + 1;
-        const canScrollX = tableWrap.scrollWidth > tableWrap.clientWidth + 1;
-        if (!canScrollY && !canScrollX) return;
-        if (canScrollY) {
-          const atTop = tableWrap.scrollTop <= 0;
-          const atBottom =
-            tableWrap.scrollTop + tableWrap.clientHeight >=
-            tableWrap.scrollHeight - 1;
-          let dy = 0;
-          if (e.type === "wheel") dy = e.deltaY;
-          else if (e.touches && e.touches[0]) {
-            dy =
-              (tableWrap._touchY || e.touches[0].clientY) -
-              e.touches[0].clientY;
-          }
-          if ((atTop && dy < 0) || (atBottom && dy > 0)) e.preventDefault();
-        }
-        return;
-      }
-      // El listado del select (Grupo / Grupo LIC) debe poder deslizar
-      const pickerList = e.target?.closest?.(".picker-list");
-      if (pickerList) {
-        const canScroll = pickerList.scrollHeight > pickerList.clientHeight + 1;
-        if (!canScroll) return;
-        const atTop = pickerList.scrollTop <= 0;
-        const atBottom =
-          pickerList.scrollTop + pickerList.clientHeight >=
-          pickerList.scrollHeight - 1;
-        let dy = 0;
-        if (e.type === "wheel") dy = e.deltaY;
-        else if (e.touches && e.touches[0]) {
-          dy =
-            (pickerList._touchY || e.touches[0].clientY) -
-            e.touches[0].clientY;
-        }
-        if ((atTop && dy < 0) || (atBottom && dy > 0)) e.preventDefault();
-        return;
-      }
-
-      if ($("#vinculoScreen")?.classList.contains("is-thanks")) {
-        e.preventDefault();
-        return;
-      }
-      const s = scrollParent_(e.target);
-      if (!s) {
-        e.preventDefault();
-        return;
-      }
-      const canScroll = s.scrollHeight > s.clientHeight + 1;
-      if (!canScroll) {
-        e.preventDefault();
-        return;
-      }
-      const atTop = s.scrollTop <= 0;
-      const atBottom = s.scrollTop + s.clientHeight >= s.scrollHeight - 1;
-      let dy = 0;
-      if (e.type === "wheel") dy = e.deltaY;
-      else if (e.touches && e.touches[0])
-        dy = (s._touchY || e.touches[0].clientY) - e.touches[0].clientY;
-      if ((atTop && dy < 0) || (atBottom && dy > 0)) e.preventDefault();
-    };
-    document.addEventListener("wheel", lockOverscroll, { passive: false });
-    document.addEventListener("touchmove", lockOverscroll, { passive: false });
-
+  function bindPhoneHandlers() {
     on("#cards", "click", onCardsClick);
     on("#cards", "input", onCardsInput);
     on("#cards", "change", onCardsInput);
@@ -5861,6 +6126,139 @@
     });
   }
 
+  function bind() {
+    const scrollParent_ = (el) =>
+      el?.closest?.(
+        ".picker-list, #vinculoScreen:not(.is-thanks) .vinculo-scroll, #vinculoScreen:not(.is-thanks), .session-screen, .security-screen, .app-scroll, .harvest-scroll, .home-scroll, .export-preview, .history-sheet, .help-sheet"
+      );
+
+    if (!bind._global) {
+      bind._global = true;
+
+      document.addEventListener(
+        "touchstart",
+        (e) => {
+          const s = scrollParent_(e.target);
+          const tableWrap = e.target?.closest?.(".export-preview-table-wrap");
+          if (tableWrap && e.touches[0]) tableWrap._touchY = e.touches[0].clientY;
+          if (s && e.touches[0]) s._touchY = e.touches[0].clientY;
+        },
+        { passive: true }
+      );
+
+      const lockOverscroll = (e) => {
+        const tableWrap = e.target?.closest?.(".export-preview-table-wrap");
+        if (tableWrap) {
+          const canScrollY = tableWrap.scrollHeight > tableWrap.clientHeight + 1;
+          const canScrollX = tableWrap.scrollWidth > tableWrap.clientWidth + 1;
+          if (!canScrollY && !canScrollX) return;
+          if (canScrollY) {
+            const atTop = tableWrap.scrollTop <= 0;
+            const atBottom =
+              tableWrap.scrollTop + tableWrap.clientHeight >=
+              tableWrap.scrollHeight - 1;
+            let dy = 0;
+            if (e.type === "wheel") dy = e.deltaY;
+            else if (e.touches && e.touches[0]) {
+              dy =
+                (tableWrap._touchY || e.touches[0].clientY) -
+                e.touches[0].clientY;
+            }
+            if ((atTop && dy < 0) || (atBottom && dy > 0)) e.preventDefault();
+          }
+          return;
+        }
+        const pickerList = e.target?.closest?.(".picker-list");
+        if (pickerList) {
+          const canScroll = pickerList.scrollHeight > pickerList.clientHeight + 1;
+          if (!canScroll) return;
+          const atTop = pickerList.scrollTop <= 0;
+          const atBottom =
+            pickerList.scrollTop + pickerList.clientHeight >=
+            pickerList.scrollHeight - 1;
+          let dy = 0;
+          if (e.type === "wheel") dy = e.deltaY;
+          else if (e.touches && e.touches[0]) {
+            dy =
+              (pickerList._touchY || e.touches[0].clientY) -
+              e.touches[0].clientY;
+          }
+          if ((atTop && dy < 0) || (atBottom && dy > 0)) e.preventDefault();
+          return;
+        }
+
+        if ($("#vinculoScreen")?.classList.contains("is-thanks")) {
+          e.preventDefault();
+          return;
+        }
+        const s = scrollParent_(e.target);
+        if (!s) {
+          e.preventDefault();
+          return;
+        }
+        const canScroll = s.scrollHeight > s.clientHeight + 1;
+        if (!canScroll) {
+          e.preventDefault();
+          return;
+        }
+        const atTop = s.scrollTop <= 0;
+        const atBottom = s.scrollTop + s.clientHeight >= s.scrollHeight - 1;
+        let dy = 0;
+        if (e.type === "wheel") dy = e.deltaY;
+        else if (e.touches && e.touches[0])
+          dy = (s._touchY || e.touches[0].clientY) - e.touches[0].clientY;
+        if ((atTop && dy < 0) || (atBottom && dy > 0)) e.preventDefault();
+      };
+      document.addEventListener("wheel", lockOverscroll, { passive: false });
+      document.addEventListener("touchmove", lockOverscroll, { passive: false });
+
+      window.addEventListener("popstate", () => {
+        if (!document.documentElement.classList.contains("has-session")) return;
+        if (!isInternalTabUrl(location.pathname)) return;
+        if (navigationLocked) return;
+        navigationLocked = true;
+        document.body.classList.add("app-tab-switch");
+        switchTabClient(location.pathname + location.search, true)
+          .catch(() => {
+            location.reload();
+          })
+          .finally(() => {
+            navigationLocked = false;
+            document.body.classList.remove("app-tab-switch");
+          });
+      });
+
+      document.addEventListener("click", (e) => {
+        const cacheBtn = e.target?.closest?.(".app-tools-cache");
+        if (cacheBtn && !cacheBtn.disabled) {
+          e.preventDefault();
+          clearAppCache(cacheBtn);
+          return;
+        }
+        const updateBtn = e.target?.closest?.(".app-tools-update");
+        if (updateBtn && !updateBtn.disabled) {
+          e.preventDefault();
+          updateApp(updateBtn);
+        }
+      });
+
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState !== "visible" || !navigator.onLine) return;
+        detectNetlify(2500)
+          .then((ok) => {
+            updateNetworkUI();
+            if (ok) {
+              flushVinculoQueue().catch(() => {});
+              flushCloudDataQueue().catch(() => {});
+            }
+          })
+          .catch(() => {});
+      });
+    }
+
+    bindPhoneHandlers();
+  }
+
   async function init() {
     try {
       let actionLoaderMsg = null;
@@ -5939,6 +6337,8 @@
       bind();
       refreshTabbar();
       openRequestedTab();
+      cacheCurrentTabShell();
+      if (hasSession) warmTabShells().catch(() => {});
       document.body.classList.remove("app-booting");
       document.body.classList.add("app-ready");
       if (actionLoaderMsg) hideAppLoader();
@@ -5964,13 +6364,13 @@
       }
 
       const trabEl = $("#trabCount");
-      if (trabEl && PAGE === "scan") {
+      if (trabEl && getPage() === "scan") {
         setInlineLoading(trabEl, true, "Cargando supervisores…");
       }
       loadSupervisores()
         .then(() => {
           const el = $("#trabCount");
-          if (el && PAGE === "scan" && !SESSION_FORM_ENABLED) {
+          if (el && getPage() === "scan" && !SESSION_FORM_ENABLED) {
             setInlineLoading(el, false);
             el.textContent = navigator.onLine
               ? "Listo para escanear · solo Supervisores de Cosecha"
@@ -5980,19 +6380,19 @@
         })
         .catch(() => {
           const el = $("#trabCount");
-          if (el && PAGE === "scan") {
+          if (el && getPage() === "scan") {
             setInlineLoading(el, false);
             el.textContent = "Listo para escanear";
           }
         });
       loadPersonas()
         .then(() => {
-          if (PAGE === "registro" && $("#harvestScreen") && !$("#harvestScreen").hidden) {
+          if (getPage() === "registro" && $("#harvestScreen") && !$("#harvestScreen").hidden) {
             renderHarvest();
           }
         })
         .catch(() => {});
-      if (PAGE === "registro") {
+      if (getPage() === "registro") {
         loadCatalogs().catch(() => {});
       }
 
@@ -6057,14 +6457,14 @@
           inicio: "#homeDashboard",
           vinculo: "#vinculoScreen",
           registro: "#harvestScreen",
-        }[PAGE];
+        }[getPage()];
         if (!expected) return;
         const screen = $(expected);
         if (!screen || screen.hidden) {
-          if (PAGE === "scan") showSecurityLogin("");
-          else if (PAGE === "inicio" && hasQrLogin()) renderHomeDashboard();
-          else if (PAGE === "registro" && hasQrLogin()) showHarvestHome(getIdentity());
-          else if (PAGE === "vinculo" && hasQrLogin()) showVinculoScreen(getIdentity());
+          if (getPage() === "scan") showSecurityLogin("");
+          else if (getPage() === "inicio" && hasQrLogin()) renderHomeDashboard();
+          else if (getPage() === "registro" && hasQrLogin()) showHarvestHome(getIdentity());
+          else if (getPage() === "vinculo" && hasQrLogin()) showVinculoScreen(getIdentity());
           else goTo("scan", true);
         }
       }, 1200);
@@ -6085,7 +6485,7 @@
         }
       }
     } catch (err) {
-      if (PAGE === "scan") showSecurityLogin("");
+      if (getPage() === "scan") showSecurityLogin("");
       else goTo("scan", true);
       const msg = $("#secMsg") || $("#pinMsg");
       if (msg) msg.textContent = "Error al iniciar. Ctrl+F5 para recargar.";
