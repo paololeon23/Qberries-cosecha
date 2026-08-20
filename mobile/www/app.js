@@ -28,7 +28,7 @@
   const JARRAS_POR_JABA = 12;
   const FUNDO_DEFAULT = "Licapa";
   const FUNDO_OPTIONS = ["Licapa", "Licapa II"];
-  const APP_VERSION = "v345";
+  const APP_VERSION = "v346";
 
   function normalizeFundo(value) {
     const raw = String(value || "").trim();
@@ -4602,24 +4602,54 @@
     return wb;
   }
 
+  const XLSX_SHARE_MIME =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+  /** Nombre seguro para Web Share / WhatsApp (ASCII, .xlsx). */
+  function safeXlsxShareName(raw) {
+    let name = String(raw || "cosecha.xlsx")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^A-Za-z0-9._ -]+/g, "_")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 80);
+    if (!name.toLowerCase().endsWith(".xlsx")) name = `${name || "cosecha"}.xlsx`;
+    return name;
+  }
+
+  /**
+   * Crea un File real .xlsx (Uint8Array + MIME Office).
+   * Crítico en Android Chrome: File([Uint8Array]) suele pasar canShare
+   * mejor que File([Blob]).
+   */
+  function createXlsxFile(bytes, fileName) {
+    const name = safeXlsxShareName(fileName);
+    const data =
+      bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+    if (!data.byteLength) return null;
+    try {
+      return new File([data], name, {
+        type: XLSX_SHARE_MIME,
+        lastModified: Date.now(),
+      });
+    } catch {
+      try {
+        const blob = new Blob([data], { type: XLSX_SHARE_MIME });
+        return new File([blob], name, {
+          type: XLSX_SHARE_MIME,
+          lastModified: Date.now(),
+        });
+      } catch {
+        return null;
+      }
+    }
+  }
+
   function buildHarvestFile(snapshot) {
     const wb = buildHarvestWorkbook(snapshot);
     const bytes = XLSX.write(wb, { bookType: "xlsx", type: "array" });
-    const name = harvestFileName(snapshot);
-    const type =
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-    const blob = new Blob([new Uint8Array(bytes)], { type });
-    try {
-      return new File([blob], name, { type, lastModified: Date.now() });
-    } catch {
-      // Algunos navegadores antiguos no tienen File; el Blob igual sirve.
-      try {
-        Object.defineProperty(blob, "name", { value: name });
-      } catch {
-        /* ignore */
-      }
-      return blob;
-    }
+    return createXlsxFile(bytes, harvestFileName(snapshot));
   }
 
   /** Solo muestra el resumen: guardar ocurre dentro del modal */
@@ -4836,44 +4866,20 @@
     try {
       const wb = buildHarvestWorkbook(snapshot);
       const ok = downloadXlsxWorkbook(wb, harvestFileName(snapshot));
-      if (ok) toast("Excel descargado");
+      if (ok && !opts.silent) toast("Excel descargado");
       return ok;
     } catch {
-      toast("No se pudo crear el Excel");
+      if (!opts.silent) toast("No se pudo crear el Excel");
       return false;
     }
   }
 
   function harvestShareFile(snapshot) {
-    const primary = buildHarvestFile(snapshot);
-    if (!primary) return null;
-    const rawName = harvestFileName(snapshot);
-    const name = String(rawName || "cosecha.xlsx")
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/[^A-Za-z0-9._-]+/g, "_")
-      .replace(/_+/g, "_")
-      .replace(/^_|_$/g, "") || "cosecha.xlsx";
-    const type =
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-    const blob =
-      primary instanceof Blob
-        ? primary
-        : new Blob([primary], { type });
     try {
-      return new File([blob], name.endsWith(".xlsx") ? name : `${name}.xlsx`, {
-        type,
-        lastModified: Date.now(),
-      });
-    } catch {
-      try {
-        Object.defineProperty(blob, "name", {
-          value: name.endsWith(".xlsx") ? name : `${name}.xlsx`,
-        });
-      } catch {
-        /* ignore */
-      }
-      return blob;
+      return buildHarvestFile(snapshot);
+    } catch (err) {
+      console.warn("harvestShareFile", err);
+      return null;
     }
   }
 
@@ -4882,10 +4888,45 @@
     return file ? [file] : [];
   }
 
+  function canShareFiles(files) {
+    if (!files?.length || typeof navigator.share !== "function") return false;
+    if (typeof navigator.canShare !== "function") {
+      // Safari antiguo: canShare puede no existir; share con files sí.
+      return true;
+    }
+    try {
+      return !!navigator.canShare({ files });
+    } catch {
+      return false;
+    }
+  }
+
+  function isShareAbort(err) {
+    if (!err) return false;
+    if (err.name === "AbortError") return true;
+    const msg = String(err.message || err || "").toLowerCase();
+    return (
+      msg.includes("abort") ||
+      msg.includes("cancel") ||
+      msg.includes("dismiss") ||
+      msg.includes("share canceled") ||
+      msg.includes("share cancelled")
+    );
+  }
+
+  /** Último recurso: solo cuando el dispositivo no puede Web Share de archivos. */
+  function fallbackDownloadExcelShare(snapshot) {
+    toast(
+      "Este dispositivo no permite compartir archivos directamente. El Excel se descargará para que puedas adjuntarlo manualmente."
+    );
+    downloadHarvestSnapshot(snapshot, { single: true, silent: true });
+  }
+
   /**
-   * Abre el menú nativo Compartir (como iOS/Android) con UN solo Excel.
-   * NO usa API de WhatsApp (wa.me / api.whatsapp.com).
-   * Debe llamarse dentro del click del usuario.
+   * Compartir Excel → menú nativo del sistema (WhatsApp, Telegram, etc.).
+   * 1) Genera .xlsx  2) File real  3) canShare({files})  4) navigator.share
+   * AbortError = usuario canceló → NO descargar.
+   * Debe llamarse en el mismo gesto de click (sin await previo).
    */
   function shareOneExcelNative(snapshot) {
     if (!snapshot) {
@@ -4903,62 +4944,79 @@
     } catch (err) {
       console.warn("shareOneExcelNative build", err);
     }
-    if (!file) {
+    if (!(file instanceof File)) {
       toast("No se pudo crear el Excel");
       return;
     }
 
-    // Garantía: exactamente 1 archivo
     const files = [file];
-    const fileName = file.name || harvestFileName(snapshot);
+    const title = file.name;
     const native = window.QBNative;
 
+    // APK Capacitor: Share plugin nativo (mismo menú del sistema)
     if (native?.isNative?.() && typeof native.shareExcelFiles === "function") {
       native
-        .shareExcelFiles(files, { title: fileName, text: "" })
+        .shareExcelFiles(files, { title })
         .then((res) => {
-          if (res?.ok) toast("Elija WhatsApp en el menú");
-          else toast("No se abrió Compartir. Pruebe Descargar Excel.");
+          if (res?.ok) return;
+          // Si el plugin falla, intentar Web Share del WebView
+          tryWebShareExcel(files, title, snapshot);
         })
         .catch((err) => {
-          if (native.isShareCancelled?.(err)) return;
-          toast("No se abrió Compartir. Pruebe Descargar Excel.");
+          if (native.isShareCancelled?.(err) || isShareAbort(err)) return;
+          tryWebShareExcel(files, title, snapshot);
         });
       return;
     }
 
+    tryWebShareExcel(files, title, snapshot);
+  }
+
+  function tryWebShareExcel(files, title, snapshot) {
     if (typeof navigator.share !== "function") {
-      toast("Este dispositivo no tiene menú Compartir. Use Descargar Excel.");
+      fallbackDownloadExcelShare(snapshot);
       return;
     }
 
-    if (typeof File === "undefined" || !(file instanceof File)) {
-      toast("No se pudo preparar el archivo. Use Descargar Excel.");
+    let shareFile = files[0];
+    if (!(shareFile instanceof File)) {
+      fallbackDownloadExcelShare(snapshot);
       return;
     }
 
-    let canFiles = true;
-    if (typeof navigator.canShare === "function") {
+    // Android Chrome: canShare debe pasar con el File .xlsx
+    if (!canShareFiles([shareFile])) {
+      // Reintento: mismos bytes, MIME octet-stream (algunos WebView lo aceptan)
       try {
-        canFiles = navigator.canShare({ files });
+        const alt = new File([shareFile], shareFile.name, {
+          type: "application/octet-stream",
+          lastModified: Date.now(),
+        });
+        if (canShareFiles([alt])) shareFile = alt;
+        else {
+          fallbackDownloadExcelShare(snapshot);
+          return;
+        }
       } catch {
-        canFiles = false;
+        fallbackDownloadExcelShare(snapshot);
+        return;
       }
     }
 
-    if (!canFiles) {
-      toast("Este navegador no permite compartir archivos. Use Descargar Excel.");
-      return;
-    }
+    // Solo files + title. NO enviar `text` vacío: en Android WhatsApp
+    // a veces comparte solo texto y pierde el adjunto.
+    const payload = { files: [shareFile], title };
 
-    // Menú nativo del sistema — 1 documento
+    // Llamada inmediata (mismo turno del click → conserva user gesture)
     navigator
-      .share({ files })
-      .then(() => toast("Elija WhatsApp"))
+      .share(payload)
+      .then(() => {
+        /* menú nativo abierto / compartido */
+      })
       .catch((err) => {
-        if (err?.name === "AbortError") return;
+        if (isShareAbort(err)) return;
         console.warn("navigator.share", err);
-        toast("No se pudo compartir. Use Descargar Excel.");
+        fallbackDownloadExcelShare(snapshot);
       });
   }
 
@@ -4970,51 +5028,43 @@
   function pickShareablePayload(files) {
     if (!files?.length || typeof navigator.share !== "function") return null;
     const one = files[0];
-    if (!one) return null;
-    if (typeof navigator.canShare === "function") {
-      try {
-        if (!navigator.canShare({ files: [one] })) return null;
-      } catch {
-        return null;
-      }
-    }
+    if (!(one instanceof File)) return null;
+    if (!canShareFiles([one])) return null;
     return { files: [one], title: one.name };
   }
 
   /** Menú nativo · siempre 1 archivo */
   function shareFilesNow(payload, { onOk, onFail } = {}) {
     const one = payload?.files?.[0];
-    if (!one) {
+    if (!(one instanceof File)) {
       onFail?.();
       return false;
     }
     const files = [one];
+    const title = payload.title || one.name || "Excel QBerries";
     const native = window.QBNative;
-    if (native?.isNative?.()) {
+    if (native?.isNative?.() && typeof native.shareExcelFiles === "function") {
       native
-        .shareExcelFiles(files, {
-          title: payload.title || one.name || "Excel QBerries",
-          text: "",
-        })
+        .shareExcelFiles(files, { title })
         .then((res) => {
           if (res?.ok) onOk?.();
           else onFail?.();
         })
         .catch((err) => {
-          if (native.isShareCancelled?.(err)) return;
+          if (native.isShareCancelled?.(err) || isShareAbort(err)) return;
           onFail?.(err);
         });
       return true;
     }
-    if (typeof navigator.share !== "function") {
-      onFail?.({ reason: "no-share-api" });
+    if (!canShareFiles(files)) {
+      onFail?.({ reason: "cannot-share-files" });
       return false;
     }
     navigator
-      .share({ files })
+      .share({ files, title })
       .then(() => onOk?.())
       .catch((err) => {
-        if (err?.name === "AbortError") return;
+        if (isShareAbort(err)) return;
         onFail?.(err);
       });
     return true;
@@ -6602,21 +6652,9 @@
     try {
       const bytes = XLSX.write(wb, { bookType: "xlsx", type: "array" });
       const blob = new Blob([new Uint8Array(bytes)], {
-        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type: XLSX_SHARE_MIME,
       });
-      const native = window.QBNative;
-      if (native?.isNative?.() && typeof native.shareExcelFiles === "function") {
-        try {
-          const file = new File([blob], name, {
-            type: blob.type,
-            lastModified: Date.now(),
-          });
-          native.shareExcelFiles([file], { title: name, text: "" });
-          return true;
-        } catch {
-          /* seguir con descarga web */
-        }
-      }
+      // Descargar = descarga. Compartir nativo solo vía botón Compartir Excel.
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;

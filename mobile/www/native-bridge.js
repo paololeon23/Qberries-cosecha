@@ -74,9 +74,10 @@
     const Share = plugin("Share");
     if (!Share) return { ok: false, reason: "share-unavailable" };
     const uri = await writeShareFile(file);
+    const title = meta?.title || file?.name || "Excel de cosecha";
+    // Solo título + files (sin text vacío: en Android puede romper el adjunto)
     await Share.share({
-      title: meta?.title || "Excel de cosecha",
-      text: meta?.text || "Registro de cosecha",
+      title,
       files: [uri],
       dialogTitle: "Compartir Excel",
     });
