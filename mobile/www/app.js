@@ -31,7 +31,7 @@
   const JARRAS_POR_JABA = 12;
   const FUNDO_DEFAULT = "Licapa";
   const FUNDO_OPTIONS = ["Licapa", "Licapa II"];
-  const APP_VERSION = "v360";
+  const APP_VERSION = "v361";
 
   function normalizeFundo(value) {
     const raw = String(value || "").trim();
@@ -6275,154 +6275,83 @@
     resetViewportLayout();
   }
 
-  /** Borra TODA la data local de la app (sesión, colas, historial, borradores). */
-  function wipeAllAppLocalData() {
-    const knownKeys = [
-      STORAGE_KEY,
-      PERSONAS_KEY,
-      SUPERVISORES_KEY,
-      PERSONAS_META_KEY,
-      VINCULO_QUEUE_KEY,
-      CLOUD_DATA_QUEUE_KEY,
-      DRIVE_QUEUE_KEY,
-      HARVEST_DRIVE_URL_KEY,
-      VINCULO_DONE_KEY,
-      CUSTOM_CATALOG_KEY,
-      PIN_KEY,
-      SESSION_KEY,
-      SESSION_PIN_KEY,
-      IDENTITY_KEY,
-      IDENTITY_LS_KEY,
-      AUTH_SESSION_KEY,
-      HARVEST_KEY,
-      HARVEST_HISTORY_KEY,
-      HARVEST_SENT_KEY,
-      GUIAS_HISTORY_KEY,
-      SESSION_MANUAL_PERSONAS_KEY,
-      SESSION_WORKERS_KEY,
-      SAVED_WORKERS_KEY,
-      LOGOUT_FLAG_KEY,
-      CACHE_DAY_KEY,
-      TAB_SHELL_LS_KEY,
-      "qb-tab-shells-v1",
-      "qb-action-loader",
-      "qb-tab-nav",
-    ];
-    knownKeys.forEach((key) => {
-      try {
-        localStorage.removeItem(key);
-      } catch {
-        /* ignore */
-      }
-      try {
-        sessionStorage.removeItem(key);
-      } catch {
-        /* ignore */
-      }
-    });
-
-    // Barrido: cualquier otra clave qb-
-    try {
-      for (let i = localStorage.length - 1; i >= 0; i--) {
-        const key = localStorage.key(i);
-        if (key && /^qb[-_]/i.test(key)) localStorage.removeItem(key);
-      }
-    } catch {
-      /* ignore */
-    }
-    try {
-      for (let i = sessionStorage.length - 1; i >= 0; i--) {
-        const key = sessionStorage.key(i);
-        if (key && /^qb[-_]/i.test(key)) sessionStorage.removeItem(key);
-      }
-    } catch {
-      /* ignore */
-    }
-
-    clearTabShellStorage();
-    tabShellCache.clear();
-
-    // Estado en memoria
-    try {
-      state.guias = [];
-      state.session = emptySession();
-      state.harvest = emptyHarvest();
-      state.identity = null;
-      state.previewDraftSnapshot = null;
-      state.previewDraftByType = {};
-      state.activeExportSnapshot = null;
-      state.activeExportSaved = false;
-      state.sessionWorkers = {};
-      state.sessionManualPersonas = {};
-      state.readyFilesItems = [];
-    } catch {
-      /* ignore */
-    }
-  }
-
-  async function clearAppCache(button) {
+  /**
+   * Solo limpia lo que está en pantalla (inputs / borradores).
+   * No toca sesión, historial guardado, colas ni caché del navegador.
+   */
+  function clearFormInputsOnly(button) {
     confirmModal(
-      "Borrar todo",
-      "Se limpiará TODO en el celular: sesión, guías, conteo, historial, Drive pendiente y caché. Tendrá que escanear el carnet otra vez. ¿Continuar?",
+      "Limpiar formularios",
+      "Se borrarán solo los datos en pantalla (guías y conteo en curso). La sesión y el historial se mantienen.",
       () => {
-        void runFullAppWipe(button);
+        setBtnLoading(button, true, "Limpiando…");
+        try {
+          // Guías: una tarjeta vacía
+          state.guias = [emptyGuia()];
+          state.expandedGuiaId = state.guias[0]?.id || null;
+          saveStore();
+          if (typeof renderCards === "function") renderCards();
+
+          // Conteo: solo tipos que aún no están guardados/bloqueados hoy
+          if (!state.harvest.byType || typeof state.harvest.byType !== "object") {
+            state.harvest.byType = emptyHarvestByType();
+          }
+          HARVEST_TYPES.forEach((item) => {
+            if (isHarvestTypeLocked(item.key)) return;
+            state.harvest.byType[item.key] = emptyHarvestTypeDraft();
+            if (
+              state.previewDraftByType &&
+              typeof state.previewDraftByType === "object"
+            ) {
+              delete state.previewDraftByType[item.key];
+            }
+          });
+
+          if (
+            state.previewDraftSnapshot &&
+            !isHarvestTypeLocked(state.previewDraftSnapshot.tipo)
+          ) {
+            state.previewDraftSnapshot = null;
+          }
+          if (
+            state.activeExportSnapshot &&
+            !isSnapshotSaved(state.activeExportSnapshot)
+          ) {
+            state.activeExportSnapshot = null;
+            state.activeExportSaved = false;
+          }
+
+          attachCurrentHarvestDraft();
+          clearHarvestWorkerForm();
+          document.querySelectorAll("[data-harvest-field]").forEach((input) => {
+            input.value = "";
+          });
+          if (!isHarvestTypeLocked(state.harvest.tipo)) {
+            state.harvest.lote = "";
+            state.harvest.codLote = "";
+            state.harvest.modulo = "";
+            state.harvest.turno = "";
+            state.harvest.variedad = "";
+            state.harvest.workers = [];
+          }
+          saveHarvest();
+          renderHarvest();
+          renderHarvestDayChecklist();
+
+          toast("Inputs limpios · sesión e historial intactos");
+        } catch {
+          toast("No se pudo limpiar · intente de nuevo");
+        } finally {
+          setBtnLoading(button, false);
+        }
       },
-      "Borrar todo"
+      "Limpiar"
     );
   }
 
-  async function runFullAppWipe(button) {
-    setBtnLoading(button, true, "Borrando…");
-    try {
-      wipeAllAppLocalData();
-
-      if ("caches" in window) {
-        try {
-          const keys = await caches.keys();
-          await Promise.all(keys.map((key) => caches.delete(key)));
-          const leftover = await caches.keys();
-          await Promise.all(leftover.map((key) => caches.delete(key)));
-        } catch {
-          /* ignore */
-        }
-      }
-      if ("serviceWorker" in navigator && !isNativeApp()) {
-        try {
-          const regs = await navigator.serviceWorker.getRegistrations();
-          await Promise.all(regs.map((reg) => reg.unregister()));
-        } catch {
-          /* ignore */
-        }
-      }
-      if (typeof indexedDB !== "undefined" && indexedDB.databases) {
-        try {
-          const dbs = await indexedDB.databases();
-          await Promise.all(
-            (dbs || []).map(
-              (db) =>
-                new Promise((resolve) => {
-                  if (!db?.name) {
-                    resolve();
-                    return;
-                  }
-                  const req = indexedDB.deleteDatabase(db.name);
-                  req.onsuccess = () => resolve();
-                  req.onerror = () => resolve();
-                  req.onblocked = () => resolve();
-                })
-            )
-          );
-        } catch {
-          /* ignore */
-        }
-      }
-
-      toast("Todo limpio · recargando app…");
-      reloadWithBust();
-    } catch {
-      toast("No se pudo borrar por completo · intente de nuevo");
-      setBtnLoading(button, false);
-    }
+  async function clearAppCache(button) {
+    // Compat: el botón del perfil solo limpia inputs (no borra sesión/caché).
+    clearFormInputsOnly(button);
   }
 
   async function updateApp(button) {
@@ -6521,7 +6450,7 @@
               "Borre la caché de la app (service worker) y luego toque Actualizar app. Sus registros de cosecha, historial y sesión no se eliminan."
             }</p>
             <a class="app-tools-install" href="/instalar/">${ico("download")} Instalar en el celular</a>
-            <button type="button" class="app-tools-cache">${ico("trash")} Borrar todo</button>
+            <button type="button" class="app-tools-cache">${ico("trash")} Limpiar formularios</button>
             <button type="button" class="app-tools-update">${ico("refresh")} Actualizar app</button>
           </section>
         </div>`;
