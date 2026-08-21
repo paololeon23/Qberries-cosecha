@@ -47,14 +47,14 @@ https://script.google.com/macros/s/AKfycbxVryHDgOjOdiYRhFjBN1dxy6ozSzCwRMFKRW-6Q
 Debe devolver: `{"ok":true,"api":"guias",…}`  
 Si dice `UNAUTHORIZED` / `Falta configurar API_TOKEN`, el deploy en Google es viejo: pegue de nuevo `Code-guias.gs` y **Nueva versión → Implementar**.
 
-### Columnas DATA-GUIAS (1 fila por supervisor + día + fundo)
-| NOMBRE | DNI | FECHA | FUNDO | TOTAL JARRAS | TOTAL JABAS | TOTAL GUIAS | LOTES | N° GUIAS | HORA |
-|---|---|---|---|---|---|---|---|---|---|
-| … | … | … | Licapa / Licapa II | 156 | 13 | 2 | LT5-M1-T1 | 111111 | hora |
+### Columnas DATA-GUIAS (cada guardado = fila nueva)
+| NOMBRE | DNI | FECHA | FUNDO | GRUPO LIC | TOTAL JARRAS | TOTAL JABAS | TOTAL GUIAS | LOTES | N° GUIAS | HORA |
+|---|---|---|---|---|---|---|---|---|---|---|
+| … | … | … | Licapa / Licapa II | LIC 01 | 156 | 13 | 2 | LT5-M1-T1 | 111111 | hora |
 
 ### Anti-duplicado / offline
-- **Sheet:** 1 fila por `DNI + FECHA + FUNDO` (si vuelve a guardar, **actualiza**).
-- **App:** cola local; si no hay internet, no se pierde y se reenvía al reconectar.
+- **Sheet:** cada subida **agrega** una fila (12:00 y 18:00 = 2 filas). No pisa.
+- **App:** cola local; cada guardado tiene id único y se reenvía al reconectar.
 
 ## Endpoints supervisores (`Code.gs`)
 - `ping`

@@ -31,7 +31,7 @@
   const JARRAS_POR_JABA = 12;
   const FUNDO_DEFAULT = "Licapa";
   const FUNDO_OPTIONS = ["Licapa", "Licapa II"];
-  const APP_VERSION = "v365";
+  const APP_VERSION = "v368";
 
   function normalizeFundo(value) {
     const raw = String(value || "").trim();
@@ -1375,7 +1375,7 @@
     ready: false,
     ownerDni: "",
     fundo: FUNDO_DEFAULT,
-    /** LIC 01–50 o NO_TENGO_POR_AHORA */
+    /** LIC 01–55 o NO_TENGO_POR_AHORA */
     grupoLic: "",
     supervisorDni: "",
     supervisorNombre: "",
@@ -1944,7 +1944,7 @@
     return out;
   }
 
-  /** Guías: LIC 1–50 + No tengo por ahora (después de Fundo). */
+  /** Guías: LIC 1–55 + No tengo por ahora (después de Fundo). */
   function guidesLicList_() {
     const out = [
       {
@@ -1953,7 +1953,7 @@
         secondary: "LIC",
       },
     ];
-    for (let n = 1; n <= 50; n++) {
+    for (let n = 1; n <= 55; n++) {
       const num = String(n).padStart(2, "0");
       out.push({
         key: `LIC ${num}`,
@@ -1975,7 +1975,7 @@
   function normGuidesLic_(raw) {
     if (isGuidesLicNoTengo_(raw)) return "NO_TENGO_POR_AHORA";
     const gNum = String(raw || "").replace(/\D/g, "");
-    if (gNum && Number(gNum) >= 1 && Number(gNum) <= 50) {
+    if (gNum && Number(gNum) >= 1 && Number(gNum) <= 55) {
       return `LIC ${String(Number(gNum)).padStart(2, "0")}`;
     }
     return "";
@@ -2109,7 +2109,7 @@
           kind === "grupoLic"
             ? "Buscar Grupo LIC 01, 02…"
             : kind === "guidesLic"
-              ? "Buscar LIC 01…50 o No tengo"
+              ? "Buscar LIC 01…55 o No tengo"
               : kind === "grupoNum"
                 ? "Buscar Grupo 01, 02…"
                 : "Buscar lote...";
@@ -4814,7 +4814,7 @@
       return false;
     }
     if (!isValidGuidesLic_(state.session.grupoLic)) {
-      toast("Seleccione el LIC (01–50) o No tengo por ahora");
+      toast("Seleccione el LIC (01–55) o No tengo por ahora");
       openPicker("guidesLic");
       return false;
     }
@@ -4848,14 +4848,16 @@
     if (modal) modal.hidden = true;
   }
 
-  /** Id estable cola nube: 1 pendiente por supervisor + día + fundo. */
+  /** Id de cola: único por envío (no reemplaza un guardado anterior pendiente). */
   function guiasCloudQueueId(fecha, dni, fundo) {
     const day = String(fecha || todayISO()).trim();
     const dig = String(dni || "").replace(/\D/g, "") || "x";
     const f = normalizeFundo(fundo)
       .toLowerCase()
       .replace(/\s+/g, "-");
-    return `guias-${day}-${dig}-${f}`;
+    return `guias-${day}-${dig}-${f}-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
   }
 
   function buildGuiasSyncPayload() {
@@ -4941,10 +4943,14 @@
     };
   }
 
-  /** Encola (reemplaza mismo id) y no pierde el dato si no hay internet. */
+  /** Encola cada guardado por separado (no pisa otro pendiente). */
   function queueGuiasForCloud(payload) {
     if (!payload?.id) return false;
-    enqueueCloudData("registrarGuias", payload, payload.id);
+    enqueueCloudData(
+      "registrarGuias",
+      payload,
+      payload.sendId || payload.id
+    );
     return true;
   }
 

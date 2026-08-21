@@ -18,13 +18,15 @@
   *  POST { action: "registrarGuias", data: {...} }
   *  GET/POST action=ping
   *
-  * HOJA DATA-GUIAS (1 fila por supervisor/día/fundo):
-  * NOMBRE SUPERVISOR | DNI SUPERVISOR | FECHA | FUNDO | GRUPO LIC | TOTAL JARRAS | TOTAL JABAS | TOTAL GUIAS | LOTES | N° GUIAS | HORA SUBIDA
-  * - TOTAL JARRAS / TOTAL JABAS / TOTAL GUIAS: números separados (para sumar fácil)
-  * - LOTES y N° GUIAS: solo dato de respaldo
-  * - FUNDO: Licapa o Licapa II
-  * - GRUPO LIC: LIC 01–50 o NO TENGO POR AHORA
-  */
+ * HOJA DATA-GUIAS (cada guardado = UNA FILA NUEVA, se acumula):
+ * NOMBRE SUPERVISOR | DNI SUPERVISOR | FECHA | FUNDO | GRUPO LIC | TOTAL JARRAS | TOTAL JABAS | TOTAL GUIAS | LOTES | N° GUIAS | HORA SUBIDA
+ * - Cada subida agrega fila (12:00 y 18:00 = 2 filas). No pisa la anterior.
+ * - Anti-duplicado solo por sendId (reintento de red del mismo envío).
+ * - TOTAL JARRAS / TOTAL JABAS / TOTAL GUIAS: números separados (para sumar fácil)
+ * - LOTES y N° GUIAS: solo dato de respaldo
+ * - FUNDO: Licapa o Licapa II
+ * - GRUPO LIC: LIC 01–55 o NO TENGO POR AHORA
+ */
 
   var SHEET_NAME = 'DATA-GUIAS';
 
@@ -155,7 +157,7 @@
   }
 
   /**
-  * 1 fila por supervisor + día + fundo.
+  * Cada guardado = fila nueva en el Sheet (se acumula).
   * Totales numéricos separados; lotes y N° guías solo como dato.
   */
   function registrarGuias_(d) {
@@ -241,6 +243,10 @@
     if (lote && list.indexOf(lote) < 0) list.push(lote);
   }
 
+  /**
+  * Cada guardado agrega UNA fila nueva (se acumula).
+  * No pisa filas anteriores del mismo día.
+  */
   function saveGuiasSummary_(d, session, guias, totals, supervisorNombre, supervisorDni) {
     var jarras = 0;
     var jabas = 0;
@@ -263,13 +269,11 @@
     }
 
     // Totales: preferir lo calculado de las guías (evita contar tarjetas vacías).
-    // Solo usar totals del cliente si no hubo ítems útiles en el array.
     if (nGuias === 0) {
       if (Number(totals.jarras) > 0) jarras = number_(totals.jarras);
       if (Number(totals.jabas) > 0) jabas = number_(totals.jabas);
       if (Number(totals.guias) > 0) nGuias = number_(totals.guias);
     } else {
-      // Jarras/jabas del cliente suelen venir del KPI (ok); N° guías = ítems reales
       if (Number(totals.jarras) > 0) jarras = number_(totals.jarras);
       if (Number(totals.jabas) > 0) jabas = number_(totals.jabas);
     }
@@ -299,30 +303,9 @@
     ];
 
     var sh = sheet_();
-    // 1 fila por supervisor + día + fundo → actualiza si ya existe (no duplica)
-    var rowIndex = findGuiasRowByKey_(sh, supervisorDni, fecha, fundo);
-    if (rowIndex > 0) {
-      var prev = sh.getRange(rowIndex, 1, 1, HEADERS.length).getDisplayValues()[0];
-      var same = true;
-      for (var c = 0; c < HEADERS.length - 1; c++) {
-        if (clean_(prev[c]) !== clean_(row[c])) {
-          same = false;
-          break;
-        }
-      }
-      if (same) {
-        sh.getRange(rowIndex, HEADERS.length).setValue(row[HEADERS.length - 1]);
-        return { created: false, updated: false, duplicate: true };
-      }
-      sh.getRange(rowIndex, 1, 1, HEADERS.length).setValues([row]);
-      // DNI siempre como texto (evita que 00000001 se vea como 1)
-      sh.getRange(rowIndex, 2).setNumberFormat('@').setValue(supervisorDni);
-      return { created: false, updated: true, duplicate: false };
-    }
-
     var newRow = sh.getLastRow() + 1;
     sh.getRange(newRow, 1, 1, HEADERS.length).setValues([row]);
-    sh.getRange(newRow, 2).setNumberFormat('@').setValue(supervisorDni);
+    sh.getRange(newRow, 2).setNumberFormat('@').setValue(String(supervisorDni));
     return { created: true, updated: false, duplicate: false };
   }
 
@@ -333,7 +316,7 @@
     if (/NO\s*TENGO/.test(up)) return 'NO TENGO POR AHORA';
     var digits = up.replace(/\D/g, '');
     var n = Number(digits);
-    if (n >= 1 && n <= 50) {
+    if (n >= 1 && n <= 55) {
       var num = n < 10 ? '0' + n : String(n);
       return 'LIC ' + num;
     }
@@ -346,23 +329,6 @@
     var up = raw.toUpperCase().replace(/\s+/g, ' ');
     if (up === 'LICAPA II' || up === 'LICAPA 2' || up === 'LICAPAII') return 'Licapa II';
     return 'Licapa';
-  }
-
-  /** Clave anti-duplicado: DNI SUPERVISOR + FECHA + FUNDO */
-  function findGuiasRowByKey_(sh, dni, fecha, fundo) {
-    if (!sh || sh.getLastRow() < 2) return 0;
-    var keyDni = digits_(dni);
-    var keyFecha = clean_(fecha);
-    var keyFundo = normalizeFundo_(fundo);
-    if (!keyDni || !keyFecha) return 0;
-    var values = sh.getRange(2, 1, sh.getLastRow(), 4).getDisplayValues();
-    for (var i = 0; i < values.length; i++) {
-      var rowDni = digits_(values[i][1]);
-      var rowFecha = clean_(values[i][2]);
-      var rowFundo = normalizeFundo_(values[i][3]);
-      if (rowDni === keyDni && rowFecha === keyFecha && rowFundo === keyFundo) return i + 2;
-    }
-    return 0;
   }
 
   function sheet_() {
