@@ -24,8 +24,8 @@
  * - Anti-duplicado solo por sendId (reintento de red del mismo envío).
  * - TOTAL JARRAS / TOTAL JABAS / TOTAL GUIAS: números separados (para sumar fácil)
  * - LOTES y N° GUIAS: solo dato de respaldo
- * - FUNDO: Licapa o Licapa II
- * - GRUPO LIC: LIC 01–55 o NO TENGO POR AHORA
+ * - FUNDO: Licapa, Licapa II o Licapa III
+ * - GRUPO LIC: LIC 01–70 o NO TENGO POR AHORA
  */
 
   var SHEET_NAME = 'DATA-GUIAS';
@@ -316,7 +316,7 @@
     if (/NO\s*TENGO/.test(up)) return 'NO TENGO POR AHORA';
     var digits = up.replace(/\D/g, '');
     var n = Number(digits);
-    if (n >= 1 && n <= 55) {
+    if (n >= 1 && n <= 70) {
       var num = n < 10 ? '0' + n : String(n);
       return 'LIC ' + num;
     }
@@ -327,6 +327,7 @@
     var raw = clean_(value);
     if (!raw) return 'Licapa';
     var up = raw.toUpperCase().replace(/\s+/g, ' ');
+    if (up === 'LICAPA III' || up === 'LICAPA 3' || up === 'LICAPAIII') return 'Licapa III';
     if (up === 'LICAPA II' || up === 'LICAPA 2' || up === 'LICAPAII') return 'Licapa II';
     return 'Licapa';
   }

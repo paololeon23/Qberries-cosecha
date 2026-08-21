@@ -30,8 +30,8 @@
   const HISTORY_PAGE_SIZE = 8;
   const JARRAS_POR_JABA = 12;
   const FUNDO_DEFAULT = "Licapa";
-  const FUNDO_OPTIONS = ["Licapa", "Licapa II"];
-  const APP_VERSION = "v368";
+  const FUNDO_OPTIONS = ["Licapa", "Licapa II", "Licapa III"];
+  const APP_VERSION = "v370";
 
   function normalizeFundo(value) {
     const raw = String(value || "").trim();
@@ -1375,7 +1375,7 @@
     ready: false,
     ownerDni: "",
     fundo: FUNDO_DEFAULT,
-    /** LIC 01–55 o NO_TENGO_POR_AHORA */
+    /** LIC 01–70 o NO_TENGO_POR_AHORA */
     grupoLic: "",
     supervisorDni: "",
     supervisorNombre: "",
@@ -1944,7 +1944,7 @@
     return out;
   }
 
-  /** Guías: LIC 1–55 + No tengo por ahora (después de Fundo). */
+  /** Guías: LIC 1–70 + No tengo por ahora (después de Fundo). */
   function guidesLicList_() {
     const out = [
       {
@@ -1953,7 +1953,7 @@
         secondary: "LIC",
       },
     ];
-    for (let n = 1; n <= 55; n++) {
+    for (let n = 1; n <= 70; n++) {
       const num = String(n).padStart(2, "0");
       out.push({
         key: `LIC ${num}`,
@@ -1975,7 +1975,7 @@
   function normGuidesLic_(raw) {
     if (isGuidesLicNoTengo_(raw)) return "NO_TENGO_POR_AHORA";
     const gNum = String(raw || "").replace(/\D/g, "");
-    if (gNum && Number(gNum) >= 1 && Number(gNum) <= 55) {
+    if (gNum && Number(gNum) >= 1 && Number(gNum) <= 70) {
       return `LIC ${String(Number(gNum)).padStart(2, "0")}`;
     }
     return "";
@@ -2109,7 +2109,7 @@
           kind === "grupoLic"
             ? "Buscar Grupo LIC 01, 02…"
             : kind === "guidesLic"
-              ? "Buscar LIC 01…55 o No tengo"
+              ? "Buscar LIC 01…70 o No tengo"
               : kind === "grupoNum"
                 ? "Buscar Grupo 01, 02…"
                 : "Buscar lote...";
@@ -4814,7 +4814,7 @@
       return false;
     }
     if (!isValidGuidesLic_(state.session.grupoLic)) {
-      toast("Seleccione el LIC (01–55) o No tengo por ahora");
+      toast("Seleccione el LIC (01–70) o No tengo por ahora");
       openPicker("guidesLic");
       return false;
     }

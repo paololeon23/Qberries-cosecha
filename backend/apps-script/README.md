@@ -50,7 +50,7 @@ Si dice `UNAUTHORIZED` / `Falta configurar API_TOKEN`, el deploy en Google es vi
 ### Columnas DATA-GUIAS (cada guardado = fila nueva)
 | NOMBRE | DNI | FECHA | FUNDO | GRUPO LIC | TOTAL JARRAS | TOTAL JABAS | TOTAL GUIAS | LOTES | N° GUIAS | HORA |
 |---|---|---|---|---|---|---|---|---|---|---|
-| … | … | … | Licapa / Licapa II | LIC 01 | 156 | 13 | 2 | LT5-M1-T1 | 111111 | hora |
+| … | … | … | Licapa / II / III | LIC 01 | 156 | 13 | 2 | LT5-M1-T1 | 111111 | hora |
 
 ### Anti-duplicado / offline
 - **Sheet:** cada subida **agrega** una fila (12:00 y 18:00 = 2 filas). No pisa.
