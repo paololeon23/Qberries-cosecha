@@ -5845,6 +5845,7 @@ html.is-android body.kb-open .export-preview {
   background: rgba(10, 28, 16, 0.58);
   backdrop-filter: blur(6px);
   box-sizing: border-box;
+  overflow: hidden;
 }
 .guides-summary-backdrop[hidden] {
   display: none !important;
@@ -5854,6 +5855,8 @@ html.is-android body.kb-open .export-preview {
   flex-direction: column;
   width: min(100%, 420px);
   max-width: 100%;
+  /* Altura fija (no solo max): el cuerpo puede hacer scroll en iOS/Android */
+  height: min(92dvh, 100%);
   max-height: min(92dvh, 100%);
   min-height: 0;
   overflow: hidden;
@@ -5911,6 +5914,7 @@ html.is-android body.kb-open .export-preview {
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
+  touch-action: pan-y;
 }
 .guides-summary-actions {
   display: grid;
@@ -5921,6 +5925,8 @@ html.is-android body.kb-open .export-preview {
   position: relative;
   z-index: 2;
   isolation: isolate;
+  background: #fff;
+  padding-top: 2px;
 }
 .guides-summary-cancel,
 .guides-summary-save {
@@ -5959,7 +5965,7 @@ html.is-android body.kb-open .export-preview {
   background: #fffef8;
   border: 2px solid var(--qb-green);
   border-radius: 18px;
-  overflow: hidden;
+  overflow: visible;
   box-shadow: 0 6px 20px rgba(27, 107, 58, 0.1);
 }
 .gs-paper-head {
@@ -6572,6 +6578,7 @@ html.is-android body.kb-open .export-preview {
   .guides-summary-dialog {
     width: min(100% - 32px, 720px);
     max-width: calc(100% - 32px);
+    height: min(90dvh, 860px);
     max-height: min(90dvh, 860px);
     margin: 0 auto;
     border-radius: 22px;
