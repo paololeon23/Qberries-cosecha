@@ -31,7 +31,7 @@
   const JARRAS_POR_JABA = 12;
   const FUNDO_DEFAULT = "Licapa";
   const FUNDO_OPTIONS = ["Licapa", "Licapa II", "Licapa III"];
-  const APP_VERSION = "v369";
+  const APP_VERSION = "v371";
 
   function normalizeFundo(value) {
     const raw = String(value || "").trim();
@@ -4814,7 +4814,7 @@
       return false;
     }
     if (!isValidGuidesLic_(state.session.grupoLic)) {
-      toast("Seleccione el LIC (01–55) o No tengo por ahora");
+      toast("Seleccione el LIC (01–70) o No tengo por ahora");
       openPicker("guidesLic");
       return false;
     }
