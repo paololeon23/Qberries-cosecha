@@ -61,7 +61,7 @@ html.is-android .home-scroll,
 html.is-android .harvest-scroll,
 html.is-android .guides-scroll,
 html.is-android .vinculo-scroll {
-  padding-bottom: calc(12px + var(--nav-bar-total));
+  padding-bottom: calc(var(--nav-bar-total) - 21px);
   overscroll-behavior: none;
 }
 
@@ -2084,7 +2084,7 @@ body[data-page="scan"] .lock-screen {
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: none;
-  padding: 14px 12px calc(12px + var(--nav-bar-total));
+  padding: 14px 12px calc(var(--nav-bar-total) - 21px);
   -webkit-overflow-scrolling: touch;
 }
 .harvest-field-card,
@@ -4634,7 +4634,7 @@ html.is-android .home-hero {
   flex: 1 1 auto;
   overflow-x: hidden;
   overflow-y: auto;
-  padding: 12px 14px calc(12px + var(--nav-bar-total));
+  padding: 12px 14px calc(var(--nav-bar-total) - 21px);
   overscroll-behavior: none;
   -webkit-overflow-scrolling: touch;
 }
@@ -5302,13 +5302,13 @@ html.is-android body.kb-open .export-preview {
 @media (max-width: 899px) {
   :root { --u: clamp(0.85px, calc(100vw / 390), 1.12px); }
   .harvest-scroll {
-    padding: calc(11 * var(--u)) calc(11 * var(--u)) calc(12px + var(--nav-bar-total));
+    padding: calc(11 * var(--u)) calc(11 * var(--u)) calc(var(--nav-bar-total) - 21px);
   }
   .harvest-field-card,
   .harvest-add-card,
   .harvest-register-card { padding: calc(13 * var(--u)) calc(12 * var(--u)); }
   .home-scroll {
-    padding: 0 calc(13 * var(--u)) calc(12px + var(--nav-bar-total));
+    padding: 0 calc(13 * var(--u)) calc(var(--nav-bar-total) - 21px);
   }
   .home-hero {
     padding: calc(18 * var(--u) + var(--safe-t)) calc(15 * var(--u)) calc(32 * var(--u));
@@ -5324,7 +5324,7 @@ html.is-android body.kb-open .export-preview {
     padding: calc(13 * var(--u)) calc(12 * var(--u)) calc(15px + var(--safe-b));
   }
   .vinculo-scroll {
-    padding: calc(11 * var(--u)) calc(12 * var(--u)) calc(12px + var(--nav-bar-total));
+    padding: calc(11 * var(--u)) calc(12 * var(--u)) calc(var(--nav-bar-total) - 21px);
   }
   .home-action-grid { gap: calc(9 * var(--u)); margin-top: calc(16 * var(--u)); }
   .home-action-icon {
@@ -5489,7 +5489,7 @@ html.is-android body.kb-open .export-preview {
   overscroll-behavior: none;
   -webkit-overflow-scrolling: touch;
   touch-action: pan-y;
-  padding: 14px 12px calc(12px + var(--nav-bar-total));
+  padding: 14px 12px calc(var(--nav-bar-total) - 21px);
 }
 
 /* Guías · paleta Q Berries = Conteo */
@@ -6510,7 +6510,7 @@ html.is-android body.kb-open .export-preview {
 .harvest-scroll,
 .guides-scroll,
 .vinculo-scroll {
-  padding-bottom: calc(12px + var(--nav-bar-total));
+  padding-bottom: calc(var(--nav-bar-total) - 21px);
   overscroll-behavior: none;
 }
 
@@ -6654,7 +6654,7 @@ html.is-android body.kb-open .export-preview {
     width: 100%;
     max-width: none;
     margin: 0;
-    padding: 10px 16px calc(12px + var(--nav-bar-total));
+    padding: 10px 16px calc(var(--nav-bar-total) - 21px);
     overflow-y: auto;
     overscroll-behavior: contain;
   }
@@ -6751,7 +6751,7 @@ html.is-android body.kb-open .export-preview {
     width: 100%;
     max-width: none;
     margin: 0;
-    padding: 10px 16px calc(12px + var(--nav-bar-total));
+    padding: 10px 16px calc(var(--nav-bar-total) - 21px);
   }
   .guides-meta-card {
     padding: 20px 18px 18px;
