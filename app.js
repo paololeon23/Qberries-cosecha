@@ -29,17 +29,88 @@
   const HISTORY_TTL_MS = 48 * 60 * 60 * 1000;
   const HISTORY_PAGE_SIZE = 8;
   const JARRAS_POR_JABA = 12;
-  const FUNDO_DEFAULT = "Licapa";
-  const FUNDO_OPTIONS = ["Licapa", "Licapa II", "Licapa III"];
-  const APP_VERSION = "v379";
+  const FUNDO_DEFAULT = "Licapa I";
+  const FUNDO_OPTIONS = ["Licapa I", "Licapa II", "Licapa III"];
+  const APP_VERSION = "v396";
 
   function normalizeFundo(value) {
     const raw = String(value || "").trim();
-    if (!raw) return FUNDO_DEFAULT;
+    if (!raw) return "";
+    const up = raw.toUpperCase().replace(/\s+/g, " ");
+    if (up === "LICAPA III" || up === "LICAPA 3" || up === "LICAPAIII") {
+      return "Licapa III";
+    }
+    if (up === "LICAPA II" || up === "LICAPA 2" || up === "LICAPAII") {
+      return "Licapa II";
+    }
+    if (
+      up === "LICAPA I" ||
+      up === "LICAPA 1" ||
+      up === "LICAPAI" ||
+      up === "LICAPA"
+    ) {
+      return "Licapa I";
+    }
     const hit = FUNDO_OPTIONS.find(
       (f) => f.toLowerCase() === raw.toLowerCase()
     );
-    return hit || FUNDO_DEFAULT;
+    return hit || "";
+  }
+
+  /** Compacto en la tarjeta: I / II / III */
+  function displayFundoCompact(value) {
+    const n = normalizeFundo(value);
+    if (n === "Licapa III") return "III";
+    if (n === "Licapa II") return "II";
+    if (n === "Licapa I") return "I";
+    return "";
+  }
+
+  /** Fundos únicos en orden I → II → III */
+  function guidesFundosList(list) {
+    const order = FUNDO_OPTIONS;
+    const out = [];
+    (list || []).forEach((g) => {
+      const f = normalizeFundo(g?.fundo);
+      if (f && !out.includes(f)) out.push(f);
+    });
+    out.sort((a, b) => order.indexOf(a) - order.indexOf(b));
+    return out;
+  }
+
+  /** Para Sheet / payload: "Licapa I, Licapa II" */
+  function guidesFundosSummary(list) {
+    return guidesFundosList(list).join(", ");
+  }
+
+  /** Para UI resumen: "Licapa I" | "Licapa I - II" | "Licapa I - II - III" */
+  function displayFundosSummary(list) {
+    const fundos = guidesFundosList(list);
+    if (!fundos.length) return "";
+    if (fundos.length === 1) return fundos[0];
+    return (
+      fundos[0] +
+      fundos
+        .slice(1)
+        .map((f) => ` - ${displayFundoCompact(f)}`)
+        .join("")
+    );
+  }
+
+  /** Para Sheet: "Licapa I" | "Licapa I - Licapa II" | … */
+  function displayFundosSheet(list) {
+    const fundos = guidesFundosList(list);
+    return fundos.length ? fundos.join(" - ") : "";
+  }
+
+  /** Cuenta N° de guía únicos (igual que CANTIDAD GUIAS en el Sheet). */
+  function countGuiasNumeros(list) {
+    const out = [];
+    (list || []).forEach((g) => {
+      const n = normalizeNumeroGuia(g?.numeroGuia);
+      if (n && !out.includes(n)) out.push(n);
+    });
+    return out.length;
   }
   const HARVEST_TYPES = [
     { key: "suma-jarras", label: "Suma de jarras", short: "Suma", observacion: "SUMAR JARRAS" },
@@ -1330,6 +1401,7 @@
   const emptyGuia = () => ({
     id: uid(),
     numeroGuia: "",
+    fundo: "",
     lote: "",
     codLote: "",
     modulo: "",
@@ -1346,6 +1418,7 @@
       ...emptyGuia(),
       id: id || ln?.id || uid(),
       numeroGuia: normalizeNumeroGuia(ln?.numeroGuia || g.numeroGuia || ""),
+      fundo: normalizeFundo(ln?.fundo || g.fundo || ""),
       lote: ln?.lote || "",
       codLote: ln?.codLote || "",
       modulo: ln?.modulo || "",
@@ -1365,6 +1438,7 @@
       g.jabas ||
       g.modulo ||
       g.variedad ||
+      g.fundo ||
       g.horaRecojo
     ) {
       return [fromLinea(g, g.id)];
@@ -1377,6 +1451,8 @@
     fundo: FUNDO_DEFAULT,
     /** LIC 01–70 o NO_TENGO_POR_AHORA */
     grupoLic: "",
+    /** Ajuste manual (aumento o descuento). 0 = no aplica */
+    ajusteJarras: 0,
     supervisorDni: "",
     supervisorNombre: "",
     javeroDni: "",
@@ -1493,7 +1569,17 @@
       }
       const parsed = JSON.parse(raw);
       state.session = { ...emptySession(), ...(parsed.session || {}) };
-      state.session.fundo = normalizeFundo(state.session.fundo);
+      state.session.fundo =
+        normalizeFundo(state.session.fundo) || FUNDO_DEFAULT;
+      // Migrar descuento/aumento → ajusteJarras
+      if (!(num(state.session.ajusteJarras) > 0)) {
+        const prev =
+          num(state.session.aumentoJarras) ||
+          num(state.session.descuentoJarras) ||
+          0;
+        if (prev > 0) state.session.ajusteJarras = prev;
+      }
+      state.session.ajusteJarras = num(state.session.ajusteJarras) || 0;
       state.guias = Array.isArray(parsed.guias) ? parsed.guias : [];
     } catch {
       state.session = emptySession();
@@ -2082,8 +2168,7 @@
       kind === "grupoNum" ||
       kind === "guidesLic" ||
       kind === "harvestLote" ||
-      kind === "harvestType" ||
-      kind === "fundo"
+      kind === "harvestType"
     ) {
       state.picker = { kind, guiaId: "" };
       const title = $("#pickerTitle");
@@ -2100,9 +2185,7 @@
                 ? "Buscar Grupo"
                 : kind === "harvestType"
                   ? "Tipo de registro"
-                  : kind === "fundo"
-                    ? "Seleccionar fundo"
-                    : "Buscar lote";
+                  : "Buscar lote";
       }
       if (query) {
         query.placeholder =
@@ -2116,7 +2199,7 @@
         query.value = "";
       }
       if (search) {
-        search.hidden = kind === "harvestType" || kind === "fundo";
+        search.hidden = kind === "harvestType";
       }
       if (addBtn) addBtn.hidden = true;
       renderPickerList();
@@ -2125,7 +2208,7 @@
         backdrop.hidden = false;
         hydrateIcons(backdrop);
       }
-      if (kind !== "harvestType" && kind !== "fundo") {
+      if (kind !== "harvestType") {
         setTimeout(() => query?.focus(), 60);
       }
       return;
@@ -2139,7 +2222,12 @@
     const search = query?.closest(".picker-search");
     const addBtn = $("#pickerAdd");
     if (title) {
-      title.textContent = kind === "lote" ? "Buscar por lote" : "Buscar por grupo";
+      title.textContent =
+        kind === "fundo"
+          ? "Seleccionar fundo"
+          : kind === "lote"
+            ? "Buscar por lote"
+            : "Buscar por grupo";
     }
     if (query) {
       query.placeholder =
@@ -2148,9 +2236,9 @@
           : "Buscar grupo...";
       query.value = "";
     }
-    if (search) search.hidden = false;
+    if (search) search.hidden = kind === "fundo";
     if (addBtn) {
-      addBtn.hidden = false;
+      addBtn.hidden = kind === "fundo";
       addBtn.textContent = "Agregar uno";
     }
     renderPickerList();
@@ -2159,7 +2247,9 @@
       backdrop.hidden = false;
       hydrateIcons(backdrop);
     }
-    setTimeout(() => query?.focus(), 60);
+    if (kind !== "fundo") {
+      setTimeout(() => query?.focus(), 60);
+    }
   }
 
   function pickerItems() {
@@ -2269,8 +2359,6 @@
       selected = currentGuidesLic() || "";
     } else if (state.picker?.kind === "grupoNum") {
       selected = $("#vinGrupo")?.value || "";
-    } else if (state.picker?.kind === "fundo") {
-      selected = currentFundo();
     } else if (state.picker?.kind === "harvestLote") {
       selected = state.harvest.lote || "";
     } else if (state.picker?.kind === "harvestType") {
@@ -2279,6 +2367,8 @@
       const guia = findGuia(state.picker.guiaId);
       if (state.picker.kind === "lote") {
         selected = guia?.lote || "";
+      } else if (state.picker.kind === "fundo") {
+        selected = normalizeFundo(guia?.fundo || "");
       } else {
         selected = guia?.grupo || "";
       }
@@ -2356,18 +2446,23 @@
       toast(harvestTypeLabel(v));
       return;
     }
-    if (ctx.kind === "fundo") {
-      setGuidesFundo(v);
-      closePicker();
-      if ($("#guidesSummaryModal") && !$("#guidesSummaryModal").hidden) {
-        renderGuidesSummaryCard();
-      }
-      toast(`Fundo ${v}`);
-      return;
-    }
 
     const guia = findGuia(ctx.guiaId);
     if (!guia) return;
+
+    if (ctx.kind === "fundo") {
+      const fundo = normalizeFundo(v);
+      if (!FUNDO_OPTIONS.includes(fundo)) return;
+      guia.fundo = fundo;
+      saveStore();
+      closePicker();
+      renderCards();
+      if ($("#guidesSummaryModal") && !$("#guidesSummaryModal").hidden) {
+        renderGuidesSummaryCard();
+      }
+      toast(`Fundo ${fundo}`);
+      return;
+    }
 
     if (ctx.kind === "grupo") {
       guia.grupo = v;
@@ -4535,6 +4630,7 @@
       if (ng) guia.numeroGuia = normalizeNumeroGuia(ng.value);
       const hr = article.querySelector('[data-field="horaRecojo"]');
       if (hr) guia.horaRecojo = String(hr.value || "").trim();
+      // Fundo por guía (botón data-pick=fundo)
       const ja = article.querySelector('[data-field="jarras"]');
       const jb = article.querySelector('[data-field="jabas"]');
       if (ja) guia.jarras = num(ja.value);
@@ -4684,14 +4780,15 @@
   }
 
   function currentFundo() {
-    return normalizeFundo(state.session.fundo || FUNDO_DEFAULT);
+    // Compat: si alguna guía ya tiene fundo, o el default
+    const fromGuias = guidesFundosSummary(state.guias);
+    if (fromGuias && !fromGuias.includes(",")) return fromGuias;
+    return normalizeFundo(state.session.fundo) || FUNDO_DEFAULT;
   }
 
   function setGuidesFundo(value) {
-    state.session.fundo = normalizeFundo(value);
+    state.session.fundo = normalizeFundo(value) || FUNDO_DEFAULT;
     saveStore();
-    const label = $("#guidesFundoLabel");
-    if (label) label.textContent = state.session.fundo;
   }
 
   function currentGuidesLic() {
@@ -4717,13 +4814,75 @@
     }
   }
 
+  function currentGuidesAjuste() {
+    const n = num(
+      state.session.ajusteJarras ??
+        state.session.aumentoJarras ??
+        state.session.descuentoJarras
+    );
+    return n > 0 ? n : 0;
+  }
+
+  function setGuidesAjuste(raw) {
+    const digits = String(raw ?? "")
+      .replace(/\D/g, "")
+      .replace(/^0+(?=\d)/, "");
+    const n = digits === "" ? 0 : num(digits);
+    state.session.ajusteJarras = n > 0 ? n : 0;
+    state.session.aumentoJarras = 0;
+    state.session.descuentoJarras = 0;
+    saveStore();
+    syncGuidesAjusteInput();
+  }
+
+  function syncGuidesAjusteInput() {
+    const input = $("#guidesAjusteInput");
+    if (!input) return;
+    const n = currentGuidesAjuste();
+    const focused = document.activeElement === input;
+    if (focused) return;
+    input.value = n > 0 ? String(n) : "";
+  }
+
+  function explainGuidesAjuste() {
+    const html = `
+      <div class="qb-swal-info">
+        <p>Cuando haces un registro <strong>manual</strong> y la <strong>app</strong> no cuadra con las guías, anota aquí <strong>solo la cantidad</strong> (el total de la diferencia).</p>
+        <ul class="qb-swal-info-list">
+          <li><strong>Aumento</strong> — app 1350 · guías 1400 → <strong>50</strong></li>
+          <li><strong>Descuento</strong> — guías 1500 · app 1550 → <strong>50</strong></li>
+        </ul>
+        <p>También va para quienes <strong>no tienen celular corporativo</strong>, o cuando <strong>no puedes usar el escáner</strong> y trabajas manual: usa este campo.</p>
+        <p>Ese número sirve para mapear el listado o archivo de personas.</p>
+        <p class="qb-swal-info-note">Si no hiciste nada manual, no escribas nada. Déjalo en 00.</p>
+      </div>`;
+    if (swalReady()) {
+      window.Swal.fire({
+        icon: "info",
+        title: "Registro manual",
+        html,
+        showConfirmButton: true,
+        confirmButtonText: "Entendido",
+        buttonsStyling: false,
+        customClass: {
+          popup: "qb-swal qb-swal--info",
+          title: "qb-swal-title",
+          htmlContainer: "qb-swal-info-wrap",
+          actions: "qb-swal-actions",
+          confirmButton: "qb-swal-btn qb-swal-btn--ok",
+          icon: "qb-swal-icon",
+        },
+      });
+      return;
+    }
+    toast("R. Manual: cantidad si la app y las guías no cuadran. Si no hay, deja 00.");
+  }
+
   function renderGuidesMeta() {
     const s = state.session;
     const fechaTxt = (s.fecha || todayISO()).split("-").reverse().join("/");
-    const fundo = currentFundo();
-    const label = $("#guidesFundoLabel");
-    if (label) label.textContent = fundo;
     renderGuidesLicLabel();
+    syncGuidesAjusteInput();
     if ($("#guidesFecha")) $("#guidesFecha").textContent = fechaTxt;
     if ($("#guidesSupervisor")) {
       const nom = s.supervisorNombre || "Supervisor";
@@ -4800,19 +4959,9 @@
 
   /**
    * Obliga a elegir los SELECT antes de resumen/guardar guías:
-   * Fundo, LIC y lote en cada guía con datos.
+   * LIC global + fundo y lote en cada guía con datos.
    */
   function validateGuidesSelectsBeforeSave() {
-    if (!String(state.session.fundo || "").trim()) {
-      toast("Seleccione el fundo");
-      openPicker("fundo");
-      return false;
-    }
-    if (!FUNDO_OPTIONS.includes(normalizeFundo(state.session.fundo))) {
-      toast("Seleccione el fundo");
-      openPicker("fundo");
-      return false;
-    }
     if (!isValidGuidesLic_(state.session.grupoLic)) {
       toast("Seleccione el LIC (01–70) o No tengo por ahora");
       openPicker("guidesLic");
@@ -4824,10 +4973,18 @@
     for (const g of guias) {
       const numG = normalizeNumeroGuia(g.numeroGuia);
       const lote = String(g.lote || "").trim();
+      const fundo = normalizeFundo(g.fundo);
       const hasQty = num(g.jarras) > 0 || num(g.jabas) > 0;
-      const hasAny = !!(numG || lote || hasQty || String(g.horaRecojo || "").trim());
+      const hasAny = !!(numG || lote || hasQty || fundo);
       if (!hasAny) continue;
       withData += 1;
+      if (!fundo || !FUNDO_OPTIONS.includes(fundo)) {
+        toast("Seleccione el fundo de cada guía (I, II o III)");
+        state.expandedGuiaId = g.id;
+        renderCards();
+        openPicker("fundo", g.id);
+        return false;
+      }
       if (!lote) {
         toast("Seleccione el lote de cada guía");
         state.expandedGuiaId = g.id;
@@ -4878,20 +5035,20 @@
       .toUpperCase();
     if (supervisorDni) state.session.supervisorDni = supervisorDni;
     if (supervisorNombre) state.session.supervisorNombre = supervisorNombre;
-    const fundo = currentFundo();
     const grupoLic = currentGuidesLic();
     // Solo guías con dato real (no tarjetas vacías)
     const guias = (state.guias || [])
       .map((g) => ({
         id: g.id,
         numeroGuia: g.numeroGuia,
+        fundo: normalizeFundo(g.fundo),
         lote: g.lote,
         modulo: g.modulo,
         turno: g.turno,
         variedad: g.variedad,
         jarras: num(g.jarras),
         jabas: num(g.jabas),
-        horaRecojo: g.horaRecojo,
+        horaRecojo: g.horaRecojo || "",
       }))
       .filter(
         (g) =>
@@ -4900,26 +5057,38 @@
           g.jarras > 0 ||
           g.jabas > 0
       );
+    const fundo =
+      displayFundosSheet(guias) ||
+      normalizeFundo(state.session.fundo) ||
+      FUNDO_DEFAULT;
+    state.session.fundo =
+      guidesFundosList(guias).length === 1
+        ? normalizeFundo(fundo) || FUNDO_DEFAULT
+        : FUNDO_DEFAULT;
+    const cantidadGuias = countGuiasNumeros(guias);
     const t0 = guias.reduce(
       (acc, g) => {
-        acc.guias += 1;
         acc.jarras += num(g.jarras);
         acc.jabas += num(g.jabas);
         return acc;
       },
-      { guias: 0, jarras: 0, jabas: 0 }
+      { jarras: 0, jabas: 0 }
     );
+    t0.guias = cantidadGuias > 0 ? cantidadGuias : guias.length;
+    t0.cantidadGuias = t0.guias;
+    const ajusteJarras = currentGuidesAjuste();
     const id = guiasCloudQueueId(fecha, supervisorDni, fundo);
     const savedAt = new Date().toISOString();
     return {
       id,
       /** Identifica este envío (anti doble-POST); distinto si vuelve a guardar */
-      sendId: `${id}|${savedAt}|${t0.jarras}|${t0.jabas}|${t0.guias}`,
+      sendId: `${id}|${savedAt}|${t0.jarras}|${t0.jabas}|${t0.guias}|${ajusteJarras}`,
       savedAt,
       horaGuardado: savedAt,
       fecha,
       fundo,
       grupoLic,
+      ajusteJarras,
       securityCode: supervisorDni,
       supervisorDni,
       supervisorNombre,
@@ -4931,14 +5100,17 @@
         fecha,
         fundo,
         grupoLic,
+        ajusteJarras,
         supervisorDni,
         supervisorNombre,
       },
       guias,
       totals: {
         guias: t0.guias,
+        cantidadGuias: t0.cantidadGuias,
         jarras: t0.jarras,
         jabas: t0.jabas,
+        ajusteJarras,
       },
     };
   }
@@ -5025,7 +5197,11 @@
     state.expandedGuiaId = state.guias[0].id;
     // Pedir LIC de nuevo en el próximo registro
     state.session.grupoLic = "";
+    state.session.ajusteJarras = 0;
+    state.session.aumentoJarras = 0;
+    state.session.descuentoJarras = 0;
     renderGuidesLicLabel();
+    syncGuidesAjusteInput();
     saveStore();
 
     closeGuidesSummary();
@@ -5077,37 +5253,47 @@
         num(g.jarras) ||
         num(g.jabas)
     );
+    const fundosTxt = displayFundosSummary(rows) || "—";
     const tableRows = rows.length
       ? rows
           .map((g, idx) => {
             const numTxt = formatNumeroGuiaInput(g.numeroGuia) || "—";
             const loteTxt = formatGuiaLoteSummary(g);
+            const fundoTxt = displayFundoCompact(g.fundo) || "—";
             return `
             <tr>
               <td class="gs-td-idx">${idx + 1}</td>
               <td class="gs-td-num">${escapeHtml(numTxt)}</td>
+              <td class="gs-td-fundo">${escapeHtml(fundoTxt)}</td>
               <td class="gs-td-lote"><strong>${escapeHtml(loteTxt)}</strong></td>
               <td class="gs-td-qty">${fmt(num(g.jarras))}</td>
               <td class="gs-td-qty">${fmt(num(g.jabas))}</td>
             </tr>`;
           })
           .join("")
-      : `<tr><td class="gs-empty" colspan="5">Sin guías registradas</td></tr>`;
+      : `<tr><td class="gs-empty" colspan="6">Sin guías registradas</td></tr>`;
     card.innerHTML = `
       <div class="gs-paper">
         <div class="gs-paper-head">
           <img src="/assets/logo-qberries.png" alt="" />
           <div>
             <small>REGISTRO DE GUÍA INTERNA DE COSECHA</small>
-            <h3>Q Berries · ${escapeHtml(currentFundo())}</h3>
+            <h3>Q Berries · ${escapeHtml(fundosTxt)}</h3>
           </div>
         </div>
         <div class="gs-paper-meta">
           <div class="gs-meta-fecha"><small>FECHA</small><strong>${fechaTxt}</strong></div>
-          <div class="gs-meta-fundo"><small>FUNDO</small><strong>${escapeHtml(currentFundo())}</strong></div>
+          <div class="gs-meta-fundo"><small>FUNDO</small><strong>${escapeHtml(fundosTxt)}</strong></div>
           <div class="gs-meta-lic"><small>LIC</small><strong>${escapeHtml(
             displayGuidesLic_(state.session.grupoLic) || "—"
           )}</strong></div>
+          ${
+            currentGuidesAjuste() > 0
+              ? `<div class="gs-meta-ajuste"><small>REGISTRO MANUAL</small><strong>± ${fmt(
+                  currentGuidesAjuste()
+                )}</strong></div>`
+              : ""
+          }
           <div class="gs-meta-sup"><small>SUPERVISOR</small><strong title="${escapeHtml(sup)}">${escapeHtml(sup)}</strong></div>
         </div>
         <div class="gs-table-wrap">
@@ -5116,6 +5302,7 @@
               <tr>
                 <th>#</th>
                 <th>N° Guía</th>
+                <th>Fundo</th>
                 <th>Lote</th>
                 <th>Jarras</th>
                 <th>Jabas</th>
@@ -7301,10 +7488,12 @@
                 />
               </div>
             </div>
-            <label class="guides-hora-field">
-              <span class="guides-num-label">HORA</span>
-              <input data-field="horaRecojo" type="text" inputmode="numeric" placeholder="09:15" value="${escapeHtml(g.horaRecojo || "")}" autocomplete="off" aria-label="Hora recojo" readonly />
-            </label>
+            <div class="guides-fundo-field">
+              <span class="guides-num-label">FUNDO</span>
+              <button type="button" class="guides-fundo-card-btn${normalizeFundo(g.fundo) ? " is-filled" : ""}" data-pick="fundo" aria-label="Seleccionar fundo">
+                <span>${escapeHtml(displayFundoCompact(g.fundo) || "—")}</span>
+              </button>
+            </div>
             <button
               type="button"
               class="guides-card-toggle"
@@ -7508,20 +7697,9 @@
       const article = pickBtn.closest(".guides-card");
       const guia = findGuia(article?.dataset.id);
       const kind = pickBtn.dataset.pick;
-      if (guia && kind === "lote") {
+      if (guia && (kind === "lote" || kind === "fundo")) {
         openPicker(kind, guia.id);
       }
-      return;
-    }
-
-    const horaInput = e.target?.closest?.('input[data-field="horaRecojo"]');
-    if (horaInput) {
-      const article = horaInput.closest(".guides-card");
-      const guia = findGuia(article?.dataset.id);
-      if (!guia) return;
-      e.preventDefault();
-      e.stopPropagation();
-      openHoraRecojoPicker(guia.id);
       return;
     }
 
@@ -8032,8 +8210,21 @@
       closeGuidesSummary();
     });
     on("#btnSaveGuidesSummary", "click", saveGuidesSummary);
-    on("#btnGuidesFundo", "click", () => openPicker("fundo"));
     on("#btnGuidesLic", "click", () => openPicker("guidesLic"));
+    on("#btnGuidesAjusteInfo", "click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      explainGuidesAjuste();
+    });
+    on("#guidesAjusteInput", "input", (e) => {
+      const el = e.target;
+      const digits = String(el.value || "").replace(/\D/g, "");
+      el.value = digits;
+      setGuidesAjuste(digits);
+    });
+    on("#guidesAjusteInput", "blur", () => {
+      syncGuidesAjusteInput();
+    });
     on("#guidesSummaryModal", "click", (e) => {
       if (state.savingGuias) return;
       if (e.target?.id === "guidesSummaryModal") closeGuidesSummary();
@@ -8750,6 +8941,13 @@
         if (info?.manual) rememberSessionPersona(dni, info.nombre);
       });
       state.guias = (state.guias || []).flatMap((g) => migrateGuiaList(g));
+      // Migración: fundo global de sesión → cada guía sin fundo
+      {
+        const sessionFundo = normalizeFundo(state.session.fundo) || "";
+        state.guias.forEach((g) => {
+          if (!normalizeFundo(g.fundo) && sessionFundo) g.fundo = sessionFundo;
+        });
+      }
 
       // Data local al instante: DNI/QR validan sin esperar internet
       hydrateSupervisoresFromStorage();

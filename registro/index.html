@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
@@ -30,12 +30,12 @@
       }
     } catch (e) {}
   </script>
-  <link rel="stylesheet" href="/styles.css?v=379" />
-  <script src="/vendor/sweetalert2.all.min.js?v=379" defer></script>
-  <script src="/vendor/xlsx.full.min.js?v=379" defer></script>
-  <script src="/icons.js?v=379" defer></script>
-  <script src="/api-config.js?v=379" defer></script>
-  <script src="/app.js?v=379" defer></script>
+  <link rel="stylesheet" href="/styles.css?v=396" />
+  <script src="/vendor/sweetalert2.all.min.js?v=396" defer></script>
+  <script src="/vendor/xlsx.full.min.js?v=396" defer></script>
+  <script src="/icons.js?v=396" defer></script>
+  <script src="/api-config.js?v=396" defer></script>
+  <script src="/app.js?v=396" defer></script>
 </head>
 <body data-page="registro" class="app-booting">
   <div class="computer-block" id="computerBlock" role="alertdialog">
@@ -200,11 +200,9 @@
           <div class="guides-scroll">
             <section class="guides-meta-card">
               <div class="guides-meta-row">
-                <div class="guides-meta-chip guides-meta-chip--fundo">
-                  <small>FUNDO</small>
-                  <button type="button" class="guides-fundo-trigger" id="btnGuidesFundo" aria-label="Seleccionar fundo">
-                    <span id="guidesFundoLabel">Licapa</span>
-                  </button>
+                <div class="guides-meta-chip guides-meta-chip--fecha">
+                  <small>FECHA</small>
+                  <strong id="guidesFecha">—</strong>
                 </div>
                 <div class="guides-meta-chip guides-meta-chip--lic">
                   <small>LIC</small>
@@ -212,9 +210,26 @@
                     <span id="guidesLicLabel" class="ph">Elegir</span>
                   </button>
                 </div>
-                <div class="guides-meta-chip guides-meta-chip--fecha">
-                  <small>FECHA</small>
-                  <strong id="guidesFecha">—</strong>
+                <div class="guides-meta-chip guides-meta-chip--ajuste">
+                  <div class="guides-ajuste-head">
+                    <small>R. Manual</small>
+                    <button type="button" class="guides-ajuste-info" id="btnGuidesAjusteInfo" aria-label="Qué es el registro manual">
+                      <span data-icon="info"></span>
+                    </button>
+                  </div>
+                  <div class="guides-ajuste-field">
+                    <span class="guides-ajuste-mark" aria-hidden="true">±</span>
+                    <input
+                      id="guidesAjusteInput"
+                      type="text"
+                      inputmode="numeric"
+                      maxlength="6"
+                      placeholder="00"
+                      value=""
+                      autocomplete="off"
+                      aria-label="Registro manual: cantidad de jarras"
+                    />
+                  </div>
                 </div>
               </div>
               <div class="guides-meta-supervisor">
