@@ -1600,6 +1600,20 @@ html:not(.has-session) body.app-booting::before {
   border-color: var(--navy);
   background: #eef8ec;
 }
+.picker-item.is-disabled,
+.picker-item:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: #f3f5f2;
+  color: var(--muted);
+  box-shadow: none;
+}
+.picker-item.is-disabled strong,
+.picker-item:disabled strong,
+.picker-item.is-disabled span,
+.picker-item:disabled span {
+  color: var(--muted);
+}
 .picker-item strong {
   font-weight: 800;
   color: var(--navy);
