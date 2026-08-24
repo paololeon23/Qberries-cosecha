@@ -31,7 +31,7 @@
   const JARRAS_POR_JABA = 12;
   const FUNDO_DEFAULT = "Licapa I";
   const FUNDO_OPTIONS = ["Licapa I", "Licapa II", "Licapa III"];
-  const APP_VERSION = "v405";
+  const APP_VERSION = "v413";
 
   function normalizeFundo(value) {
     const raw = String(value || "").trim();
@@ -1176,7 +1176,7 @@
 
     const isOverlayField = (field) =>
       !!field?.closest?.(
-        ".manual-worker-backdrop, .modal-backdrop, .picker-backdrop, .export-preview-backdrop, .check-pick-backdrop, .profile-modal-backdrop"
+        ".manual-worker-backdrop, .modal-backdrop, .picker-backdrop, .export-preview-backdrop, .check-pick-backdrop, .profile-modal-backdrop, #picker, .picker"
       );
 
     const scrollFieldIntoView = (field) => {
@@ -1259,6 +1259,7 @@
       if (!field) return;
         setTimeout(() => {
           apply();
+        if (isOverlayField(field)) return;
         if (
           document.documentElement.classList.contains("is-android") &&
           isOverlayField(field)
@@ -1527,6 +1528,8 @@
     thanksRedirectTimer: 0,
     activeExportSnapshot: null,
     activeExportSaved: false,
+    /** Clics a “Subir a Drive” en el modal abierto (2.º clic pide confirmación). */
+    driveUploadPresses: 0,
     previewDraftSnapshot: null,
     /** Borradores del modal por tipo (Suma/Resta/Descarte) sin perder datos. */
     previewDraftByType: /** @type {Record<string, object>} */ ({}),
@@ -1996,7 +1999,21 @@
       </label>`;
   }
 
+  function snapshotScrollers() {
+    return ["guides-scroll", "harvest-scroll", "vinculo-scroll"].map((cls) => {
+      const el = document.querySelector(`.${cls}`);
+      return el ? { el, top: el.scrollTop } : null;
+    }).filter(Boolean);
+  }
+
+  function restoreScrollers(saved) {
+    (saved || []).forEach((item) => {
+      if (item?.el) item.el.scrollTop = item.top;
+    });
+  }
+
   function closePicker() {
+    const saved = snapshotScrollers();
     state.picker = null;
     $("#pickerQuery")?.blur();
     if (document.activeElement?.closest?.("#picker")) {
@@ -2012,7 +2029,14 @@
     if (q) q.value = "";
     const addBtn = $("#pickerAdd");
     if (addBtn) addBtn.hidden = false;
-    resetViewportLayout();
+    hidePickerCreate();
+    document.body?.classList.remove("kb-open");
+    window.scrollTo(0, 0);
+    applyViewportMetrics();
+    restoreScrollers(saved);
+    requestAnimationFrame(() => restoreScrollers(saved));
+    window.setTimeout(() => restoreScrollers(saved), 80);
+    window.setTimeout(() => restoreScrollers(saved), 280);
   }
 
   function grupoLicList_() {
@@ -2201,7 +2225,8 @@
       if (search) {
         search.hidden = kind === "harvestType";
       }
-      if (addBtn) addBtn.hidden = true;
+      if (addBtn) addBtn.hidden = kind !== "harvestLote";
+      hidePickerCreate();
       renderPickerList();
       const backdrop = $("#picker");
       if (backdrop) {
@@ -2209,7 +2234,7 @@
         hydrateIcons(backdrop);
       }
       if (kind !== "harvestType") {
-        setTimeout(() => query?.focus(), 60);
+        setTimeout(() => query?.focus({ preventScroll: true }), 60);
       }
       return;
     }
@@ -2241,6 +2266,7 @@
       addBtn.hidden = kind === "fundo";
       addBtn.textContent = "Agregar uno";
     }
+    hidePickerCreate();
     renderPickerList();
     const backdrop = $("#picker");
     if (backdrop) {
@@ -2248,7 +2274,7 @@
       hydrateIcons(backdrop);
     }
     if (kind !== "fundo") {
-      setTimeout(() => query?.focus(), 60);
+      setTimeout(() => query?.focus({ preventScroll: true }), 60);
     }
   }
 
@@ -2482,22 +2508,81 @@
     toast(ctx.kind === "grupo" ? `Grupo ${v}` : `Lote ${v}`);
   }
 
+  function hidePickerCreate() {
+    const form = $("#pickerCreate");
+    if (form) form.hidden = true;
+    const kind = state.picker?.kind;
+    const search = $("#pickerQuery")?.closest(".picker-search");
+    const list = $("#pickerList");
+    if (search) search.hidden = kind === "fundo" || kind === "harvestType";
+    if (list) list.hidden = false;
+    if ($("#pickerNewLote")) $("#pickerNewLote").value = "";
+    if ($("#pickerNewModulo")) $("#pickerNewModulo").value = "";
+    if ($("#pickerNewTurno")) $("#pickerNewTurno").value = "";
+  }
+
+  function showPickerCreate() {
+    const form = $("#pickerCreate");
+    if (!form) return;
+    const search = $("#pickerQuery")?.closest(".picker-search");
+    const list = $("#pickerList");
+    const addBtn = $("#pickerAdd");
+    const title = $("#pickerTitle");
+    const typed = String($("#pickerQuery")?.value || "").trim();
+    if (search) search.hidden = true;
+    if (list) list.hidden = true;
+    if (addBtn) addBtn.hidden = true;
+    if (title) title.textContent = "Nuevo lote";
+    form.hidden = false;
+    if ($("#pickerNewLote")) $("#pickerNewLote").value = typed.replace(/^lote\s*/i, "");
+    if ($("#pickerNewModulo")) $("#pickerNewModulo").value = "";
+    if ($("#pickerNewTurno")) $("#pickerNewTurno").value = "";
+    setTimeout(() => $("#pickerNewLote")?.focus({ preventScroll: true }), 40);
+  }
+
+  function onPickerCreateSave(e) {
+    e?.preventDefault?.();
+    const ctx = state.picker;
+    if (!ctx || (ctx.kind !== "lote" && ctx.kind !== "harvestLote")) return;
+    const lote = String($("#pickerNewLote")?.value || "").trim();
+    const modulo = String($("#pickerNewModulo")?.value || "").trim();
+    const turno = String($("#pickerNewTurno")?.value || "").trim();
+    if (!lote) {
+      toast("Escriba el lote");
+      $("#pickerNewLote")?.focus({ preventScroll: true });
+      return;
+    }
+    if (!modulo) {
+      toast("Escriba el módulo");
+      $("#pickerNewModulo")?.focus({ preventScroll: true });
+      return;
+    }
+    if (!turno) {
+      toast("Escriba el turno");
+      $("#pickerNewTurno")?.focus({ preventScroll: true });
+      return;
+    }
+    const row = addCustomLote(lote, modulo, turno);
+    if (row) applyPickerValue(row.lote);
+  }
+
   function onPickerAdd() {
     const ctx = state.picker;
     if (!ctx || ctx.kind === "grupoLic" || ctx.kind === "grupoNum" || ctx.kind === "guidesLic") return;
+    if (ctx.kind === "lote" || ctx.kind === "harvestLote") {
+      showPickerCreate();
+      return;
+    }
     const typed = String($("#pickerQuery")?.value || "").trim();
     if (!typed) {
       toast("Escriba arriba lo que desea agregar");
-      $("#pickerQuery")?.focus();
+      $("#pickerQuery")?.focus({ preventScroll: true });
       return;
     }
     if (ctx.kind === "grupo") {
       const g = addCustomGrupo(typed);
       if (g) applyPickerValue(g);
-      return;
     }
-    const row = addCustomLote(typed);
-    if (row) applyPickerValue(row.lote);
   }
 
   function getPin() {
@@ -2893,19 +2978,62 @@
     showSecurityLogin("");
   }
 
+  function wipeLocalAppData() {
+    const keys = [
+      STORAGE_KEY,
+      HARVEST_KEY,
+      HARVEST_HISTORY_KEY,
+      HARVEST_SENT_KEY,
+      HARVEST_DRIVE_URL_KEY,
+      GUIAS_HISTORY_KEY,
+      CUSTOM_CATALOG_KEY,
+      VINCULO_QUEUE_KEY,
+      CLOUD_DATA_QUEUE_KEY,
+      DRIVE_QUEUE_KEY,
+      VINCULO_DONE_KEY,
+      SESSION_MANUAL_PERSONAS_KEY,
+      SESSION_WORKERS_KEY,
+      SAVED_WORKERS_KEY,
+      IDENTITY_KEY,
+      IDENTITY_LS_KEY,
+      AUTH_SESSION_KEY,
+      SESSION_KEY,
+      SESSION_PIN_KEY,
+    ];
+    keys.forEach((key) => {
+      try {
+        localStorage.removeItem(key);
+      } catch {
+        /* ignore */
+      }
+      try {
+        sessionStorage.removeItem(key);
+      } catch {
+        /* ignore */
+      }
+    });
+    state.session = emptySession();
+    state.guias = [];
+    state.expandedGuiaId = null;
+    state.harvest = emptyHarvest();
+    state.previewDraftByType = {};
+    state.previewDraftSnapshot = null;
+    state.activeExportSnapshot = null;
+    state.activeExportSaved = false;
+    state.sessionManualPersonas = {};
+    if (state.sessionWorkers) state.sessionWorkers = {};
+    state.pendingIdentity = null;
+    state.identity = null;
+  }
+
   function lock() {
     stopCamera();
     state.pendingIdentity = null;
     markLoggedOut();
+    wipeLocalAppData();
     clearAuthenticatedSession();
     clearSessionManualPersonas();
     clearSessionWorkers();
-    state.harvest = emptyHarvest();
-    try {
-      localStorage.removeItem(HARVEST_KEY);
-    } catch {
-      /* ignore */
-    }
     setIdentity(null);
     requestCacheRefresh();
     if (getPage() === "scan") {
@@ -2914,6 +3042,9 @@
       goTo("scan", true);
     }
   }
+
+  const LOGOUT_WARN =
+    "Se borrará TODO en este celular: historial, guías, conteos (Suma/Resta/Descarte), DNIs agregados, lotes extras y datos pendientes. Tendrá que escanear su carnet otra vez.";
 
   function requireQrLogin() {
     ensureSessionGate();
@@ -4344,32 +4475,41 @@
   function renderHarvestDayChecklist() {
     const root = $("#harvestDayChecklist");
     if (!root) return;
+    try {
+      syncCurrentHarvestDraft();
+    } catch {
+      /* ignore */
+    }
     const status = harvestDayTypeStatus();
     root.innerHTML = status
       .map((item) => {
-        const cls = item.sent
-          ? "is-sent"
-          : item.locked
-            ? "is-locked"
+        const hasDraft =
+          harvestDraftHasData(harvestTypeBucket(item.key)) ||
+          harvestDraftHasData(state.previewDraftByType?.[item.key]);
+        const canOpen = !!item.snapshot || hasDraft;
+        const cls = [
+          item.sent
+            ? "is-sent"
             : item.saved
               ? "is-saved"
-              : "is-missing";
+              : hasDraft
+                ? "is-has-data"
+                : "is-missing",
+          canOpen ? "is-clickable" : "",
+          item.locked && !item.sent ? "is-locked" : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
         const label = item.sent
           ? "En Drive"
-          : item.locked
-            ? "Bloqueada · ver"
-            : item.saved
-              ? "Guardada · ver"
+          : item.saved
+            ? "Guardada · ver"
+            : hasDraft
+              ? "Con data · ver"
               : "Sin registro";
-        const canOpen =
-          !!item.snapshot ||
-          !!state.previewDraftByType?.[item.key] ||
-          harvestDraftHasData(harvestTypeBucket(item.key));
-        return `<button type="button" class="hdc-item ${cls}${
-          canOpen ? " is-clickable" : ""
-        }" data-harvest-check="${escapeHtml(item.key)}" aria-label="Ver ${escapeHtml(
-          item.short
-        )}">
+        return `<button type="button" class="hdc-item ${cls}" data-harvest-check="${escapeHtml(
+          item.key
+        )}" aria-label="Ver ${escapeHtml(item.short)}">
           <strong>${escapeHtml(item.short)}</strong>
           <small>${label}</small>
         </button>`;
@@ -4421,6 +4561,11 @@
   function renderExportPreviewDayStatus() {
     const el = $("#exportPreviewDayStatus");
     if (!el) return;
+    const snap = state.activeExportSnapshot;
+    if (snap?.tipo) {
+      el.textContent = `Excel de ${harvestTypeShort(snap.tipo)}`;
+      return;
+    }
     el.textContent = harvestDayProgressMessage();
   }
 
@@ -5468,16 +5613,18 @@
     };
   }
 
-  /** ¿El borrador de un tipo tiene datos para mostrar en modal/tabla? */
+  /** ¿El borrador de un tipo tiene datos? Lote elegido o trabajador en la tabla. */
   function harvestDraftHasData(draft) {
     if (!draft || typeof draft !== "object") return false;
     if (String(draft.lote || "").trim()) return true;
-    return (draft.workers || []).some(
-      (w) =>
-        String(w?.dni || "").replace(/\D/g, "").length === 8 ||
-        num(w?.manana) > 0 ||
-        num(w?.tarde) > 0
-    );
+    if (String(draft.codLote || "").trim()) return true;
+    return (draft.workers || []).some((w) => {
+      if (!w || typeof w !== "object") return false;
+      if (String(w.dni || "").replace(/\D/g, "").length > 0) return true;
+      if (String(w.nombre || "").trim()) return true;
+      if (num(w.manana) > 0 || num(w.tarde) > 0) return true;
+      return false;
+    });
   }
 
   /**
@@ -5927,6 +6074,7 @@
   function openExportPreview(snapshot, opts = {}) {
     if (!snapshot) return;
     state.activeExportSnapshot = snapshot;
+    state.driveUploadPresses = 0;
     // Desde el historial ya está guardado; desde "Ver resumen" todavía no.
     state.activeExportSaved = opts.saved !== false;
     if (!state.activeExportSaved) state.previewDraftSnapshot = snapshot;
@@ -5977,11 +6125,27 @@
   function closeExportPreview() {
     // Al cerrar el modal NO se borra lo ingresado: queda en caché por tipo
     saveHarvest();
+    state.driveUploadPresses = 0;
     const modal = $("#exportPreview");
     if (modal) modal.hidden = true;
     resetViewportLayout();
     renderHarvestDayChecklist();
     renderHarvest();
+  }
+
+  function requestUploadDriveFromPreview(button) {
+    const go = () => uploadActiveHarvestToDrive(button);
+    if ((state.driveUploadPresses || 0) >= 1) {
+      confirmModal(
+        "Subir otra vez a Drive",
+        "Tenga cuidado: no envíe muchos archivos a la nube. Con un solo envío es suficiente. Si está seguro, pulse Sí. Si no, pulse No y no se enviará.",
+        go,
+        "Sí, subir"
+      );
+      return;
+    }
+    state.driveUploadPresses = (state.driveUploadPresses || 0) + 1;
+    go();
   }
 
   /** No cierra a ciegas si falta Suma/Resta/Descarte o enviar. */
@@ -7441,12 +7605,14 @@
   function renderCards() {
     const root = $("#cards");
     if (!root) return;
+    const saved = snapshotScrollers();
     if (!state.guias.length) {
       root.innerHTML = `<div class="empty">${ico("clipboard", "ico")}<br/>Sin guías aún.<br/>Toque abajo para agregar una.</div>`;
       state.expandedGuiaId = null;
       state._guidesWarmed = true;
       updateKpis();
       updateMeta();
+      restoreScrollers(saved);
       return;
     }
 
@@ -7546,6 +7712,7 @@
     updateKpis();
     updateMeta();
     renderGuidesMeta();
+    restoreScrollers(saved);
   }
 
   function addGuiaAndOpen() {
@@ -8169,6 +8336,7 @@
 
     on("#pickerClose", "click", closePicker);
     on("#pickerAdd", "click", onPickerAdd);
+    on("#pickerCreate", "submit", onPickerCreateSave);
     on("#pickerQuery", "input", renderPickerList);
     on("#pickerList", "click", (e) => {
       const item = e.target.closest("[data-pick-value]");
@@ -8284,9 +8452,9 @@
       closeProfileModal();
       confirmModal(
         "Cerrar sesión",
-        "¿Está seguro de cerrar sesión? Tendrá que escanear su carnet otra vez.",
+        LOGOUT_WARN,
         () => lock(),
-        "Cerrar sesión"
+        "Cerrar y borrar todo"
       );
     });
     on("#btnHarvestSave", "click", previewHarvestSummary);
@@ -8320,7 +8488,7 @@
     on("#btnUploadDriveHarvest", "click", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      uploadActiveHarvestToDrive(e.currentTarget);
+      requestUploadDriveFromPreview(e.currentTarget);
     });
     on("#exportPreviewTypes", "click", (e) => {
       const btn = e.target?.closest?.("[data-preview-type]");
@@ -8422,9 +8590,9 @@
     on("#btnHarvestLogout", "click", () => {
       confirmModal(
         "Cerrar sesión",
-        "¿Está seguro de cerrar sesión? Tendrá que escanear su carnet otra vez.",
+        LOGOUT_WARN,
         () => lock(),
-        "Cerrar sesión"
+        "Cerrar y borrar todo"
       );
     });
     on("#btnHarvestLote", "click", () => openPicker("harvestLote"));

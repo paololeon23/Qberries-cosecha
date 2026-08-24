@@ -1367,7 +1367,7 @@ html:not(.has-session) body.app-booting::before {
   z-index: 120;
   background: rgba(7, 24, 36, 0.5);
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: center;
   padding: 18px 14px calc(18px + var(--safe-b));
   backdrop-filter: blur(5px);
@@ -1627,6 +1627,66 @@ html:not(.has-session) body.app-booting::before {
   cursor: pointer;
 }
 .picker-add:active { background: #eef8ec; }
+.picker-create {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 2px 0 0;
+}
+.picker-create[hidden] {
+  display: none !important;
+}
+.picker-create-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.picker-create label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.picker-create span {
+  color: var(--qb-green);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+.picker-create input {
+  width: 100%;
+  min-height: 46px;
+  border: 1.5px solid #c8e0c8;
+  border-radius: 14px;
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--ink);
+  background: #fff;
+  outline: none;
+}
+.picker-create input:focus {
+  border-color: var(--qb-green);
+  box-shadow: 0 0 0 4px rgba(27, 107, 58, 0.12);
+}
+.picker-create-save {
+  width: 100%;
+  min-height: 48px;
+  margin-top: 4px;
+  border: 0;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #1f7540 0%, #1b6b3a 100%);
+  color: #fff;
+  font: inherit;
+  font-size: 0.95rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+.picker-create-save:active {
+  background: #155830;
+}
 
 .select-trigger {
   width: 100%;
@@ -2853,8 +2913,19 @@ body[data-page="scan"] .lock-screen {
 .harvest-day-checklist .hdc-item:active {
   transform: scale(0.97);
 }
-.harvest-day-checklist .hdc-item.is-clickable {
-  border-color: #7cbc6a;
+.harvest-day-checklist .hdc-item.is-clickable,
+.harvest-day-checklist .hdc-item.is-has-data {
+  border-color: #2f7a36;
+  background: #c8edc0;
+  box-shadow: 0 2px 8px rgba(27, 107, 58, 0.14);
+}
+.harvest-day-checklist .hdc-item.is-clickable strong,
+.harvest-day-checklist .hdc-item.is-has-data strong {
+  color: #145a22;
+}
+.harvest-day-checklist .hdc-item.is-clickable small,
+.harvest-day-checklist .hdc-item.is-has-data small {
+  color: #1f5c28;
 }
 .harvest-day-checklist .hdc-item:focus-visible {
   outline: 2px solid #2f7a36;
@@ -2870,21 +2941,33 @@ body[data-page="scan"] .lock-screen {
   color: #6b7c6e;
 }
 .harvest-day-checklist .hdc-item.is-saved {
-  border-color: #7cbc6a;
-  background: #eaf6e6;
+  border-color: #1b6b3a;
+  background: #b4e3aa;
+  box-shadow: 0 2px 10px rgba(27, 107, 58, 0.16);
+}
+.harvest-day-checklist .hdc-item.is-saved small {
+  color: #145a22;
 }
 .harvest-day-checklist .hdc-item.is-sent {
-  border-color: #2f7a36;
-  background: #d8f0d2;
+  border-color: #0f4d22;
+  background: #8fd48a;
+  box-shadow: 0 2px 10px rgba(27, 107, 58, 0.18);
 }
 .harvest-day-checklist .hdc-item.is-sent small {
-  color: #1f5c28;
+  color: #0d3d18;
+  font-weight: 800;
 }
-.harvest-day-checklist .hdc-item.is-locked {
+.harvest-day-checklist .hdc-item.is-locked.is-saved,
+.harvest-day-checklist .hdc-item.is-locked.is-sent {
+  /* guardado/enviado: sigue verde, solo un toque de “ya cerrado” */
+  opacity: 0.96;
+}
+.harvest-day-checklist .hdc-item.is-locked:not(.is-saved):not(.is-sent):not(.is-has-data) {
   border-color: #c4c4c4;
   background: #f0f0f0;
+  box-shadow: none;
 }
-.harvest-day-checklist .hdc-item.is-locked small {
+.harvest-day-checklist .hdc-item.is-locked:not(.is-saved):not(.is-sent):not(.is-has-data) small {
   color: #666;
 }
 .harvest-type-lock-note {
@@ -5107,7 +5190,8 @@ body.kb-open .picker {
 }
 body.kb-open .picker-backdrop,
 body.kb-open .manual-worker-backdrop {
-  padding-bottom: var(--kb-h, 0px);
+  align-items: center;
+  padding-bottom: 12px;
 }
 
 /* Android: --app-h ya excluye el teclado; no restar --kb-h otra vez. Overlays centrados. */
@@ -5133,7 +5217,8 @@ html.is-android body.kb-open .profile-modal-backdrop {
 }
 html.is-android body.kb-open .picker-backdrop {
   padding: 12px 14px max(12px, var(--safe-b));
-  align-items: flex-end;
+  align-items: center;
+  justify-content: center;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
 }
@@ -5404,15 +5489,16 @@ html.is-android body.kb-open .export-preview {
 }
 .guides-meta-row {
   display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
   align-items: stretch;
 }
 .guides-meta-chip--fecha,
-.guides-meta-chip--lic {
-  width: max-content;
+.guides-meta-chip--lic,
+.guides-meta-chip--ajuste {
+  width: auto;
   min-width: 0;
-  flex: 0 0 auto;
+  max-width: none;
 }
 .guides-meta-chip--fecha strong {
   font-variant-numeric: tabular-nums;
@@ -6657,7 +6743,7 @@ html.is-android body.kb-open .export-preview {
     padding: 20px 18px 18px;
   }
   .guides-meta-row {
-    grid-template-columns: auto auto minmax(0, 1fr);
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 8px;
   }
   .guides-kpi {

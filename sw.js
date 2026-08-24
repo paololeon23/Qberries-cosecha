@@ -1,4 +1,4 @@
-﻿const CACHE = "qb-supervisores-v405";
+﻿const CACHE = "qb-supervisores-v413";
 const ASSETS = [
   "/",
   "/index.html",
