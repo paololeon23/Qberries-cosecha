@@ -61,7 +61,8 @@ html.is-android .home-scroll,
 html.is-android .harvest-scroll,
 html.is-android .guides-scroll,
 html.is-android .vinculo-scroll {
-  padding-bottom: max(16px, calc(8px + var(--safe-b)));
+  padding-bottom: calc(12px + var(--nav-bar-total));
+  overscroll-behavior: none;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -2008,8 +2009,8 @@ body[data-page="scan"] .lock-screen {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 14px 12px max(16px, calc(8px + var(--safe-b)));
+  overscroll-behavior: none;
+  padding: 14px 12px calc(12px + var(--nav-bar-total));
   -webkit-overflow-scrolling: touch;
 }
 .harvest-field-card,
@@ -4536,8 +4537,8 @@ html.is-android .home-hero {
   flex: 1 1 auto;
   overflow-x: hidden;
   overflow-y: auto;
-  padding: 12px 14px max(16px, calc(8px + var(--safe-b)));
-  overscroll-behavior: contain;
+  padding: 12px 14px calc(12px + var(--nav-bar-total));
+  overscroll-behavior: none;
   -webkit-overflow-scrolling: touch;
 }
 .vinculo-scroll .id-summary {
@@ -5202,13 +5203,13 @@ html.is-android body.kb-open .export-preview {
 @media (max-width: 899px) {
   :root { --u: clamp(0.85px, calc(100vw / 390), 1.12px); }
   .harvest-scroll {
-    padding: calc(11 * var(--u)) calc(11 * var(--u)) max(16px, calc(8px + var(--safe-b)));
+    padding: calc(11 * var(--u)) calc(11 * var(--u)) calc(12px + var(--nav-bar-total));
   }
   .harvest-field-card,
   .harvest-add-card,
   .harvest-register-card { padding: calc(13 * var(--u)) calc(12 * var(--u)); }
   .home-scroll {
-    padding: 0 calc(13 * var(--u)) max(16px, calc(8px + var(--safe-b)));
+    padding: 0 calc(13 * var(--u)) calc(12px + var(--nav-bar-total));
   }
   .home-hero {
     padding: calc(18 * var(--u) + var(--safe-t)) calc(15 * var(--u)) calc(32 * var(--u));
@@ -5224,7 +5225,7 @@ html.is-android body.kb-open .export-preview {
     padding: calc(13 * var(--u)) calc(12 * var(--u)) calc(15px + var(--safe-b));
   }
   .vinculo-scroll {
-    padding: calc(11 * var(--u)) calc(12 * var(--u)) max(16px, calc(8px + var(--safe-b)));
+    padding: calc(11 * var(--u)) calc(12 * var(--u)) calc(12px + var(--nav-bar-total));
   }
   .home-action-grid { gap: calc(9 * var(--u)); margin-top: calc(16 * var(--u)); }
   .home-action-icon {
@@ -5386,10 +5387,10 @@ html.is-android body.kb-open .export-preview {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  overscroll-behavior: contain;
+  overscroll-behavior: none;
   -webkit-overflow-scrolling: touch;
   touch-action: pan-y;
-  padding: 14px 12px max(28px, calc(20px + var(--safe-b)));
+  padding: 14px 12px calc(12px + var(--nav-bar-total));
 }
 
 /* Guías · paleta Q Berries = Conteo */
@@ -5403,9 +5404,27 @@ html.is-android body.kb-open .export-preview {
 }
 .guides-meta-row {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: auto auto minmax(0, 1fr);
   gap: 8px;
   align-items: stretch;
+}
+.guides-meta-chip--fecha,
+.guides-meta-chip--lic {
+  width: max-content;
+  min-width: 0;
+  flex: 0 0 auto;
+}
+.guides-meta-chip--fecha strong {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  overflow: visible;
+  text-overflow: clip;
+}
+.guides-meta-chip--lic .guides-fundo-trigger,
+.guides-meta-chip--lic .guides-fundo-trigger span {
+  font-size: 0.86rem;
+  overflow: visible;
+  text-overflow: clip;
 }
 .guides-meta-row .guides-meta-chip {
   height: 62px;
@@ -5461,9 +5480,6 @@ html.is-android body.kb-open .export-preview {
 .guides-fundo-trigger .ph {
   color: #8a9a90;
   font-weight: 700;
-}
-.guides-meta-chip--fecha strong {
-  font-variant-numeric: tabular-nums;
 }
 .guides-meta-chip--ajuste {
   position: relative;
@@ -5788,43 +5804,57 @@ html.is-android body.kb-open .export-preview {
   border-color: var(--qb-orange);
   box-shadow: 0 0 0 3px rgba(238, 151, 36, 0.14);
 }
-.guides-card-toggle {
+.guides-card-toggle,
+.guides-card-del {
+  box-sizing: border-box;
   width: 32px;
   height: 32px;
+  min-width: 32px;
+  min-height: 32px;
   flex: 0 0 32px;
-  margin-bottom: 4px;
-  border: 1.5px solid #9fc4a0;
-  border-radius: 10px;
-  display: grid;
+  margin: 0 0 4px;
+  padding: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-grid;
   place-items: center;
+  place-content: center;
+  line-height: 0;
+  font-size: 0;
   background: var(--navy-soft);
   color: var(--qb-green);
   cursor: pointer;
 }
-.guides-card-toggle .ico {
+.guides-card-toggle {
+  border: 1.5px solid #9fc4a0;
+  border-radius: 10px;
+}
+.guides-card-toggle [data-icon],
+.guides-card-del [data-icon] {
+  display: grid;
+  place-items: center;
   width: 16px;
   height: 16px;
+  line-height: 0;
+}
+.guides-card-toggle .ico,
+.guides-card-del .ico {
+  display: block;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  overflow: hidden;
+  transform-origin: 50% 50%;
   transition: transform 0.18s ease;
 }
 .guides-card.is-collapsed .guides-card-toggle .ico {
   transform: rotate(-90deg);
 }
 .guides-card-del {
-  width: 32px;
-  height: 32px;
-  flex: 0 0 32px;
-  margin-bottom: 4px;
   border: 1.5px solid #f0b8c0;
   border-radius: 12px;
-  display: grid;
-  place-items: center;
   background: var(--danger-soft);
   color: var(--qb-red);
-  cursor: pointer;
-}
-.guides-card-del .ico {
-  width: 16px;
-  height: 16px;
 }
 
 .guides-card.is-collapsed .guides-card-body {
@@ -6384,7 +6414,8 @@ html.is-android body.kb-open .export-preview {
 .harvest-scroll,
 .guides-scroll,
 .vinculo-scroll {
-  padding-bottom: max(16px, calc(8px + var(--safe-b)));
+  padding-bottom: calc(12px + var(--nav-bar-total));
+  overscroll-behavior: none;
 }
 
 /* Teléfonos angostos: badges siguen en fila (ya ocupan ancho completo). */
@@ -6527,7 +6558,7 @@ html.is-android body.kb-open .export-preview {
     width: 100%;
     max-width: none;
     margin: 0;
-    padding: 10px 16px max(14px, calc(8px + var(--safe-b)));
+    padding: 10px 16px calc(12px + var(--nav-bar-total));
     overflow-y: auto;
     overscroll-behavior: contain;
   }
@@ -6624,13 +6655,13 @@ html.is-android body.kb-open .export-preview {
     width: 100%;
     max-width: none;
     margin: 0;
-    padding: 10px 16px max(14px, calc(8px + var(--safe-b)));
+    padding: 10px 16px calc(12px + var(--nav-bar-total));
   }
   .guides-meta-card {
     padding: 20px 18px 18px;
   }
   .guides-meta-row {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: auto auto minmax(0, 1fr);
     gap: 8px;
   }
   .guides-kpi {

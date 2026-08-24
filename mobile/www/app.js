@@ -31,7 +31,7 @@
   const JARRAS_POR_JABA = 12;
   const FUNDO_DEFAULT = "Licapa I";
   const FUNDO_OPTIONS = ["Licapa I", "Licapa II", "Licapa III"];
-  const APP_VERSION = "v396";
+  const APP_VERSION = "v401";
 
   function normalizeFundo(value) {
     const raw = String(value || "").trim();
@@ -2070,7 +2070,7 @@
   function displayGuidesLic_(raw) {
     const v = normGuidesLic_(raw);
     if (!v) return "";
-    if (v === "NO_TENGO_POR_AHORA") return "No tengo por ahora";
+    if (v === "NO_TENGO_POR_AHORA") return "NO TENGO";
     return v;
   }
 
@@ -7555,6 +7555,7 @@
     state._guidesWarmed = true;
     updateKpis();
     updateMeta();
+    renderGuidesMeta();
   }
 
   function addGuiaAndOpen() {
@@ -7563,6 +7564,7 @@
     state.expandedGuiaId = nueva.id;
     saveStore();
     renderCards();
+    renderGuidesMeta();
     $("#cards")?.lastElementChild?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
 
