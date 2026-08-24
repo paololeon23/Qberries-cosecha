@@ -5694,6 +5694,10 @@ html.is-android body.kb-open .export-preview {
   padding: 8px 12px 10px;
   background: linear-gradient(180deg, var(--navy-soft) 0%, #fff 100%);
   border-bottom: 1.5px solid #d5e5d3;
+  cursor: default;
+}
+.guides-card.is-collapsed .guides-card-head {
+  border-bottom: 0;
 }
 .guides-card-index {
   width: 28px;
@@ -6157,19 +6161,21 @@ html.is-android body.kb-open .export-preview {
   font-weight: 800;
 }
 .gs-paper-meta {
-  display: grid;
-  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.35fr) minmax(0, 0.7fr);
-  gap: 4px 8px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  align-items: start;
+  gap: 6px 16px;
   padding: 8px 12px;
   border-bottom: 1px solid #dce8d8;
   background: #f7faf4;
-  align-items: start;
 }
 .gs-paper-meta > div {
+  flex: 0 1 auto;
   min-width: 0;
 }
 .gs-paper-meta > .gs-meta-sup {
-  grid-column: 1 / -1;
+  flex: 1 1 100%;
   padding-top: 2px;
   border-top: 1px dashed #d5e7d1;
   margin-top: 2px;
@@ -6189,12 +6195,6 @@ html.is-android body.kb-open .export-preview {
   font-weight: 800;
   overflow-wrap: anywhere;
   line-height: 1.2;
-}
-.gs-paper-meta .gs-meta-ajuste strong {
-  color: var(--qb-blue-dark);
-}
-.gs-meta-ajuste {
-  grid-column: 1 / -1;
 }
 .gs-paper-meta .gs-meta-sup strong {
   font-size: 0.72rem;
@@ -6324,12 +6324,8 @@ html.is-android body.kb-open .export-preview {
 }
 @media (max-width: 400px) {
   .gs-paper-meta {
-    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.4fr) minmax(0, 0.7fr);
-    gap: 4px 6px;
+    gap: 6px 12px;
     padding: 8px 10px;
-  }
-  .gs-paper-meta > .gs-meta-sup {
-    grid-column: 1 / -1;
   }
   .gs-table {
     font-size: 0.68rem;
@@ -6789,8 +6785,7 @@ html.is-android body.kb-open .export-preview {
     font-size: 1.15rem;
   }
   .gs-paper-meta {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 8px 14px;
+    gap: 8px 18px;
     padding: 10px 16px;
   }
   .gs-paper-meta strong {

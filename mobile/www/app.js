@@ -31,7 +31,7 @@
   const JARRAS_POR_JABA = 12;
   const FUNDO_DEFAULT = "Licapa I";
   const FUNDO_OPTIONS = ["Licapa I", "Licapa II", "Licapa III"];
-  const APP_VERSION = "v401";
+  const APP_VERSION = "v405";
 
   function normalizeFundo(value) {
     const raw = String(value || "").trim();
@@ -4854,6 +4854,7 @@
         </ul>
         <p>También va para quienes <strong>no tienen celular corporativo</strong>, o cuando <strong>no puedes usar el escáner</strong> y trabajas manual: usa este campo.</p>
         <p>Ese número sirve para mapear el listado o archivo de personas.</p>
+        <p>Debes <strong>enviar el Excel</strong> para comparar lo registrado con la app.</p>
         <p class="qb-swal-info-note">Si no hiciste nada manual, no escribas nada. Déjalo en 00.</p>
       </div>`;
     if (swalReady()) {
@@ -4897,7 +4898,11 @@
     if (!$("#guidesSheet")) return;
     ensureGuidesSession();
     renderGuidesMeta();
-    if (!state.guias.length) state.guias.push(emptyGuia());
+    if (!state.guias.length) {
+      const first = emptyGuia();
+      state.guias.push(first);
+      state.expandedGuiaId = first.id;
+    }
     const cards = $("#cards");
     const needsPaint =
       !cards ||
@@ -5287,13 +5292,6 @@
           <div class="gs-meta-lic"><small>LIC</small><strong>${escapeHtml(
             displayGuidesLic_(state.session.grupoLic) || "—"
           )}</strong></div>
-          ${
-            currentGuidesAjuste() > 0
-              ? `<div class="gs-meta-ajuste"><small>REGISTRO MANUAL</small><strong>± ${fmt(
-                  currentGuidesAjuste()
-                )}</strong></div>`
-              : ""
-          }
           <div class="gs-meta-sup"><small>SUPERVISOR</small><strong title="${escapeHtml(sup)}">${escapeHtml(sup)}</strong></div>
         </div>
         <div class="gs-table-wrap">
@@ -7452,14 +7450,6 @@
       return;
     }
 
-    // Si no hay expandida válida, abrir la primera (solo al cargar).
-    if (
-      !state.expandedGuiaId ||
-      !state.guias.some((g) => g.id === state.expandedGuiaId)
-    ) {
-      state.expandedGuiaId = state.guias[0].id;
-    }
-
     root.innerHTML = state.guias
       .map((g, idx) => {
         const loteTriggerLabel = g.lote
@@ -7717,16 +7707,17 @@
 
     const article = btn.closest(".guides-card");
     if (act === "toggle-guia") {
-      if (!article) return;
+      if (!article || !btn.classList.contains("guides-card-toggle")) return;
+      e.preventDefault();
+      e.stopPropagation();
       const id = article.dataset.id || "";
       const wasCollapsed = article.classList.contains("is-collapsed");
       if (wasCollapsed) {
-        // Abrir solo esta; cerrar las demás
         state.expandedGuiaId = id;
         $$("#cards .guides-card").forEach((card) => {
           const open = card.dataset.id === id;
           card.classList.toggle("is-collapsed", !open);
-          const t = card.querySelector('[data-act="toggle-guia"]');
+          const t = card.querySelector(".guides-card-toggle");
           if (t) t.setAttribute("aria-expanded", open ? "true" : "false");
         });
       } else {
@@ -7744,9 +7735,7 @@
       const doDel = () => {
         state.guias = state.guias.filter((g) => g.id !== guia.id);
         if (state.expandedGuiaId === guia.id) {
-          state.expandedGuiaId = state.guias.length
-            ? state.guias[state.guias.length - 1].id
-            : null;
+          state.expandedGuiaId = null;
         }
         saveStore();
         renderCards();
@@ -8618,7 +8607,11 @@
       rememberPersona(next.supervisorDni, next.supervisorNombre);
       rememberPersona(next.javeroDni, next.javeroNombre);
       state.session = next;
-      if (!state.guias.length) state.guias.push(emptyGuia());
+      if (!state.guias.length) {
+        const first = emptyGuia();
+        state.guias.push(first);
+        state.expandedGuiaId = first.id;
+      }
       saveStore();
       toast("Datos de campo listos");
       showMainFlow();
