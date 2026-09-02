@@ -30,12 +30,11 @@
       }
     } catch (e) {}
   </script>
-  <link rel="stylesheet" href="/styles.css?v=416" />
-  <script src="/vendor/sweetalert2.all.min.js?v=416" defer></script>
-  <script src="/vendor/xlsx.full.min.js?v=416" defer></script>
-  <script src="/icons.js?v=416" defer></script>
-  <script src="/api-config.js?v=416" defer></script>
-  <script src="/app.js?v=416" defer></script>
+  <link rel="stylesheet" href="/styles.css?v=427" />
+  <script src="/vendor/sweetalert2.all.min.js?v=427" defer></script>
+  <script src="/icons.js?v=427" defer></script>
+  <script src="/api-config.js?v=427" defer></script>
+  <script src="/app.js?v=427" defer></script>
 </head>
 <body data-page="registro" class="app-booting">
   <div class="computer-block" id="computerBlock" role="alertdialog">
@@ -117,6 +116,12 @@
                 <small>UBICACIÓN DE COSECHA</small>
                 <h2>Seleccione el lote</h2>
               </div>
+              <div class="harvest-lote-finish-wrap">
+                <button type="button" class="harvest-lote-finish-btn" id="btnHarvestLoteFinish">
+                  Lote finalizado
+                </button>
+                <button type="button" class="harvest-lote-finish-count" id="harvestFinishedLoteCount" aria-label="Lotes finalizados hoy" title="Ver lotes finalizados">0</button>
+              </div>
             </div>
             <label class="harvest-lote-control">
               <span class="sr-only">Lote</span>
@@ -140,9 +145,15 @@
                 <h2>Agregar trabajador</h2>
               </div>
               <div class="harvest-title-actions">
-                <button type="button" class="harvest-copy-btn" id="btnCopyYesterdayWorkers" aria-label="Elegir trabajadores guardados" title="Elegir trabajadores guardados">
-                  <span data-icon="clipboard"></span>
-                </button>
+                <div class="harvest-copy-wrap">
+                  <button type="button" class="harvest-copy-btn" id="btnCopyYesterdayWorkers" aria-label="Elegir trabajadores guardados" title="Elegir trabajadores guardados">
+                    <span data-icon="clipboard"></span>
+                  </button>
+                  <div class="harvest-copy-tip" id="harvestCopyEmptyTip" hidden role="status" aria-live="polite">
+                    <span data-icon="cloud"></span>
+                    <span>Aún no tenemos registros</span>
+                  </div>
+                </div>
                 <button type="button" class="harvest-users-btn" id="btnManualWorker" aria-label="Agregar trabajador que no está en la base">
                   <span data-icon="users"></span>
                 </button>
@@ -175,6 +186,20 @@
                 <h2>Registro por trabajador</h2>
               </div>
               <span class="harvest-count" id="harvestWorkerCount">0</span>
+            </div>
+            <div class="harvest-table-search-wrap" id="harvestTableSearchWrap">
+              <label class="check-pick-search harvest-table-search-field">
+                <span class="check-pick-search-ico" data-icon="search"></span>
+                <input
+                  type="search"
+                  id="harvestTableSearch"
+                  placeholder="Buscar en esta lista (DNI o nombre)"
+                  autocomplete="off"
+                  enterkeyhint="search"
+                  aria-label="Buscar trabajador en la lista actual"
+                />
+              </label>
+              <p class="harvest-table-search-meta" id="harvestTableSearchMeta" hidden></p>
             </div>
             <div class="harvest-table-head">
               <span>PERSONA</span><span>MAÑANA</span><span>TARDE</span><span>TOTAL</span><span class="harvest-head-action" aria-hidden="true"></span>
@@ -243,6 +268,38 @@
             <button type="button" class="harvest-save-btn guides-add-main" id="btnAgregarGuia">
               <span data-icon="plus"></span> Agregar guía
             </button>
+
+            <div class="guides-descarte-field">
+              <small class="guides-descarte-title">DESCARTE / DESHIDRATADO</small>
+              <div class="guides-descarte-row">
+                <label for="guidesDescarteJarrasInput">
+                  <small>JARRAS</small>
+                  <input
+                    id="guidesDescarteJarrasInput"
+                    type="text"
+                    inputmode="numeric"
+                    maxlength="6"
+                    placeholder="00"
+                    value=""
+                    autocomplete="off"
+                    aria-label="Total jarras de descarte o deshidratado"
+                  />
+                </label>
+                <label for="guidesDescarteJabasInput">
+                  <small>JABAS</small>
+                  <input
+                    id="guidesDescarteJabasInput"
+                    type="text"
+                    inputmode="numeric"
+                    maxlength="5"
+                    placeholder="00"
+                    value=""
+                    autocomplete="off"
+                    aria-label="Cantidad de jabas de descarte"
+                  />
+                </label>
+              </div>
+            </div>
 
             <div class="guides-bottom-panel">
               <div class="guides-day-total">
@@ -431,6 +488,7 @@
                   <th>VARIEDAD</th>
                   <th>OBSERVACION</th>
                   <th>SUPERVISOR</th>
+                  <th>FECHA</th>
                 </tr>
               </thead>
               <tbody id="exportPreviewRows"></tbody>
@@ -565,6 +623,44 @@
           </label>
           <div class="check-pick-list" id="workerPickList"></div>
           <button type="button" class="btn btn-primary btn-block" id="btnWorkerPickAdd">Agregar a este tipo</button>
+        </section>
+      </div>
+
+      <div class="check-pick-backdrop" id="finishedLotePick" hidden>
+        <section class="check-pick finished-lote-pick" role="dialog" aria-modal="true" aria-labelledby="finishedLotePickTitle">
+          <div class="check-pick-head">
+            <div>
+              <small>LOTES TERMINADOS</small>
+              <h2 id="finishedLotePickTitle">Lotes finalizados hoy</h2>
+            </div>
+            <button type="button" id="btnCloseFinishedLotePick" aria-label="Cerrar">
+              <span data-icon="x"></span>
+            </button>
+          </div>
+          <div id="finishedLotePickListView">
+            <p class="check-pick-copy">Toque un lote para ver opciones.</p>
+            <div class="finished-lote-table-wrap">
+              <div class="finished-lote-table-head" aria-hidden="true">
+                <span>Lote · Mód · Turno</span>
+                <span class="finished-lote-col-num">Personas</span>
+                <span class="finished-lote-col-num">Total</span>
+              </div>
+              <div class="finished-lote-table" id="finishedLotePickList"></div>
+            </div>
+            <div class="finished-lote-grand-total" id="finishedLotePickGrandTotal"></div>
+          </div>
+          <div id="finishedLotePickDetailView" hidden>
+            <button type="button" class="finished-lote-back" id="btnFinishedLotePickBack">
+              <span data-icon="chevronLeft"></span>
+              Volver
+            </button>
+            <div class="finished-lote-detail-head" id="finishedLotePickDetailHead"></div>
+            <div class="finished-lote-actions">
+              <button type="button" class="btn btn-ghost btn-block" id="btnFinishedLotePreview">Ver resumen</button>
+              <button type="button" class="btn btn-primary btn-block" id="btnFinishedLoteEdit">Editar</button>
+              <button type="button" class="btn btn-danger-outline btn-block" id="btnFinishedLoteDelete">Quitar de finalizados</button>
+            </div>
+          </div>
         </section>
       </div>
 

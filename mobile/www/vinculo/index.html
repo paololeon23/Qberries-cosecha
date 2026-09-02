@@ -30,12 +30,11 @@
       }
     } catch (e) {}
   </script>
-  <link rel="stylesheet" href="/styles.css?v=416" />
-  <script src="/vendor/sweetalert2.all.min.js?v=416" defer></script>
-  <script src="/vendor/xlsx.full.min.js?v=416" defer></script>
-  <script src="/icons.js?v=416" defer></script>
-  <script src="/api-config.js?v=416" defer></script>
-  <script src="/app.js?v=416" defer></script>
+  <link rel="stylesheet" href="/styles.css?v=448" />
+  <script src="/vendor/sweetalert2.all.min.js?v=448" defer></script>
+  <script src="/icons.js?v=448" defer></script>
+  <script src="/api-config.js?v=448" defer></script>
+  <script src="/app.js?v=448" defer></script>
 </head>
 <body data-page="vinculo" class="app-booting">
   <div class="computer-block" id="computerBlock" role="alertdialog">
@@ -91,17 +90,42 @@
         </header>
 
         <div class="vinculo-scroll">
-          <div class="id-summary" aria-label="Datos del carnet">
-            <div class="id-summary-row">
-              <span>DNI</span>
-              <strong id="vinDniShow">—</strong>
-            </div>
-            <div class="id-summary-row">
-              <span>Nombre</span>
-              <strong id="vinNombreShow">—</strong>
-            </div>
-          </div>
+          <p class="vinculo-paused-note" id="vinculoPausedNote">
+            Use este historial para ver si ya subió su guía correctamente hoy.
+          </p>
 
+          <section class="vin-guias-feed" id="vinGuiasFeed" aria-label="Historial de guías del día">
+            <header class="vin-guias-feed-head">
+              <div>
+                <small>CONTROL · GUÍAS</small>
+                <h2>Historial del día</h2>
+                <p id="vinGuiasFeedDate">—</p>
+              </div>
+              <button type="button" class="vin-guias-refresh" id="btnVinGuiasRefresh" aria-label="Actualizar historial">
+                <span data-icon="refresh"></span>
+              </button>
+            </header>
+            <div class="vin-guias-search">
+              <span data-icon="search" class="vin-guias-search-ico"></span>
+              <input
+                id="vinGuiasDniSearch"
+                type="search"
+                inputmode="numeric"
+                maxlength="12"
+                placeholder="Buscar por su DNI…"
+                autocomplete="off"
+                aria-label="Buscar por DNI"
+              />
+            </div>
+            <div class="vin-guias-stats" id="vinGuiasFeedStats" aria-live="polite"></div>
+            <div class="vin-guias-list" id="vinGuiasFeedList">
+              <div class="vin-guias-empty">Cargando historial…</div>
+            </div>
+          </section>
+        </div>
+
+        <!-- Ficha vínculo en pausa: se mantiene en DOM para reactivar después -->
+        <div id="vinculoFormStash" class="vinculo-form-stash" hidden aria-hidden="true">
           <form class="session-form vinculo-form" id="vinculoForm">
             <input id="vinDni" type="hidden" />
             <input id="vinNombre" type="hidden" />
@@ -196,6 +220,38 @@
           <button type="button" class="harvest-save-btn guides-add-main" id="btnAgregarGuia">
             <span data-icon="plus"></span> Agregar guía
           </button>
+
+          <div class="guides-descarte-field">
+            <small class="guides-descarte-title">DESCARTE / DESHIDRATADO</small>
+            <div class="guides-descarte-row">
+              <label for="guidesDescarteJarrasInput">
+                <small>JARRAS</small>
+                <input
+                  id="guidesDescarteJarrasInput"
+                  type="text"
+                  inputmode="numeric"
+                  maxlength="6"
+                  placeholder="00"
+                  value=""
+                  autocomplete="off"
+                  aria-label="Total jarras de descarte o deshidratado"
+                />
+              </label>
+              <label for="guidesDescarteJabasInput">
+                <small>JABAS</small>
+                <input
+                  id="guidesDescarteJabasInput"
+                  type="text"
+                  inputmode="numeric"
+                  maxlength="5"
+                  placeholder="00"
+                  value=""
+                  autocomplete="off"
+                  aria-label="Cantidad de jabas de descarte"
+                />
+              </label>
+            </div>
+          </div>
 
           <div class="guides-bottom-panel">
             <div class="guides-day-total">

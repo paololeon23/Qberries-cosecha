@@ -8,6 +8,12 @@
   const VINCULO_QUEUE_KEY = "qb-supervisores-vinculo-queue-v1";
   const CLOUD_DATA_QUEUE_KEY = "qb-supervisores-data-queue-v1";
   const DRIVE_QUEUE_KEY = "qb-supervisores-drive-queue-v1";
+  const GUIAS_SENT_KEY = "qb-supervisores-guias-sent-v1";
+  const GUIAS_FEED_DAY_CACHE_KEY = "qb-guias-feed-day-v1";
+  const GUIAS_FEED_CACHE_TTL_MS = 15 * 60 * 1000;
+  const GUIAS_SENT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+  const MAX_CLOUD_QUEUE_ATTEMPTS = 12;
+  const HARVEST_FINISHED_LOTES_KEY = "qb-supervisores-harvest-finished-v1";
   const HARVEST_DRIVE_URL_KEY = "qb-supervisores-harvest-drive-url-v1";
   const VINCULO_DONE_KEY = "qb-supervisores-vinculo-done-v1";
   const CUSTOM_CATALOG_KEY = "qb-supervisores-catalog-extra-v1";
@@ -23,6 +29,7 @@
   const GUIAS_HISTORY_KEY = "qb-supervisores-guias-history-v1";
   const SESSION_MANUAL_PERSONAS_KEY = "qb-supervisores-manual-personas-v1";
   const SESSION_WORKERS_KEY = "qb-supervisores-session-workers-v1";
+  const SESSION_BOOT_KEY = "qb-session-boot-v1";
   const SAVED_WORKERS_KEY = "qb-supervisores-saved-workers-v2";
   const LOGOUT_FLAG_KEY = "qb-supervisores-logout-v1";
   const CACHE_DAY_KEY = "qb-supervisores-cache-day-v1";
@@ -31,7 +38,9 @@
   const JARRAS_POR_JABA = 12;
   const FUNDO_DEFAULT = "Licapa I";
   const FUNDO_OPTIONS = ["Licapa I", "Licapa II", "Licapa III"];
-  const APP_VERSION = "v416";
+/** Ficha de vínculo en pausa: en Vincular se muestra historial de guías. */
+  const VINCULO_FORM_PAUSED = true;
+  const APP_VERSION = "v464";
 
   function normalizeFundo(value) {
     const raw = String(value || "").trim();
@@ -272,24 +281,129 @@
         message: parsed.message || "No se pudo guardar en Guías",
       };
     }
+    const sendId = guiasSendIdFromPayload(data);
+    if (sendId) markGuiasSendAcknowledged(sendId);
     return { ok: true, parsed, status: res.status };
   }
 
-  function parseAppsScriptJson(text) {
-    let parsed = null;
+  /** GET rápido al Sheet de guías (por fecha y DNI opcional). */
+  async function fetchGuiasDayFromServer(fecha, dni) {
+    const url = scriptGuiasUrl();
+    if (!url || !navigator.onLine) return null;
+    const qs = new URLSearchParams({
+      action: "listarGuias",
+      fecha: fecha || todayISO(),
+      limit: "250",
+    });
+    const dniQ = String(dni || "").replace(/\D/g, "");
+    if (dniQ) qs.set("dni", dniQ);
     try {
-      parsed = JSON.parse(text);
+      const res = await fetch(`${url}?${qs.toString()}`, {
+        method: "GET",
+        redirect: "follow",
+      });
+      const parsed = parseAppsScriptJson(await res.text());
+      if (!parsed?.ok || !parsed.data) return null;
+      return parsed.data;
     } catch {
-      const m = String(text || "").match(/\{[\s\S]*\}/);
-      if (m) {
-        try {
-          parsed = JSON.parse(m[0]);
-        } catch {
-          parsed = null;
-        }
+      return null;
+    }
+  }
+
+  function guiasSendIdFromPayload(data) {
+    return String(data?.sendId || data?.id || "").trim();
+  }
+
+  function loadGuiasSentMap() {
+    try {
+      const map = JSON.parse(localStorage.getItem(GUIAS_SENT_KEY) || "{}");
+      return map && typeof map === "object" ? map : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function pruneGuiasSentMap(map) {
+    const now = Date.now();
+    const out = {};
+    for (const [key, value] of Object.entries(map || {})) {
+      const at =
+        typeof value === "number"
+          ? value
+          : Date.parse(value?.at || value || 0) || 0;
+      if (key && at && now - at < GUIAS_SENT_TTL_MS) out[key] = at;
+    }
+    return out;
+  }
+
+  function isGuiasSendAcknowledged(sendId) {
+    const id = String(sendId || "").trim();
+    if (!id) return false;
+    return !!pruneGuiasSentMap(loadGuiasSentMap())[id];
+  }
+
+  function markGuiasSendAcknowledged(sendId) {
+    const id = String(sendId || "").trim();
+    if (!id) return;
+    const map = pruneGuiasSentMap(loadGuiasSentMap());
+    map[id] = Date.now();
+    try {
+      localStorage.setItem(GUIAS_SENT_KEY, JSON.stringify(map));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function cloudQueueItemReady(item) {
+    const retryAt = Number(item?.nextRetryAt || 0);
+    return !retryAt || Date.now() >= retryAt;
+  }
+
+  function bumpCloudQueueRetry(item, lastError) {
+    const attempts = (item.attempts || 0) + 1;
+    const delay = Math.min(120000, 3000 * Math.pow(1.8, attempts - 1));
+    return {
+      ...item,
+      attempts,
+      nextRetryAt: Date.now() + delay,
+      lastError: String(lastError || item.lastError || "").slice(0, 180),
+    };
+  }
+
+  function parseAppsScriptJson(text) {
+    const raw = String(text || "").trim();
+    if (!raw) return null;
+    try {
+      const direct = JSON.parse(raw);
+      if (direct && typeof direct === "object") return direct;
+    } catch {
+      /* try fallbacks */
+    }
+    const pre = raw.match(/<pre[^>]*>([\s\S]*?)<\/pre>/i);
+    if (pre) {
+      try {
+        const fromPre = JSON.parse(pre[1].trim());
+        if (fromPre && typeof fromPre === "object") return fromPre;
+      } catch {
+        /* ignore */
       }
     }
-    return parsed;
+    const m = raw.match(/\{[\s\S]*\}/);
+    if (m) {
+      try {
+        const embedded = JSON.parse(m[0]);
+        if (embedded && typeof embedded === "object") return embedded;
+      } catch {
+        /* ignore */
+      }
+    }
+    if (/"ok"\s*:\s*true/i.test(raw)) {
+      return {
+        ok: true,
+        duplicate: /"duplicate"\s*:\s*true/i.test(raw),
+      };
+    }
+    return null;
   }
 
   function bytesToBase64(bytes) {
@@ -306,6 +420,19 @@
    * Sube el Excel del snapshot a la carpeta Drive configurada en Apps Script.
    * Devuelve { ok, url, name, message }.
    */
+  function refreshTipoExportBundle(snapshot) {
+    const tipo = normalizeHarvestType(
+      snapshot?.tipo || state.activeExportSnapshot?.tipo || state.harvest.tipo
+    );
+    const list = collectTipoExportSnapshots(tipo);
+    if (!list.length) return null;
+    const anchor =
+      list.length > 1 ? buildCombinedExportAnchor(tipo, list) : list[0];
+    state.activeExportSnapshots = list;
+    state.activeExportSnapshot = anchor;
+    return { anchor, list };
+  }
+
   async function uploadHarvestExcelToDrive(snapshot) {
     const url = scriptExcelDriveUrl();
     if (!url) {
@@ -318,14 +445,22 @@
     if (!snapshot) {
       return { ok: false, message: "No hay registro para subir" };
     }
-    if (typeof XLSX === "undefined") {
+    if (!(await ensureXlsxLoaded())) {
       return { ok: false, message: "Excel no disponible · recargue la app" };
     }
 
+    const bundle =
+      buildHarvestExportBundle(snapshot, state.activeExportSnapshots) ||
+      refreshTipoExportBundle(snapshot);
+    if (!bundle) {
+      return { ok: false, message: "No hay filas para el Excel" };
+    }
+    snapshot = bundle.anchor;
+    const snapshots = bundle.list;
     let fileName = "cosecha.xlsx";
     let base64 = "";
     try {
-      const wb = buildHarvestWorkbook(snapshot);
+      const wb = buildHarvestWorkbook(snapshot, snapshots);
       const bytes = XLSX.write(wb, { bookType: "xlsx", type: "array" });
       fileName = safeXlsxShareName(harvestFileName(snapshot));
       base64 = bytesToBase64(bytes);
@@ -346,7 +481,7 @@
             mimeType:
               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             base64,
-            // Carpeta Drive: Suma / Resta / Descarte (no mezclar)
+            replaceExisting: true,
             tipo: normalizeHarvestType(snapshot.tipo),
             observacion: harvestTypeObservacion(snapshot.tipo),
           },
@@ -508,25 +643,31 @@
   async function uploadOrQueueHarvestToDrive(snapshot, button) {
     if (!snapshot) {
       toast("No hay registro para subir");
-      return;
+      return { ok: false };
+    }
+    if (isHarvestTypeExportedToday(snapshot.tipo)) {
+      toast(
+        `${harvestTypeShort(snapshot.tipo)} ya enviado hoy · un solo envío a Drive`
+      );
+      return { ok: false, blocked: true };
     }
     if (!scriptExcelDriveUrl()) {
       toast("Drive no configurado en la app");
-      return;
+      return { ok: false };
     }
 
     const existing = getHarvestDriveUrl(snapshot);
     if (existing) {
-      markHarvestSnapshotSent(snapshot);
+      markHarvestExportSent(snapshot);
       await shareDriveLink(existing, harvestFileName(snapshot));
-      return;
+      return { ok: true };
     }
 
     if (!navigator.onLine) {
       enqueueDriveUpload(snapshot);
       toast("Sin internet · Drive en pendiente. Se sube al reconectar.");
       renderHarvestHistory();
-      return;
+      return { ok: false, queued: true };
     }
 
     if (button) setBtnLoading(button, true, "Subiendo…");
@@ -541,17 +682,18 @@
             : "No se pudo subir · quedó pendiente"
         );
         renderHarvestHistory();
-        return;
+        return { ok: false, queued: true };
       }
       // Quitar de cola si estaba
       saveDriveQueue(loadDriveQueue().filter((item) => item.id !== snapshot.id));
       saveHarvestDriveUrl(snapshot, result.url, result.name);
       state.lastDriveExcelUrl = result.url;
-      markHarvestSnapshotSent(snapshot);
+      markHarvestExportSent(snapshot);
       toast("Excel subido a Drive");
       toast(harvestDayProgressMessage());
       renderHarvestHistory();
       await shareDriveLink(result.url, result.name);
+      return { ok: true };
     } finally {
       if (button) setBtnLoading(button, false);
     }
@@ -631,6 +773,57 @@
     const rel = path.startsWith("/") ? path : `/${path}`;
     return rel;
   }
+
+  const vendorScriptPromises = new Map();
+
+  function vendorScriptUrl(file) {
+    return `${assetUrl(`/vendor/${file}`)}?v=${encodeURIComponent(APP_VERSION)}`;
+  }
+
+  function loadScriptOnce(src) {
+    if (vendorScriptPromises.has(src)) return vendorScriptPromises.get(src);
+    const p = new Promise((resolve) => {
+      const sel = `script[data-vendor-src="${src}"]`;
+      const existing = document.querySelector(sel);
+      if (existing) {
+        if (existing.dataset.loaded === "1") {
+          resolve(true);
+          return;
+        }
+        existing.addEventListener("load", () => resolve(true), { once: true });
+        existing.addEventListener("error", () => resolve(false), { once: true });
+        return;
+      }
+      const s = document.createElement("script");
+      s.src = src;
+      s.defer = true;
+      s.dataset.vendorSrc = src;
+      s.onload = () => {
+        s.dataset.loaded = "1";
+        resolve(true);
+      };
+      s.onerror = () => resolve(false);
+      document.head.appendChild(s);
+    });
+    vendorScriptPromises.set(src, p);
+    return p;
+  }
+
+  async function ensureXlsxLoaded() {
+    if (typeof XLSX !== "undefined") return true;
+    return loadScriptOnce(vendorScriptUrl("xlsx.full.min.js"));
+  }
+
+  async function ensureJsPdfLoaded() {
+    if (window.jspdf?.jsPDF) return true;
+    return loadScriptOnce(vendorScriptUrl("jspdf.umd.min.js"));
+  }
+
+  /** Carga Excel en segundo plano (al abrir resumen), sin bloquear la pantalla. */
+  function preloadExcelVendor() {
+    if (typeof XLSX !== "undefined") return;
+    loadScriptOnce(vendorScriptUrl("xlsx.full.min.js")).catch(() => {});
+  }
   function reloadWithBust() {
     const url = new URL(location.href);
     url.searchParams.set("_cb", String(Date.now()));
@@ -696,6 +889,114 @@
       '<span class="qb-loader qb-loader--ring" aria-hidden="true"></span>' +
       '<p class="app-loader-msg" id="appLoaderMsg">Cargando…</p></div>';
     document.body.appendChild(el);
+  }
+
+  function ensureSessionBootLoader() {
+    if ($("#sessionBoot")) return;
+    const el = document.createElement("div");
+    el.id = "sessionBoot";
+    el.className = "session-boot";
+    el.hidden = true;
+    el.innerHTML =
+      '<div class="session-boot-card" role="status" aria-live="polite">' +
+      '<span class="session-boot-brand">Q BERRIES</span>' +
+      '<h2 class="session-boot-title">Iniciando sesión</h2>' +
+      '<p class="session-boot-welcome" id="sessionBootWelcome">Bienvenido</p>' +
+      '<div class="session-boot-bar" aria-hidden="true"><span id="sessionBootBarFill"></span></div>' +
+      '<p class="session-boot-pct" id="sessionBootPct">0%</p></div>';
+    document.body.appendChild(el);
+  }
+
+  function tick(ms) {
+    return new Promise((resolve) => window.setTimeout(resolve, ms));
+  }
+
+  function persistSessionBoot(name, pct) {
+    try {
+      sessionStorage.setItem(
+        SESSION_BOOT_KEY,
+        JSON.stringify({
+          name: String(name || "").trim(),
+          pct: Math.max(0, Math.min(100, Math.round(Number(pct) || 0))),
+          at: Date.now(),
+        })
+      );
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function readSessionBoot() {
+    try {
+      const raw = sessionStorage.getItem(SESSION_BOOT_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || Date.now() - Number(parsed.at || 0) > 20000) return null;
+      return parsed;
+    } catch {
+      return null;
+    }
+  }
+
+  function clearSessionBootStorage() {
+    try {
+      sessionStorage.removeItem(SESSION_BOOT_KEY);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function showSessionBootLoader(identity) {
+    ensureSessionBootLoader();
+    state.sessionBooting = true;
+    state.scanProcessing = true;
+    const name = String(identity?.nombre || "SUPERVISOR")
+      .trim()
+      .replace(/\s+/g, " ")
+      .toUpperCase();
+    const welcome = $("#sessionBootWelcome");
+    if (welcome) welcome.textContent = `Bienvenido, ${name}`;
+    updateSessionBootProgress(8);
+    const el = $("#sessionBoot");
+    if (el) {
+      el.hidden = false;
+      el.removeAttribute("hidden");
+    }
+    document.body.classList.add("session-booting", "app-busy");
+  }
+
+  function updateSessionBootProgress(pct) {
+    const n = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
+    const bar = $("#sessionBootBarFill");
+    const pctEl = $("#sessionBootPct");
+    if (bar) bar.style.width = `${n}%`;
+    if (pctEl) pctEl.textContent = `${n}%`;
+  }
+
+  function hideSessionBootLoader(force) {
+    state.sessionBooting = false;
+    if (force) state.scanProcessing = false;
+    const el = $("#sessionBoot");
+    if (el) el.hidden = true;
+    document.body.classList.remove("session-booting");
+    if (!loaderDepth) document.body.classList.remove("app-busy");
+  }
+
+  async function finishSessionBootOnArrival() {
+    const boot = readSessionBoot();
+    if (!boot) return false;
+    showSessionBootLoader({ nombre: boot.name });
+    let pct = Math.max(70, Number(boot.pct) || 88);
+    updateSessionBootProgress(pct);
+    while (pct < 100) {
+      pct = Math.min(100, pct + 4);
+      updateSessionBootProgress(pct);
+      await tick(36);
+    }
+    await tick(260);
+    hideSessionBootLoader(true);
+    clearSessionBootStorage();
+    return true;
   }
 
   function showAppLoader(msg) {
@@ -1008,6 +1309,7 @@
       if (!wantGuias) applyGuidesPanel(false);
       loadCatalogs().catch(() => {});
     } else if (page === "vinculo") {
+      closeGuidesSheet();
       showVinculoScreen(id);
     }
     openRequestedTab();
@@ -1068,9 +1370,15 @@
       return;
     }
     const msg = opts.loaderMsg || "Cargando…";
-    showAppLoader(msg);
+    if (!readSessionBoot()) {
+      showAppLoader(msg);
+      try {
+        sessionStorage.setItem("qb-action-loader", msg);
+      } catch {
+        /* ignore */
+      }
+    }
     try {
-      sessionStorage.setItem("qb-action-loader", msg);
       sessionStorage.removeItem("qb-tab-nav");
     } catch {
       /* ignore */
@@ -1280,9 +1588,105 @@
     });
   }
 
+  const PERU_TZ = "America/Lima";
+
   function todayISO() {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    try {
+      return new Intl.DateTimeFormat("en-CA", {
+        timeZone: PERU_TZ,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(new Date());
+    } catch {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    }
+  }
+
+  function peruDateFromISO(iso) {
+    const raw = String(iso || todayISO()).trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return new Date();
+    return new Date(`${raw}T12:00:00-05:00`);
+  }
+
+  /** Etiqueta larga: martes, 01 de setiembre (hora Perú). */
+  function formatDateLabelPE(iso) {
+    try {
+      return peruDateFromISO(iso).toLocaleDateString("es-PE", {
+        timeZone: PERU_TZ,
+        weekday: "long",
+        day: "2-digit",
+        month: "long",
+      });
+    } catch {
+      return String(iso || todayISO()).split("-").reverse().join("/");
+    }
+  }
+
+  function resetHarvestForNewDay(today) {
+    state.harvest = emptyHarvest();
+    state.harvest.fecha = today || todayISO();
+    state.previewDraftByType = {};
+    state.previewDraftSnapshot = null;
+    state.activeExportSnapshot = null;
+    state.activeExportSnapshots = null;
+    saveHarvest();
+  }
+
+  /** Si en Perú ya es otro día, limpia conteos viejos y actualiza la fecha en pantalla. */
+  function syncAppDayRollover(opts = {}) {
+    const silent = !!opts.silent;
+    const today = todayISO();
+    let changed = false;
+    const harvestDate = String(state.harvest?.fecha || "").slice(0, 10);
+
+    if (harvestDate && harvestDate !== today) {
+      resetHarvestForNewDay(today);
+      changed = true;
+      if (!silent) toast(`Nuevo día · ${formatDateLabelPE(today)}`);
+    } else if (state.harvest && harvestDate !== today) {
+      state.harvest.fecha = today;
+      saveHarvest();
+      changed = true;
+    }
+
+    const sessionDate = String(state.session?.fecha || "").slice(0, 10);
+    if (sessionDate && sessionDate !== today) {
+      state.session.fecha = today;
+      saveStore();
+      changed = true;
+      state.vinGuiasFeedCache = null;
+      try {
+        localStorage.removeItem(GUIAS_FEED_DAY_CACHE_KEY);
+      } catch {
+        /* ignore */
+      }
+    }
+
+    if (changed) {
+      rememberCacheDay();
+      if (isNewCacheDay()) requestCacheRefresh();
+      if (getPage() === "registro" && $("#harvestScreen") && !$("#harvestScreen").hidden) {
+        renderHarvest();
+        if (typeof renderCards === "function") renderCards();
+        if (typeof updateKpis === "function") updateKpis();
+        if (typeof renderGuidesMeta === "function") renderGuidesMeta();
+      }
+    }
+
+    const harvestDateEl = $("#harvestDate");
+    if (
+      harvestDateEl &&
+      $("#harvestScreen")?.dataset?.panel !== "guias"
+    ) {
+      const label = formatDateLabelPE(state.harvest?.fecha || today);
+      if (harvestDateEl.textContent !== label) {
+        harvestDateEl.textContent = label;
+      }
+    }
+
+    return changed;
   }
 
   function cacheDayStamp() {
@@ -1337,9 +1741,6 @@
       "/data/grupos-licapa.json",
       "/data/trabajadores.json",
       "/vendor/jsQR.min.js",
-      "/vendor/xlsx.full.min.js",
-      "/vendor/qrcode.min.js",
-      "/vendor/jspdf.umd.min.js",
       "/vendor/sweetalert2.all.min.js",
     ].forEach((url) => {
       fetch(url).catch(() => {});
@@ -1454,6 +1855,9 @@
     grupoLic: "",
     /** Ajuste manual (aumento o descuento). 0 = no aplica */
     ajusteJarras: 0,
+    /** Total descarte / deshidratado del día. 0 = no aplica */
+    descarteJarras: 0,
+    descarteJabas: 0,
     supervisorDni: "",
     supervisorNombre: "",
     javeroDni: "",
@@ -1468,6 +1872,7 @@
     turno: "",
     variedad: "",
     workers: [],
+    loteDrafts: {},
   });
 
   const emptyHarvestByType = () =>
@@ -1518,6 +1923,7 @@
     cloudApi: false,
     unlocking: false,
     scanProcessing: false,
+    sessionBooting: false,
     pendingIdentity: null,
     online: typeof navigator !== "undefined" ? navigator.onLine : true,
     camStream: /** @type {MediaStream|null} */ (null),
@@ -1527,6 +1933,8 @@
     thanksRedirect: false,
     thanksRedirectTimer: 0,
     activeExportSnapshot: null,
+    /** Todos los lotes del tipo en el resumen combinado (un solo Excel). */
+    activeExportSnapshots: /** @type {object[]|null} */ (null),
     activeExportSaved: false,
     /** Clics a “Subir a Drive” en el modal abierto (2.º clic pide confirmación). */
     driveUploadPresses: 0,
@@ -1537,6 +1945,10 @@
     readyFilesItems: [],
     historyPage: 0,
     guiasHistoryPage: 0,
+    vinGuiasDniFilter: "",
+    vinGuiasFeedLoading: false,
+    vinGuiasFeedCache: /** @type {{fecha:string,items:object[]}|null} */ (null),
+    vinGuiasSearchTimer: 0,
     sessionManualPersonas: /** @type {Record<string,{nombre:string,manual?:boolean}>} */ ({}),
     /** Trabajadores agregados en esta sesión: viven hasta Cerrar sesión. */
     sessionWorkers: /** @type {Record<string,{nombre:string,manual?:boolean}>} */ ({}),
@@ -1583,6 +1995,8 @@
         if (prev > 0) state.session.ajusteJarras = prev;
       }
       state.session.ajusteJarras = num(state.session.ajusteJarras) || 0;
+      state.session.descarteJarras = num(state.session.descarteJarras) || 0;
+      state.session.descarteJabas = num(state.session.descarteJabas) || 0;
       state.guias = Array.isArray(parsed.guias) ? parsed.guias : [];
     } catch {
       state.session = emptySession();
@@ -1609,13 +2023,13 @@
       if (!parsed || typeof parsed !== "object") {
         state.harvest = emptyHarvest();
         attachCurrentHarvestDraft();
+        syncAppDayRollover({ silent: true });
         return;
       }
       const storedDate = String(parsed.fecha || "").slice(0, 10);
       const today = todayISO();
       if (storedDate && storedDate !== today) {
-        state.harvest = emptyHarvest();
-        saveHarvest();
+        resetHarvestForNewDay(today);
         return;
       }
       state.harvest = {
@@ -1623,18 +2037,24 @@
         ...parsed,
       };
       hydrateHarvestByType(parsed);
+      syncAppDayRollover({ silent: true });
     } catch {
       state.harvest = emptyHarvest();
       attachCurrentHarvestDraft();
+      syncAppDayRollover({ silent: true });
     }
   }
 
   function saveHarvest() {
-    syncCurrentHarvestDraft();
-    localStorage.setItem(
-      HARVEST_KEY,
-      JSON.stringify({ ...state.harvest, savedAt: new Date().toISOString() })
-    );
+    try {
+      syncCurrentHarvestDraft();
+      localStorage.setItem(
+        HARVEST_KEY,
+        JSON.stringify({ ...state.harvest, savedAt: new Date().toISOString() })
+      );
+    } catch {
+      toast("No hay espacio para guardar · libere memoria del celular");
+    }
   }
 
   function savePersonas() {
@@ -2330,12 +2750,16 @@
       });
     }
     if (ctx.kind === "harvestType") {
-      return HARVEST_TYPES.map((item) => ({
-        key: item.key,
-        primary: item.label,
-        secondary: "",
-        raw: item,
-      }));
+      return HARVEST_TYPES.map((item) => {
+        const exported = isHarvestTypeExportedToday(item.key);
+        return {
+          key: item.key,
+          primary: item.label,
+          secondary: exported ? "Ya enviado · bloqueado" : "",
+          disabled: exported,
+          raw: item,
+        };
+      });
     }
     if (ctx.kind === "fundo") {
       return FUNDO_OPTIONS.map((f) => ({
@@ -2484,6 +2908,10 @@
       return;
     }
     if (ctx.kind === "harvestType") {
+      if (isHarvestTypeExportedToday(v)) {
+        toast(`${harvestTypeShort(v)} ya enviado hoy · elija otro tipo`);
+        return;
+      }
       if (!HARVEST_TYPES.some((item) => item.key === v)) return;
       switchHarvestType(v);
       closePicker();
@@ -3001,6 +3429,7 @@
       STORAGE_KEY,
       HARVEST_KEY,
       HARVEST_HISTORY_KEY,
+      HARVEST_FINISHED_LOTES_KEY,
       HARVEST_SENT_KEY,
       HARVEST_DRIVE_URL_KEY,
       GUIAS_HISTORY_KEY,
@@ -3046,6 +3475,8 @@
 
   function lock() {
     stopCamera();
+    hideSessionBootLoader(true);
+    clearSessionBootStorage();
     state.pendingIdentity = null;
     markLoggedOut();
     wipeLocalAppData();
@@ -3347,12 +3778,34 @@
 
       for (const item of queue) {
         try {
+          if (!cloudQueueItemReady(item)) {
+            remain.push(item);
+            continue;
+          }
+
           if (isGuiasCloudAction(item.action)) {
+            const sendId = guiasSendIdFromPayload(item.data);
+            if (sendId && isGuiasSendAcknowledged(sendId)) {
+              sent += 1;
+              continue;
+            }
             const result = await postGuiasToAppsScript(item.data);
-            if (result.ok) sent += 1;
-            else {
+            if (result.ok) {
+              sent += 1;
+            } else if ((item.attempts || 0) + 1 >= MAX_CLOUD_QUEUE_ATTEMPTS) {
+              console.warn(
+                "guias flush max attempts",
+                sendId,
+                result.message || result.parsed
+              );
+              remain.push({
+                ...item,
+                attempts: MAX_CLOUD_QUEUE_ATTEMPTS,
+                lastError: result.message || "No se pudo subir",
+              });
+            } else {
               console.warn("guias flush fail", result.message || result.parsed);
-              remain.push(item);
+              remain.push(bumpCloudQueueRetry(item, result.message));
             }
             continue;
           }
@@ -3373,9 +3826,21 @@
           });
           const result = await response.json().catch(() => ({}));
           if (response.ok && result.ok === true) sent += 1;
-          else remain.push(item);
-        } catch {
-          remain.push(item);
+          else if ((item.attempts || 0) + 1 >= MAX_CLOUD_QUEUE_ATTEMPTS) {
+            remain.push({
+              ...item,
+              attempts: MAX_CLOUD_QUEUE_ATTEMPTS,
+              lastError: result?.message || result?.error || "Error al subir",
+            });
+          } else remain.push(bumpCloudQueueRetry(item, result?.message));
+        } catch (err) {
+          if ((item.attempts || 0) + 1 >= MAX_CLOUD_QUEUE_ATTEMPTS) {
+            remain.push({
+              ...item,
+              attempts: MAX_CLOUD_QUEUE_ATTEMPTS,
+              lastError: String(err?.message || err || "Error de red"),
+            });
+          } else remain.push(bumpCloudQueueRetry(item, err?.message));
         }
       }
 
@@ -3383,6 +3848,9 @@
       updateNetworkUI();
       const pending = loadCloudDataQueue().length;
       if (sent > 0 && pending === 0) toast("Datos enviados correctamente");
+      if (sent > 0 && getPage() === "vinculo") {
+        refreshVinGuiasFeed({ force: true }).catch(() => {});
+      }
       return { sent, remain: pending };
     });
   }
@@ -3641,6 +4109,7 @@
       return;
     }
     stopCamera();
+    closeGuidesSheet();
     hideAllScreens();
     const screen = $("#vinculoScreen");
     if (screen) {
@@ -3649,14 +4118,23 @@
     }
     const form = $("#vinculoForm");
     const thanks = $("#vinculoThanks");
-    if (form) form.hidden = false;
     if (thanks) thanks.hidden = true;
     const copy = screen?.querySelector(".vinculo-user div");
     if (copy) {
       const h1 = copy.querySelector("h1");
-      if (h1) h1.textContent = "Vincular datos";
+      if (h1) {
+        h1.textContent = VINCULO_FORM_PAUSED ? "Control de guías" : "Vincular datos";
+      }
       copy.querySelectorAll(":scope > p:not(#vinHeroDni)").forEach((p) => p.remove());
     }
+    const pausedNote = $("#vinculoPausedNote");
+    const formStash = $("#vinculoFormStash");
+    if (form) form.hidden = false;
+    if (formStash) {
+      formStash.hidden = !!VINCULO_FORM_PAUSED;
+      formStash.setAttribute("aria-hidden", VINCULO_FORM_PAUSED ? "true" : "false");
+    }
+    if (pausedNote) pausedNote.hidden = !VINCULO_FORM_PAUSED;
     hydrateIcons(screen);
     const dni = identity.dni || "";
     const nombre = identity.nombre || "";
@@ -3671,39 +4149,434 @@
     if ($("#vinHeroDni")) $("#vinHeroDni").textContent = dni ? `DNI ${dni}` : "";
     $("#vinCelular").value =
       identity.celular || prev.celular || "";
+    const searchEl = $("#vinGuiasDniSearch");
+    if (searchEl) searchEl.value = "";
+    state.vinGuiasDniFilter = "";
     updateNetworkUI();
-    setTimeout(() => $("#vinCelular")?.focus(), 80);
+    setTimeout(() => {
+      if (!VINCULO_FORM_PAUSED) $("#vinCelular")?.focus();
+    }, 80);
+    refreshVinGuiasFeed({ dni: "", force: false }).catch(() => {});
   }
 
-  function afterQrLogin(identity, authToken) {
-    clearLoggedOutFlag();
-    setIdentity(identity);
-    saveAuthenticatedSession(identity, authToken || authenticatedToken());
-    state.pendingIdentity = null;
-    sessionStorage.setItem(SESSION_KEY, "1");
-    bindSessionToIdentity(identity.dni);
-    // Si entra otro supervisor, el listado anterior no se mezcla.
-    loadSessionWorkers();
-    seedSessionWorkersFromHarvest();
-    toast(`Sesión · ${identity.nombre}`);
-    // Vincular es opcional: abre Registro; el supervisor puede completar la ficha cuando quiera
-    if (!SESSION_FORM_ENABLED) {
-      stopCamera();
-      try {
-        goTo("registro", false, { loaderMsg: "Entrando a la app…" });
-      } catch {
-        hideAppLoader(true);
-        location.href = new URL(ROUTES.registro, location.origin + "/").href;
+  function vinGuiasFeedDateLabel(fecha) {
+    const iso = fecha || todayISO();
+    try {
+      const d = new Date(`${iso}T12:00:00`);
+      const nice = d.toLocaleDateString("es-PE", {
+        weekday: "long",
+        day: "numeric",
+        month: "long",
+      });
+      return nice.charAt(0).toUpperCase() + nice.slice(1);
+    } catch {
+      return iso;
+    }
+  }
+
+  function collectVinGuiasPendingItems(fecha, dniFilter) {
+    const dniQ = String(dniFilter || "").replace(/\D/g, "");
+    const out = [];
+    const seen = new Set();
+    for (const item of loadCloudDataQueue()) {
+      if (!isGuiasCloudAction(item.action)) continue;
+      const data = item.data || {};
+      const itemFecha = String(data.fecha || data.session?.fecha || "").slice(0, 10);
+      if (itemFecha && itemFecha !== fecha) continue;
+      const itemDni = String(
+        data.supervisorDni || data.session?.supervisorDni || ""
+      ).replace(/\D/g, "");
+      if (dniQ && !itemDni.includes(dniQ)) continue;
+      const sendId = guiasSendIdFromPayload(data);
+      if (sendId && isGuiasSendAcknowledged(sendId)) continue;
+      const key = sendId || item.id || uid();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const totals = data.totals || {};
+      const stuck = (item.attempts || 0) >= MAX_CLOUD_QUEUE_ATTEMPTS;
+      out.push({
+        key,
+        sendId,
+        supervisorNombre: data.supervisorNombre || data.session?.supervisorNombre || "",
+        supervisorDni: itemDni,
+        fecha: itemFecha || fecha,
+        grupoLic: data.grupoLic || data.session?.grupoLic || "",
+        totalJarras: num(totals.jarras),
+        totalJabas: num(totals.jabas),
+        descarteJarras: num(data.descarteJarras ?? totals.descarteJarras),
+        descarteJabas: num(data.descarteJabas ?? totals.descarteJabas),
+        fundo: data.fundo || data.session?.fundo || "",
+        cantidadGuias: num(totals.guias || totals.cantidadGuias),
+        horaSubida: "",
+        savedAt: data.savedAt || data.horaGuardado || item.queuedAt || "",
+        syncStatus: stuck ? "error" : "pendiente",
+        source: "queue",
+      });
+    }
+    return out;
+  }
+
+  function mergeVinGuiasFeedItems(serverData, fecha, dniFilter) {
+    const dniQ = String(dniFilter || "").replace(/\D/g, "");
+    const merged = new Map();
+
+    for (const row of serverData?.items || []) {
+      const dni = String(row.supervisorDni || "").replace(/\D/g, "");
+      if (dniQ && !dni.includes(dniQ)) continue;
+      const key = `srv-${row.rowNum || dni}-${row.horaSubida || ""}-${row.totalJarras}`;
+      merged.set(key, {
+        key,
+        supervisorNombre: row.supervisorNombre || "",
+        supervisorDni: dni,
+        fecha: row.fecha || fecha,
+        grupoLic: row.grupoLic || "",
+        totalJarras: num(row.totalJarras),
+        totalJabas: num(row.totalJabas),
+        descarteJarras: num(row.descarteJarras),
+        descarteJabas: num(row.descarteJabas),
+        fundo: row.fundo || "",
+        cantidadGuias: num(row.cantidadGuias),
+        horaSubida: row.horaSubida || "",
+        savedAt: "",
+        syncStatus: "subido",
+        source: "server",
+      });
+    }
+
+    for (const row of collectVinGuiasPendingItems(fecha, dniQ)) {
+      if (!merged.has(row.key)) merged.set(row.key, row);
+    }
+
+    return [...merged.values()].sort((a, b) => {
+      const ta = Date.parse(a.savedAt || 0) || parseHoraSubidaSort_(a.horaSubida);
+      const tb = Date.parse(b.savedAt || 0) || parseHoraSubidaSort_(b.horaSubida);
+      return tb - ta;
+    });
+  }
+
+  function parseHoraSubidaSort_(hora) {
+    const raw = String(hora || "").trim();
+    if (!raw) return 0;
+    const m = raw.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)/i);
+    if (!m) return 0;
+    let h = Number(m[1]);
+    const min = Number(m[2]);
+    const sec = Number(m[3] || 0);
+    const pm = /p/i.test(m[4]);
+    if (pm && h < 12) h += 12;
+    if (!pm && h === 12) h = 0;
+    return h * 3600000 + min * 60000 + sec * 1000;
+  }
+
+  function vinGuiasSyncBadge(status) {
+    if (status === "subido") {
+      return '<span class="vin-guias-badge is-ok">Subido</span>';
+    }
+    if (status === "error") {
+      return '<span class="vin-guias-badge is-err">Error al subir</span>';
+    }
+    return '<span class="vin-guias-badge is-pending">Pendiente</span>';
+  }
+
+  function renderVinGuiasFeed(items, meta = {}) {
+    const list = $("#vinGuiasFeedList");
+    const stats = $("#vinGuiasFeedStats");
+    const dateEl = $("#vinGuiasFeedDate");
+    const refreshBtn = $("#btnVinGuiasRefresh");
+    if (!list) return;
+
+    const fecha = meta.fecha || todayISO();
+    if (dateEl) dateEl.textContent = vinGuiasFeedDateLabel(fecha);
+
+    const subidos = items.filter((x) => x.syncStatus === "subido").length;
+    const pendientes = items.filter((x) => x.syncStatus === "pendiente").length;
+    const errores = items.filter((x) => x.syncStatus === "error").length;
+
+    if (stats) {
+      stats.innerHTML = `
+        <span class="vin-guias-stat"><strong>${items.length}</strong> registro(s)</span>
+        <span class="vin-guias-stat is-ok"><strong>${subidos}</strong> subido(s)</span>
+        <span class="vin-guias-stat is-pending"><strong>${pendientes}</strong> pendiente(s)</span>
+        ${errores ? `<span class="vin-guias-stat is-err"><strong>${errores}</strong> con error</span>` : ""}
+      `;
+    }
+
+    if (refreshBtn) {
+      refreshBtn.disabled = !!meta.loading;
+      refreshBtn.classList.toggle("is-loading", !!meta.loading);
+    }
+
+    if (!items.length) {
+      let emptyMsg = "No hay guías registradas hoy con ese criterio.";
+      if (meta.offline) {
+        emptyMsg = "Sin internet · mostrando caché si hay datos guardados.";
+      } else if (meta.loading) {
+        emptyMsg = "Consultando historial…";
+      } else if (meta.refreshing) {
+        emptyMsg = "No aparece en caché · actualizando desde el servidor…";
+      } else if (meta.dniFilter) {
+        emptyMsg = "No hay registro de su guía hoy con ese DNI. Pulse ↻ para actualizar.";
+      }
+      list.innerHTML = `<div class="vin-guias-empty">${emptyMsg}</div>`;
+      return;
+    }
+
+    list.innerHTML = items
+      .map((item) => {
+        const hora =
+          item.horaSubida ||
+          (item.savedAt
+            ? new Date(item.savedAt).toLocaleTimeString("es-PE", {
+                hour: "2-digit",
+                minute: "2-digit",
+              })
+            : "—");
+        const nombre = escapeHtml(item.supervisorNombre || "Supervisor");
+        const dni = escapeHtml(item.supervisorDni || "—");
+        const fundo = escapeHtml(item.fundo || "Licapa");
+        const grupo = escapeHtml(item.grupoLic || "");
+        const desc =
+          item.descarteJarras > 0 || item.descarteJabas > 0
+            ? `<span class="vin-guias-meta">Descarte: ${fmt(item.descarteJarras)} j · ${fmt(item.descarteJabas)} jb</span>`
+            : "";
+        return `<article class="vin-guias-card">
+          <div class="vin-guias-card-top">
+            <div class="vin-guias-card-title">
+              <strong>${nombre}</strong>
+              <small>DNI ${dni}${grupo ? ` · ${grupo}` : ""}</small>
+            </div>
+            <div class="vin-guias-card-status">
+              ${vinGuiasSyncBadge(item.syncStatus)}
+              <time>${escapeHtml(hora)}</time>
+            </div>
+          </div>
+          <div class="vin-guias-card-body">
+            <span>${fundo}</span>
+            <span>${fmt(item.cantidadGuias)} guía(s) · ${fmt(item.totalJarras)} jarras · ${fmt(item.totalJabas)} jabas</span>
+            ${desc}
+          </div>
+        </article>`;
+      })
+      .join("");
+  }
+
+  function loadVinGuiasDayCache(fecha) {
+    const day = fecha || todayISO();
+    try {
+      const raw = JSON.parse(localStorage.getItem(GUIAS_FEED_DAY_CACHE_KEY) || "null");
+      if (!raw || raw.fecha !== day || !raw.serverData) return null;
+      return raw;
+    } catch {
+      return null;
+    }
+  }
+
+  function saveVinGuiasDayCache(fecha, serverData) {
+    if (!fecha || !serverData) return;
+    const at = Date.now();
+    const payload = { fecha, at, serverData };
+    state.vinGuiasFeedCache = {
+      fecha,
+      at,
+      serverData,
+      items: mergeVinGuiasFeedItems(serverData, fecha, ""),
+    };
+    try {
+      localStorage.setItem(GUIAS_FEED_DAY_CACHE_KEY, JSON.stringify(payload));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function resolveVinGuiasServerCache(fecha) {
+    const mem = state.vinGuiasFeedCache;
+    if (mem?.fecha === fecha && mem.serverData) {
+      return { serverData: mem.serverData, at: mem.at || 0, from: "mem" };
+    }
+    const disk = loadVinGuiasDayCache(fecha);
+    if (disk?.serverData) {
+      state.vinGuiasFeedCache = {
+        fecha,
+        at: disk.at || 0,
+        serverData: disk.serverData,
+        items: mergeVinGuiasFeedItems(disk.serverData, fecha, ""),
+      };
+      return { serverData: disk.serverData, at: disk.at || 0, from: "disk" };
+    }
+    return null;
+  }
+
+  function vinGuiasCacheAgeLabel(at) {
+    if (!at) return "";
+    const mins = Math.max(0, Math.round((Date.now() - at) / 60000));
+    if (mins <= 0) return "Actualizado ahora";
+    if (mins === 1) return "Actualizado hace 1 min";
+    return `Actualizado hace ${mins} min`;
+  }
+
+  function applyVinGuiasDniFilter(dniRaw) {
+    const fecha = todayISO();
+    const dniFilter = String(dniRaw || "").replace(/\D/g, "");
+    state.vinGuiasDniFilter = dniFilter;
+    const cached = resolveVinGuiasServerCache(fecha);
+    if (!cached?.serverData) {
+      refreshVinGuiasFeed({ dni: dniRaw, force: false }).catch(() => {});
+      return;
+    }
+    const items = mergeVinGuiasFeedItems(cached.serverData, fecha, dniFilter);
+    const cacheFresh = Date.now() - (cached.at || 0) < GUIAS_FEED_CACHE_TTL_MS;
+    renderVinGuiasFeed(items, {
+      fecha,
+      dniFilter,
+      cacheAge: vinGuiasCacheAgeLabel(cached.at),
+      cached: true,
+    });
+    if (dniFilter.length >= 6 && !items.length && navigator.onLine) {
+      refreshVinGuiasFeed({ dni: dniRaw, force: true }).catch(() => {});
+    } else if (!cacheFresh && navigator.onLine && !dniFilter) {
+      refreshVinGuiasFeed({ force: false }).catch(() => {});
+    }
+  }
+
+  async function refreshVinGuiasFeed(opts = {}) {
+    const root = $("#vinGuiasFeed");
+    if (!root || getPage() !== "vinculo") return;
+
+    const fecha = todayISO();
+    const dniFilter = String(
+      opts.dni != null ? opts.dni : $("#vinGuiasDniSearch")?.value || state.vinGuiasDniFilter || ""
+    ).replace(/\D/g, "");
+    state.vinGuiasDniFilter = dniFilter;
+
+    const forceNetwork = !!opts.force;
+    const localOnly = !!opts.localOnly;
+    const cached = resolveVinGuiasServerCache(fecha);
+    const cacheFresh =
+      !!cached?.serverData &&
+      Date.now() - (cached.at || 0) < GUIAS_FEED_CACHE_TTL_MS;
+
+    if (cached?.serverData) {
+      const items = mergeVinGuiasFeedItems(cached.serverData, fecha, dniFilter);
+      renderVinGuiasFeed(items, {
+        fecha,
+        dniFilter,
+        cacheAge: vinGuiasCacheAgeLabel(cached.at),
+        cached: true,
+        loading: false,
+      });
+      if (localOnly) return;
+      if (!forceNetwork && cacheFresh && (!dniFilter || items.length)) return;
+    }
+
+    if (localOnly) return;
+
+    if (!navigator.onLine) {
+      if (!cached?.serverData) {
+        renderVinGuiasFeed([], { fecha, dniFilter, offline: true });
       }
       return;
     }
-    if (needsVinculo(identity)) {
-      stopCamera();
-      goTo("vinculo", false, { loaderMsg: "Entrando a la app…" });
-      return;
+
+    if (!cached?.serverData || forceNetwork) {
+      state.vinGuiasFeedLoading = true;
+      renderVinGuiasFeed(
+        cached?.serverData
+          ? mergeVinGuiasFeedItems(cached.serverData, fecha, dniFilter)
+          : [],
+        {
+          fecha,
+          dniFilter,
+          loading: !cached?.serverData,
+          refreshing: !!cached?.serverData && forceNetwork && !!dniFilter,
+          cacheAge: cached ? vinGuiasCacheAgeLabel(cached.at) : "",
+        }
+      );
     }
-    showMainFlow();
-    hideAppLoader();
+
+    const fresh = await fetchGuiasDayFromServer(fecha, "");
+    let serverData = cached?.serverData || null;
+    let cacheAt = cached?.at || 0;
+    if (fresh) {
+      saveVinGuiasDayCache(fecha, fresh);
+      serverData = fresh;
+      cacheAt = Date.now();
+    }
+
+    const items = mergeVinGuiasFeedItems(serverData, fecha, dniFilter);
+    state.vinGuiasFeedLoading = false;
+    renderVinGuiasFeed(items, {
+      fecha,
+      dniFilter,
+      loading: false,
+      offline: !fresh && !serverData,
+      cacheAge: serverData ? vinGuiasCacheAgeLabel(cacheAt) : "",
+    });
+    updateNetworkUI();
+  }
+
+  async function afterQrLogin(identity, authToken) {
+    showSessionBootLoader(identity);
+    persistSessionBoot(identity?.nombre, 12);
+    try {
+      updateSessionBootProgress(12);
+      await tick(90);
+      clearLoggedOutFlag();
+      setIdentity(identity);
+      saveAuthenticatedSession(identity, authToken || authenticatedToken());
+      state.pendingIdentity = null;
+      sessionStorage.setItem(SESSION_KEY, "1");
+      bindSessionToIdentity(identity.dni);
+
+      updateSessionBootProgress(34);
+      persistSessionBoot(identity?.nombre, 34);
+      await tick(110);
+      loadSessionWorkers();
+      seedSessionWorkersFromHarvest();
+
+      updateSessionBootProgress(58);
+      persistSessionBoot(identity?.nombre, 58);
+      await tick(110);
+      if (navigator.onLine) {
+        detectNetlify(1500).catch(() => {});
+      }
+
+      updateSessionBootProgress(76);
+      persistSessionBoot(identity?.nombre, 76);
+      await tick(90);
+
+      updateSessionBootProgress(92);
+      persistSessionBoot(identity?.nombre, 92);
+      await tick(80);
+
+      stopCamera();
+      if (!SESSION_FORM_ENABLED) {
+        updateSessionBootProgress(100);
+        persistSessionBoot(identity?.nombre, 100);
+        await tick(180);
+        goTo("registro", false);
+        return;
+      }
+      if (needsVinculo(identity)) {
+        updateSessionBootProgress(100);
+        persistSessionBoot(identity?.nombre, 100);
+        await tick(180);
+        goTo("vinculo", false);
+        return;
+      }
+
+      updateSessionBootProgress(100);
+      await tick(200);
+      showMainFlow();
+      hideSessionBootLoader(true);
+      clearSessionBootStorage();
+      toast(`Sesión · ${identity.nombre}`);
+    } catch (err) {
+      hideSessionBootLoader(true);
+      clearSessionBootStorage();
+      state.scanProcessing = false;
+      toast("No se pudo entrar. Intente de nuevo");
+      throw err;
+    }
   }
 
   async function startCamera() {
@@ -3786,7 +4659,7 @@
   }
 
   function finishQrScan(ok) {
-    if (state.scanProcessing) return;
+    if (state.scanProcessing || state.sessionBooting) return;
     state.scanProcessing = true;
     if (state.camTimer) {
       clearInterval(state.camTimer);
@@ -3811,18 +4684,14 @@
         showPasswordGate(ok);
         return;
       }
-      showAppLoader("Entrando a la app…");
-      try {
-        afterQrLogin(ok, `qr:${ok.dni}`);
-      } catch (err) {
-        hideAppLoader(true);
-        state.scanProcessing = false;
-        toast("No se pudo entrar. Intente de nuevo");
-      }
-    }, 680);
+      afterQrLogin(ok, `qr:${ok.dni}`).catch(() => {
+        setQrLoading(false);
+      });
+    }, 420);
   }
 
   function scanQrFrame() {
+    if (state.scanProcessing || state.sessionBooting) return;
     const video = $("#qrVideo");
     const canvas = $("#qrCanvas");
     if (!video || !canvas || video.readyState < 2) return;
@@ -3934,14 +4803,21 @@
     }
   }
 
+  function catalogJsonUrl(path) {
+    const rel = path.startsWith("/") ? path : `/${path}`;
+    if (!/\/data\/[^/]+\.json$/i.test(rel)) return rel;
+    return `${rel}?v=${encodeURIComponent(APP_VERSION)}`;
+  }
+
   async function fetchLocalJson(url) {
     const path = url.startsWith("/") ? url : `/${url}`;
+    const busted = catalogJsonUrl(path);
     const tries = [];
     if (isNativeApp() && navigator.onLine) {
-      tries.push(`${CLOUD_ORIGIN}${path}?v=${APP_VERSION}&_=${Date.now()}`);
+      tries.push(`${CLOUD_ORIGIN}${busted}&_=${Date.now()}`);
     }
-    tries.push(assetUrl(path));
-    tries.push(path);
+    tries.push(assetUrl(busted));
+    tries.push(busted);
     for (const target of tries) {
       try {
         const res = await fetch(target, {
@@ -4027,6 +4903,9 @@
           setCount(" · local");
     } else {
       setCount(Object.keys(state.personas).length ? " · local" : "");
+    }
+    if (String($("#harvestWorkerDni")?.value || "").replace(/\D/g, "").length === 8) {
+      previewHarvestWorker();
     }
   }
 
@@ -4190,7 +5069,14 @@
     };
   }
 
-  function cloneHarvestTypeDraft(draft) {
+  function harvestLoteDraftKey(lote, codLote) {
+    const key = String(lote || codLote || "")
+      .trim()
+      .toUpperCase();
+    return key || "";
+  }
+
+  function cloneHarvestLoteSlice(draft) {
     const src = draft && typeof draft === "object" ? draft : {};
     return {
       lote: String(src.lote || ""),
@@ -4202,6 +5088,46 @@
         ? src.workers.map(normalizeHarvestWorker)
         : [],
     };
+  }
+
+  function cloneLoteDraftsMap(drafts) {
+    const out = {};
+    const src = drafts && typeof drafts === "object" ? drafts : {};
+    Object.entries(src).forEach(([key, value]) => {
+      const draftKey = String(key || "").trim().toUpperCase();
+      if (!draftKey) return;
+      out[draftKey] = cloneHarvestLoteSlice(value);
+    });
+    return out;
+  }
+
+  function cloneHarvestTypeDraft(draft) {
+    const src = draft && typeof draft === "object" ? draft : {};
+    const out = cloneHarvestLoteSlice(src);
+    out.loteDrafts = cloneLoteDraftsMap(src.loteDrafts);
+    return out;
+  }
+
+  function stashActiveHarvestLoteDraft(bucket) {
+    if (!bucket || typeof bucket !== "object") return;
+    const key = harvestLoteDraftKey(bucket.lote, bucket.codLote);
+    if (!key) return;
+    const slice = cloneHarvestLoteSlice(bucket);
+    if (!(slice.workers || []).length) return;
+    if (!bucket.loteDrafts || typeof bucket.loteDrafts !== "object") {
+      bucket.loteDrafts = {};
+    }
+    bucket.loteDrafts[key] = slice;
+  }
+
+  function applyHarvestLoteDraft(bucket, lote, savedDraft) {
+    const slice = savedDraft ? cloneHarvestLoteSlice(savedDraft) : null;
+    bucket.lote = slice?.lote || lote?.lote || "";
+    bucket.codLote = slice?.codLote || lote?.codLote || "";
+    bucket.modulo = slice?.modulo || lote?.modulo || "";
+    bucket.turno = slice?.turno || lote?.turno || "";
+    bucket.variedad = slice?.variedad || lote?.variedad || "";
+    bucket.workers = slice?.workers || [];
   }
 
   function harvestTypeBucket(tipo) {
@@ -4217,6 +5143,9 @@
       if (typeof bucket[field] !== "string") bucket[field] = "";
     });
     if (!Array.isArray(bucket.workers)) bucket.workers = [];
+    if (!bucket.loteDrafts || typeof bucket.loteDrafts !== "object") {
+      bucket.loteDrafts = {};
+    }
     return bucket;
   }
 
@@ -4225,7 +5154,8 @@
     if (!state.harvest.byType || typeof state.harvest.byType !== "object") {
       state.harvest.byType = emptyHarvestByType();
     }
-    state.harvest.byType[key] = cloneHarvestTypeDraft({
+    const prev = state.harvest.byType[key] || emptyHarvestTypeDraft();
+    const slice = cloneHarvestLoteSlice({
       lote: state.harvest.lote,
       codLote: state.harvest.codLote,
       modulo: state.harvest.modulo,
@@ -4233,7 +5163,16 @@
       variedad: state.harvest.variedad,
       workers: state.harvest.workers,
     });
-    state.harvest.workers = state.harvest.byType[key].workers;
+    const loteDrafts = cloneLoteDraftsMap(prev.loteDrafts);
+    const activeKey = harvestLoteDraftKey(slice.lote, slice.codLote);
+    if (activeKey) {
+      loteDrafts[activeKey] = cloneHarvestLoteSlice(slice);
+    }
+    state.harvest.byType[key] = {
+      ...slice,
+      loteDrafts,
+    };
+    state.harvest.workers = slice.workers;
   }
 
   function attachCurrentHarvestDraft() {
@@ -4280,7 +5219,11 @@
 
   function clearHarvestWorkerForm() {
     if ($("#harvestWorkerDni")) $("#harvestWorkerDni").value = "";
-    if ($("#harvestWorkerName")) $("#harvestWorkerName").value = "";
+    if ($("#harvestWorkerName")) {
+      $("#harvestWorkerName").value = "";
+      $("#harvestWorkerName").disabled = true;
+      $("#harvestWorkerName").placeholder = "ACTUALIZADO";
+    }
     if ($("#harvestWorkerMsg")) $("#harvestWorkerMsg").textContent = "";
   }
 
@@ -4299,15 +5242,28 @@
     renderHarvest();
   }
 
-  function resetHarvestTypeAfterSave(tipo) {
+  function resetHarvestTypeAfterSave(tipo, savedSnapshot) {
     const key = normalizeHarvestType(tipo);
-    if (!state.harvest.byType || typeof state.harvest.byType !== "object") {
-      state.harvest.byType = emptyHarvestByType();
-    }
-    // Limpia SOLO este tipo; Suma/Resta/Descarte de los demás se conservan
-    state.harvest.byType[key] = emptyHarvestTypeDraft();
+    syncCurrentHarvestDraft();
+    const bucket = harvestTypeBucket(key);
+    const savedKey = savedSnapshot
+      ? harvestLoteDraftKey(savedSnapshot.lote, savedSnapshot.codLote)
+      : harvestLoteDraftKey(bucket.lote, bucket.codLote);
+    const loteDrafts = cloneLoteDraftsMap(bucket.loteDrafts);
+    if (savedKey) delete loteDrafts[savedKey];
+    state.harvest.byType[key] = {
+      ...emptyHarvestTypeDraft(),
+      loteDrafts,
+    };
     if (state.previewDraftByType && typeof state.previewDraftByType === "object") {
-      delete state.previewDraftByType[key];
+      const cached = state.previewDraftByType[key];
+      if (
+        cached &&
+        (!savedKey ||
+          harvestLoteDraftKey(cached.lote, cached.codLote) === savedKey)
+      ) {
+        delete state.previewDraftByType[key];
+      }
     }
     if (normalizeHarvestType(state.harvest.tipo) === key) {
       attachCurrentHarvestDraft();
@@ -4316,7 +5272,6 @@
     document.querySelectorAll("[data-harvest-field]").forEach((input) => {
       input.value = "";
     });
-    // Limpiar también lote visible del tipo guardado
     if (normalizeHarvestType(state.harvest.tipo) === key) {
       state.harvest.lote = "";
       state.harvest.codLote = "";
@@ -4379,20 +5334,48 @@
   }
 
   /**
-   * Ya no se bloquea Suma/Resta/Descarte enteros.
-   * Solo se bloquea el lote enviado en el select.
+   * Tras subir a Drive: bloquea el tipo entero (Suma/Resta/Descarte) el resto del día.
+   * Varios lotes van en un solo envío combinado.
    */
-  function isHarvestTypeLocked() {
-    return false;
+  function isHarvestTypeLocked(tipo) {
+    return isHarvestTypeExportedToday(tipo);
   }
 
-  /** Lote ya guardado hoy para ese tipo → no se puede volver a elegir. */
+  function harvestTypeExportKey(tipo) {
+    const fecha = todayISO();
+    const dni = String(state.identity?.dni || getIdentity()?.dni || "").replace(
+      /\D/g,
+      ""
+    );
+    return `${fecha}|${dni}|${normalizeHarvestType(tipo)}|EXPORT`;
+  }
+
+  function isHarvestTypeExportedToday(tipo) {
+    const key = normalizeHarvestType(tipo);
+    if (!key) return false;
+    return !!loadHarvestSentMap()[harvestTypeExportKey(key)];
+  }
+
+  function markHarvestTypeExported(tipo) {
+    const key = normalizeHarvestType(tipo);
+    if (!key) return;
+    const map = loadHarvestSentMap();
+    map[harvestTypeExportKey(key)] = new Date().toISOString();
+    try {
+      localStorage.setItem(HARVEST_SENT_KEY, JSON.stringify(map));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /** Lote ya guardado o finalizado hoy para ese tipo → no se puede volver a elegir. */
   function isHarvestLoteBlocked(lote, tipo) {
     const loteKey = String(lote || "")
       .trim()
       .toUpperCase();
     if (!loteKey) return false;
     const tipoKey = normalizeHarvestType(tipo || state.harvest?.tipo);
+    if (isHarvestLoteFinishedLocally(loteKey, tipoKey)) return true;
     return todayHarvestSnapshots(tipoKey).some((snap) => {
       const a = String(snap.lote || "")
         .trim()
@@ -4404,7 +5387,414 @@
     });
   }
 
-  function setHarvestEditorLocked(locked) {
+  function loadFinishedHarvestLotes() {
+    try {
+      const parsed = JSON.parse(
+        localStorage.getItem(HARVEST_FINISHED_LOTES_KEY) || "[]"
+      );
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function saveFinishedHarvestLotes(list) {
+    try {
+      localStorage.setItem(
+        HARVEST_FINISHED_LOTES_KEY,
+        JSON.stringify((list || []).slice(0, 80))
+      );
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function harvestLoteMatchesKey(snap, loteKey) {
+    const key = String(loteKey || "")
+      .trim()
+      .toUpperCase();
+    if (!key) return false;
+    const a = String(snap?.lote || "")
+      .trim()
+      .toUpperCase();
+    const b = String(snap?.codLote || "")
+      .trim()
+      .toUpperCase();
+    return a === key || b === key;
+  }
+
+  function todayTipoHarvestSnapshots(tipo) {
+    const tipoKey = tipo ? normalizeHarvestType(tipo) : "";
+    const map = new Map();
+    todayHarvestSnapshots(tipoKey).forEach((snap) => {
+      map.set(harvestDayTypeKey(snap), snap);
+    });
+    todayFinishedHarvestLotes(tipoKey).forEach((snap) => {
+      const key = harvestDayTypeKey(snap);
+      if (!map.has(key)) map.set(key, snap);
+    });
+    return Array.from(map.values()).sort(
+      (a, b) =>
+        Date.parse(b.finishedAt || b.savedAt || 0) -
+        Date.parse(a.finishedAt || a.savedAt || 0)
+    );
+  }
+
+  function todayFinishedHarvestLotes(tipo) {
+    const tipoKey = tipo ? normalizeHarvestType(tipo) : "";
+    return loadFinishedHarvestLotes().filter((item) => {
+      if (item.fecha !== todayISO()) return false;
+      if (!harvestOwnerMatches(item)) return false;
+      if (tipoKey && normalizeHarvestType(item.tipo) !== tipoKey) return false;
+      return true;
+    });
+  }
+
+  function isHarvestLoteFinishedLocally(lote, tipo) {
+    const tipoKey = normalizeHarvestType(tipo || state.harvest?.tipo);
+    return todayFinishedHarvestLotes(tipoKey).some((snap) =>
+      harvestLoteMatchesKey(snap, lote)
+    );
+  }
+
+  function countFinishedHarvestLotesToday(tipo) {
+    return todayFinishedHarvestLotes(tipo).length;
+  }
+
+  function removeFinishedHarvestLote(snapshot) {
+    if (!snapshot) return;
+    const tipoKey = normalizeHarvestType(snapshot.tipo);
+    const next = loadFinishedHarvestLotes().filter((item) => {
+      if (item.id === snapshot.id) return false;
+      if (
+        item.fecha === snapshot.fecha &&
+        normalizeHarvestType(item.tipo) === tipoKey &&
+        harvestLoteMatchesKey(item, snapshot.lote || snapshot.codLote)
+      ) {
+        return false;
+      }
+      return true;
+    });
+    saveFinishedHarvestLotes(next);
+    renderHarvestFinishedCount();
+  }
+
+  function renderHarvestFinishedCount() {
+    const el = $("#harvestFinishedLoteCount");
+    if (!el) return;
+    const n = countFinishedHarvestLotesToday(state.harvest.tipo);
+    el.textContent = String(n);
+    el.hidden = false;
+    el.classList.toggle("is-empty", n <= 0);
+  }
+
+  function clearCurrentHarvestLoteDraft() {
+    const key = normalizeHarvestType(state.harvest.tipo);
+    syncCurrentHarvestDraft();
+    const bucket = harvestTypeBucket(key);
+    const currentKey = harvestLoteDraftKey(bucket.lote, bucket.codLote);
+    const loteDrafts = cloneLoteDraftsMap(bucket.loteDrafts);
+    if (currentKey) delete loteDrafts[currentKey];
+    bucket.lote = "";
+    bucket.codLote = "";
+    bucket.modulo = "";
+    bucket.turno = "";
+    bucket.variedad = "";
+    bucket.workers = [];
+    bucket.loteDrafts = loteDrafts;
+    attachCurrentHarvestDraft();
+    clearHarvestWorkerForm();
+    document.querySelectorAll("[data-harvest-field]").forEach((input) => {
+      input.value = "";
+    });
+    saveHarvest();
+  }
+
+  function validateHarvestLoteBeforeFinish(snapshot) {
+    if (!snapshot) return false;
+    const lote = String(snapshot.lote || snapshot.codLote || "").trim();
+    if (!lote) {
+      toast("Seleccione el lote antes de finalizar");
+      openPicker("harvestLote");
+      return false;
+    }
+    if (isHarvestLoteBlocked(lote, snapshot.tipo)) {
+      toast(`Lote ${lote} ya está finalizado hoy · elija otro`);
+      openPicker("harvestLote");
+      return false;
+    }
+    if (!snapshot.workers?.length) {
+      toast("Agregue al menos un trabajador");
+      $("#harvestWorkerDni")?.focus();
+      return false;
+    }
+    if (snapshotTotal(snapshot) <= 0) {
+      toast("Ingrese las jarras de mañana o tarde");
+      return false;
+    }
+    return true;
+  }
+
+  function lookupSavedSessionWorker(dni) {
+    const key = String(dni || "").replace(/\D/g, "");
+    const info = state.sessionWorkers?.[key];
+    const nombre = String(info?.nombre || "")
+      .trim()
+      .toUpperCase();
+    if (key.length !== 8 || nombre.length < 3) return null;
+    return { nombre, manual: !!info?.manual };
+  }
+
+  function finishHarvestLote() {
+    syncCurrentHarvestDraft();
+    const snapshot = makeHarvestSnapshot();
+    if (!validateHarvestLoteBeforeFinish(snapshot)) return;
+
+    confirmModal(
+      "Finalizar lote",
+      `¿Marcar lote ${snapshot.lote || snapshot.codLote || "—"} como terminado? Se guarda solo en este celular, se bloquea ese lote y podrá elegir otro. Los DNI quedan en la lista guardada.`,
+      () => {
+        const finishedAt = new Date().toISOString();
+        const entry = {
+          ...snapshot,
+          workers: (snapshot.workers || []).map(normalizeHarvestWorker),
+          finishedAt,
+        };
+        const next = [
+          entry,
+          ...loadFinishedHarvestLotes().filter((item) => item.id !== entry.id),
+        ];
+        saveFinishedHarvestLotes(next);
+        captureSavedWorkers(entry.workers);
+        clearCurrentHarvestLoteDraft();
+        renderHarvest();
+        renderHarvestDayChecklist();
+        toast(
+          `Lote ${entry.lote || "—"} finalizado · puede cambiar de tipo o verlo en ${harvestTypeShort(
+            entry.tipo
+          )}`
+        );
+      },
+      "Sí, finalizar"
+    );
+  }
+
+  let activeFinishedLotePickId = null;
+
+  function resetFinishedLotePickView() {
+    activeFinishedLotePickId = null;
+    const listView = $("#finishedLotePickListView");
+    const detailView = $("#finishedLotePickDetailView");
+    if (listView) listView.hidden = false;
+    if (detailView) {
+      detailView.hidden = true;
+      detailView.setAttribute("hidden", "");
+    }
+  }
+
+  function renderFinishedLotePickList(items) {
+    const list = $("#finishedLotePickList");
+    const totalEl = $("#finishedLotePickGrandTotal");
+    if (!list) return;
+    const grandTotal = items.reduce((sum, snap) => sum + snapshotTotal(snap), 0);
+    const grandRows = items.reduce(
+      (sum, snap) => sum + (snap.workers?.length || 0),
+      0
+    );
+    list.innerHTML = items
+      .map((snap) => {
+        const meta = harvestLoteMeta(snap);
+        const filas = snap.workers?.length || 0;
+        const total = fmt(snapshotTotal(snap));
+        return `<button type="button" class="finished-lote-row" data-finished-lote-id="${escapeHtml(
+          snap.id
+        )}">
+          <span class="finished-lote-row-lote">${escapeHtml(meta.full)}</span>
+          <span class="finished-lote-row-filas">${filas}</span>
+          <span class="finished-lote-row-total">${total}</span>
+        </button>`;
+      })
+      .join("");
+    if (totalEl) {
+      const lotesTxt = `${items.length} lote${items.length === 1 ? "" : "s"}`;
+      const filasTxt = `${grandRows} persona${grandRows === 1 ? "" : "s"}`;
+      totalEl.innerHTML = `<strong>${fmt(grandTotal)}</strong> jarras · ${lotesTxt} · ${filasTxt}`;
+    }
+  }
+
+  function findFinishedHarvestLote(id) {
+    const key = String(id || "").trim();
+    if (!key) return null;
+    return loadFinishedHarvestLotes().find((item) => item.id === key) || null;
+  }
+
+  function showFinishedLoteDetail(id) {
+    const snap = findFinishedHarvestLote(id);
+    if (!snap) {
+      toast("No se encontró ese lote finalizado");
+      return;
+    }
+    activeFinishedLotePickId = snap.id;
+    const listView = $("#finishedLotePickListView");
+    const detailView = $("#finishedLotePickDetailView");
+    const head = $("#finishedLotePickDetailHead");
+    const when = new Date(snap.finishedAt || snap.savedAt);
+    const timeTxt = Number.isNaN(when.getTime())
+      ? ""
+      : when.toLocaleTimeString("es-PE", {
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+    const meta = harvestLoteMeta(snap);
+    const filas = snap.workers?.length || 0;
+    const total = fmt(snapshotTotal(snap));
+    if (head) {
+      head.innerHTML = `<h3>${escapeHtml(meta.full)}</h3>
+        <p>${escapeHtml(harvestTypeShort(snap.tipo))} · ${filas} persona${
+        filas === 1 ? "" : "s"
+      } · ${total} jarras${timeTxt ? ` · ${timeTxt}` : ""}</p>`;
+    }
+    if (listView) listView.hidden = true;
+    if (detailView) {
+      detailView.hidden = false;
+      detailView.removeAttribute("hidden");
+      hydrateIcons(detailView);
+    }
+  }
+
+  function openFinishedLotePick(tipo) {
+    const sheet = $("#finishedLotePick");
+    if (!sheet) return;
+    resetFinishedLotePickView();
+    const tipoKey = normalizeHarvestType(tipo || state.harvest.tipo);
+    const items = todayFinishedHarvestLotes(tipoKey);
+    if (!items.length) {
+      toast("Aún no hay lotes finalizados hoy");
+      return;
+    }
+    renderFinishedLotePickList(items);
+    sheet.hidden = false;
+    sheet.removeAttribute("hidden");
+    hydrateIcons(sheet);
+  }
+
+  function closeFinishedLotePick() {
+    const sheet = $("#finishedLotePick");
+    if (!sheet) return;
+    resetFinishedLotePickView();
+    sheet.hidden = true;
+    sheet.setAttribute("hidden", "");
+    resetViewportLayout();
+  }
+
+  function restoreFinishedHarvestLoteToEditor(snapshot) {
+    if (!snapshot) return;
+    const tipo = normalizeHarvestType(snapshot.tipo);
+    syncCurrentHarvestDraft();
+    removeFinishedHarvestLote(snapshot);
+    const bucket = harvestTypeBucket(tipo);
+    const loteDrafts = cloneLoteDraftsMap(bucket.loteDrafts);
+    const restored = cloneHarvestLoteSlice({
+      lote: snapshot.lote,
+      codLote: snapshot.codLote,
+      modulo: snapshot.modulo,
+      turno: snapshot.turno,
+      variedad: snapshot.variedad,
+      workers: snapshot.workers,
+    });
+    const loteKey = harvestLoteDraftKey(restored.lote, restored.codLote);
+    if (loteKey) loteDrafts[loteKey] = cloneHarvestLoteSlice(restored);
+    bucket.lote = restored.lote;
+    bucket.codLote = restored.codLote;
+    bucket.modulo = restored.modulo;
+    bucket.turno = restored.turno;
+    bucket.variedad = restored.variedad;
+    bucket.workers = restored.workers;
+    bucket.loteDrafts = loteDrafts;
+    state.harvest.tipo = tipo;
+    attachCurrentHarvestDraft();
+    if (
+      state.previewDraftByType &&
+      typeof state.previewDraftByType === "object"
+    ) {
+      const cached = state.previewDraftByType[tipo];
+      if (
+        cached &&
+        harvestLoteDraftKey(cached.lote, cached.codLote) === loteKey
+      ) {
+        delete state.previewDraftByType[tipo];
+      }
+    }
+    clearHarvestWorkerForm();
+    saveHarvest();
+    closeFinishedLotePick();
+    applyGuidesPanel(false);
+    renderHarvest();
+    renderHarvestDayChecklist();
+    renderHarvestFinishedCount();
+    $("#conteoPanel")?.scrollTo?.({ top: 0, behavior: "smooth" });
+    toast(`Editando lote ${snapshot.lote || snapshot.codLote || "—"}`);
+  }
+
+  function editFinishedHarvestLote(id) {
+    const snap = findFinishedHarvestLote(id);
+    if (!snap) {
+      toast("No se encontró ese lote finalizado");
+      return;
+    }
+    confirmModal(
+      "Editar lote",
+      `¿Volver a editar lote ${snap.lote || snap.codLote || "—"} en la pantalla principal?`,
+      () => restoreFinishedHarvestLoteToEditor(snap),
+      "Sí, editar"
+    );
+  }
+
+  function deleteFinishedHarvestLote(id) {
+    const snap = findFinishedHarvestLote(id);
+    if (!snap) {
+      toast("No se encontró ese lote finalizado");
+      return;
+    }
+    const meta = harvestLoteMeta(snap);
+    confirmModal(
+      "Quitar lote finalizado",
+      `¿Quitar ${meta.full} de la lista? El lote quedará libre para volver a usar.`,
+      () => {
+        removeFinishedHarvestLote(snap);
+        resetFinishedLotePickView();
+        const remaining = todayFinishedHarvestLotes(snap.tipo);
+        if (remaining.length) {
+          renderFinishedLotePickList(remaining);
+        } else {
+          closeFinishedLotePick();
+        }
+        renderHarvest();
+        renderHarvestDayChecklist();
+        toast("Lote quitado de finalizados");
+      },
+      "Sí, quitar"
+    );
+  }
+
+  function openFinishedHarvestLotePreview(id) {
+    const snap = findFinishedHarvestLote(id);
+    if (!snap) {
+      toast("No se encontró ese lote finalizado");
+      return;
+    }
+    closeFinishedLotePick();
+    const tipo = normalizeHarvestType(snap.tipo);
+    const snapshots = collectTipoExportSnapshots(tipo);
+    const list = snapshots.length ? snapshots : [snap];
+    const anchor = buildCombinedExportAnchor(tipo, list);
+    openExportPreview(anchor, {
+      snapshots: list,
+      saved: list.every(isSnapshotSaved),
+    });
+  }
+
+  function setHarvestEditorLocked(locked, note) {
     const screen = $("#harvestScreen") || $("#conteoPanel");
     if (screen) screen.classList.toggle("is-type-locked", !!locked);
     const saveBtn = $("#btnHarvestSave");
@@ -4422,8 +5812,13 @@
     });
     const lockNote = $("#harvestTypeLockNote");
     if (lockNote) {
-      lockNote.hidden = true;
-      lockNote.textContent = "";
+      if (locked && note) {
+        lockNote.hidden = false;
+        lockNote.textContent = note;
+      } else {
+        lockNote.hidden = true;
+        lockNote.textContent = "";
+      }
     }
   }
 
@@ -4457,61 +5852,148 @@
     return !!(map[snapshot.id] || (key && map[key]));
   }
 
-  function markHarvestSnapshotSent(snapshot) {
-    if (!snapshot?.id) return;
+  function markHarvestExportSent(snapshot) {
+    if (!snapshot) return;
+    const list = state.activeExportSnapshots?.length
+      ? state.activeExportSnapshots.slice()
+      : [snapshot];
     const map = loadHarvestSentMap();
-    map[snapshot.id] = new Date().toISOString();
-    const key = harvestSentKey(snapshot);
-    if (key) map[key] = map[snapshot.id];
+    const now = new Date().toISOString();
+    list.forEach((item) => {
+      if (!item?.id) return;
+      map[item.id] = now;
+      const key = harvestSentKey(item);
+      if (key) map[key] = now;
+    });
+    const tipoKey = normalizeHarvestType(snapshot.tipo || list[0]?.tipo);
+    if (tipoKey) map[harvestTypeExportKey(tipoKey)] = now;
     try {
       localStorage.setItem(HARVEST_SENT_KEY, JSON.stringify(map));
     } catch {
       /* ignore */
     }
+    finalizeHarvestTypeExport(tipoKey, list);
     renderHarvestDayChecklist();
     renderExportPreviewDayStatus();
     renderExportPreviewTypes(state.activeExportSnapshot);
+    updateExportPreviewSavedUI();
+    renderHarvest();
   }
 
-  /** Estado del día: Suma / Resta / Descarte — cuántos lotes, sin bloquear el tipo. */
+  function markHarvestSnapshotSent(snapshot) {
+    if (!snapshot?.id) return;
+    markHarvestExportSent(snapshot);
+  }
+
+  /** Tras enviar a Drive: quita borradores/finalizados del tipo (historial 48h se mantiene). */
+  function finalizeHarvestTypeExport(tipo, snapshots) {
+    const key = normalizeHarvestType(tipo);
+    const list = (snapshots || []).filter(Boolean);
+    if (!list.length) return;
+
+    list.forEach((snap) => removeFinishedHarvestLote(snap));
+
+    syncCurrentHarvestDraft();
+    const bucket = harvestTypeBucket(key);
+    const exportedKeys = new Set(
+      list
+        .map((snap) => harvestLoteDraftKey(snap.lote, snap.codLote))
+        .filter(Boolean)
+    );
+
+    const loteDrafts = cloneLoteDraftsMap(bucket.loteDrafts);
+    exportedKeys.forEach((draftKey) => {
+      delete loteDrafts[draftKey];
+    });
+    bucket.loteDrafts = loteDrafts;
+
+    if (state.previewDraftByType?.[key]) {
+      const cached = state.previewDraftByType[key];
+      const cachedKey = harvestLoteDraftKey(cached.lote, cached.codLote);
+      if (
+        !cachedKey ||
+        exportedKeys.has(cachedKey) ||
+        list.some((snap) => snap.id === cached.id)
+      ) {
+        delete state.previewDraftByType[key];
+      }
+    }
+
+    const pendingLeft = collectTipoExportSnapshots(key);
+    if (!pendingLeft.length) {
+      bucket.lote = "";
+      bucket.codLote = "";
+      bucket.modulo = "";
+      bucket.turno = "";
+      bucket.variedad = "";
+      bucket.workers = [];
+      if (state.previewDraftSnapshot) {
+        const previewKey = normalizeHarvestType(state.previewDraftSnapshot.tipo);
+        if (previewKey === key) state.previewDraftSnapshot = null;
+      }
+    }
+
+    if (normalizeHarvestType(state.harvest.tipo) === key) {
+      attachCurrentHarvestDraft();
+      clearHarvestWorkerForm();
+      document.querySelectorAll("[data-harvest-field]").forEach((input) => {
+        input.value = "";
+      });
+    }
+
+    saveHarvest();
+    renderHarvest();
+  }
+
+  function isSnapshotFinished(snapshot) {
+    if (!snapshot) return false;
+    if (snapshot.finishedAt) return true;
+    return todayFinishedHarvestLotes(snapshot.tipo).some(
+      (item) => harvestDayTypeKey(item) === harvestDayTypeKey(snapshot)
+    );
+  }
+
+  /** Estado del día: Suma / Resta / Descarte — finalizados, guardados y en curso. */
   function harvestDayTypeStatus() {
     return HARVEST_TYPES.map((item) => {
-      const snaps = todayHarvestSnapshots(item.key);
-      const snapshot = snaps[0] || null;
-      const count = snaps.length;
-      const sentCount = snaps.filter(isHarvestSnapshotSent).length;
-      const saved = count > 0;
-      const sent = saved && sentCount === count;
+      const pending = collectTipoExportSnapshots(item.key);
+      const todayAll = todayTipoHarvestSnapshots(item.key);
+      const sentToday = todayAll.filter(isHarvestSnapshotSent);
+      const exported = isHarvestTypeExportedToday(item.key);
+      const pendingCount = pending.length;
+      const sentCount = sentToday.length;
+      const saved = pendingCount > 0;
+      const sent = exported || (pendingCount === 0 && sentCount > 0);
+      const count = pendingCount || sentCount;
+      const snapshot = pending[0] || sentToday[0] || null;
       return {
         key: item.key,
         short: item.short,
         label: item.label,
         saved,
         sent,
-        locked: false,
+        locked: exported,
+        exported,
         count,
         sentCount,
+        pendingCount,
         snapshot,
       };
     });
   }
 
   function harvestMissingTypesToday() {
-    return harvestDayTypeStatus().filter((item) => !item.saved);
+    return harvestDayTypeStatus().filter((item) => !item.saved && !item.sent);
   }
 
   function harvestUnsentTypesToday() {
-    return harvestDayTypeStatus().filter(
-      (item) => item.saved && item.sentCount < item.count
-    );
+    return harvestDayTypeStatus().filter((item) => item.saved);
   }
 
   function harvestDayProgressMessage() {
     const status = harvestDayTypeStatus();
-    const missing = status.filter((s) => !s.saved).map((s) => s.short);
-    const unsent = status
-      .filter((s) => s.saved && s.sentCount < s.count)
-      .map((s) => s.short);
+    const missing = status.filter((s) => !s.saved && !s.sent).map((s) => s.short);
+    const unsent = status.filter((s) => s.saved).map((s) => s.short);
     if (!missing.length && !unsent.length) {
       return "Listo: hay Suma, Resta y Descarte. Puede seguir con más lotes.";
     }
@@ -4535,21 +6017,35 @@
         const hasDraft =
           harvestDraftHasData(harvestTypeBucket(item.key)) ||
           harvestDraftHasData(state.previewDraftByType?.[item.key]);
-        const canOpen = !!item.snapshot || hasDraft;
+        const canOpen =
+          !item.exported && ((!item.sent && !!item.snapshot) || hasDraft);
         const cls = [
           hasDraft
             ? "is-has-data"
-            : item.count > 0
-              ? "is-saved"
-              : "is-missing",
+            : item.sent
+              ? "is-sent"
+              : item.saved
+                ? "is-saved"
+                : "is-missing",
           canOpen ? "is-clickable" : "",
         ]
           .filter(Boolean)
           .join(" ");
         let label = "Sin registro";
-        if (hasDraft) label = "Con data · ver";
-        else if (item.count === 1) label = "1 lote · ver";
-        else if (item.count > 1) label = `${item.count} lotes · ver`;
+        if (hasDraft) label = "En curso · ver";
+        else if (item.sent) {
+          label =
+            item.sentCount > 1
+              ? `${item.sentCount} lotes enviados`
+              : "Enviado";
+        } else if (item.pendingCount === 1) {
+          const finishedOnly =
+            todayFinishedHarvestLotes(item.key).length === 1 &&
+            todayHarvestSnapshots(item.key).length === 0;
+          label = finishedOnly ? "1 lote finalizado · ver" : "1 lote · ver";
+        } else if (item.pendingCount > 1) {
+          label = `${item.pendingCount} lotes · ver`;
+        }
         return `<button type="button" class="hdc-item ${cls}" data-harvest-check="${escapeHtml(
           item.key
         )}" aria-label="Ver ${escapeHtml(item.short)}">
@@ -4566,7 +6062,10 @@
    */
   function openHarvestChecklistPreview(tipo) {
     const key = normalizeHarvestType(tipo);
-    // Persistir lo que hay en pantalla, pero no cambiar state.harvest.tipo
+    if (isHarvestTypeExportedToday(key)) {
+      toast(`${harvestTypeShort(key)} ya enviado hoy · un solo envío a Drive`);
+      return;
+    }
     try {
       syncCurrentHarvestDraft();
       saveHarvest();
@@ -4574,31 +6073,36 @@
       /* ignore */
     }
 
-    const snapshot =
-      previewSnapshotsMap(state.activeExportSnapshot)[key] ||
-      snapshotFromTypeDraft(key) ||
-      null;
-
-    if (!snapshot) {
+    const snapshots = collectTipoExportSnapshots(key);
+    if (!snapshots.length) {
       toast(
-        `Sin registro de ${harvestTypeShort(key)} · complete y pulse Guardar`
+        `Sin registro de ${harvestTypeShort(key)} · elija lote y agregue trabajadores`
       );
       return;
     }
 
-    // Si aún no está guardado, exige selects (lote) antes de abrir vista previa
+    const draft = snapshotFromTypeDraft(key);
     if (
-      !isSnapshotSaved(snapshot) &&
-      !validateHarvestSelectsBeforeSave(snapshot, {
-        requireWorkers: true,
-        focus: true,
-      })
+      draft &&
+      harvestDraftHasData(harvestTypeBucket(key)) &&
+      !isSnapshotSaved(draft)
     ) {
-      return;
+      if (
+        !validateHarvestSelectsBeforeSave(draft, {
+          requireWorkers: true,
+          focus: true,
+        })
+      ) {
+        return;
+      }
+      rememberPreviewDraft(draft);
     }
 
-    if (!isSnapshotSaved(snapshot)) rememberPreviewDraft(snapshot);
-    openExportPreview(snapshot, { saved: isSnapshotSaved(snapshot) });
+    const anchor = buildCombinedExportAnchor(key, snapshots);
+    openExportPreview(anchor, {
+      snapshots,
+      saved: snapshots.every(isSnapshotSaved),
+    });
   }
 
   function renderExportPreviewDayStatus() {
@@ -4606,7 +6110,13 @@
     if (!el) return;
     const snap = state.activeExportSnapshot;
     if (snap?.tipo) {
-      el.textContent = `Excel de ${harvestTypeShort(snap.tipo)}`;
+      const list = state.activeExportSnapshots?.length
+        ? state.activeExportSnapshots
+        : collectTipoExportSnapshots(snap.tipo);
+      const statusTxt = exportPreviewStatusText(list);
+      el.textContent = statusTxt
+        ? `Excel de ${harvestTypeShort(snap.tipo)} · ${statusTxt}`
+        : `Excel de ${harvestTypeShort(snap.tipo)}`;
       return;
     }
     el.textContent = harvestDayProgressMessage();
@@ -4660,6 +6170,27 @@
     }
   }
 
+  function harvestLoteMeta(target) {
+    const loteNum = String(target?.lote || "").trim();
+    const codLote = String(target?.codLote || "").trim();
+    const fromCatalog = loteNum ? findLote(loteNum) : null;
+    const modulo = String(target?.modulo || fromCatalog?.modulo || "").trim();
+    const turno = String(target?.turno || fromCatalog?.turno || "")
+      .trim()
+      .replace(/^T/i, "");
+    const lote = loteNum || codLote || "—";
+    const moduloTxt = modulo || "—";
+    const turnoTxt = turno || "—";
+    return {
+      lote,
+      modulo: moduloTxt,
+      turno: turnoTxt,
+      title: `Lote ${lote}`,
+      subtitle: `${moduloTxt} · T${turnoTxt}`,
+      full: `Lote ${lote} · ${moduloTxt} · T${turnoTxt}`,
+    };
+  }
+
   function populateHarvestLotes() {
     const input = $("#harvestLote");
     const label = $("#harvestLoteLabel");
@@ -4667,10 +6198,14 @@
     if (input) input.value = selected;
     if (!label) return;
     if (selected) {
-      const lote = findLote(selected);
-      label.textContent = lote
-        ? `Lote ${lote.lote} · ${lote.modulo || "—"} · T${lote.turno || "—"}`
-        : `Lote ${selected}`;
+      const meta = harvestLoteMeta(
+        findLote(selected) || {
+          lote: selected,
+          modulo: state.harvest.modulo,
+          turno: state.harvest.turno,
+        }
+      );
+      label.textContent = meta.full;
       label.classList.remove("ph");
     } else {
       label.textContent = "Seleccionar lote";
@@ -4682,16 +6217,25 @@
     const root = $("#harvestWorkers");
     if (!root) return;
     const workers = state.harvest.workers || [];
+    const query = harvestTableSearchQuery();
     if (!workers.length) {
       root.innerHTML = `<div class="harvest-empty">${ico("users")}Agregue trabajadores para ${harvestTypeShort(state.harvest.tipo)}.</div>`;
     } else {
-      root.innerHTML = workers
-        .map((w, index) => {
-          const manana = num(w.manana);
-          const tarde = num(w.tarde);
-          const total = manana + tarde;
-          return `
-            <article class="harvest-worker-row" data-worker-id="${w.id}">
+      const visible = workers.filter((worker) =>
+        workerMatchesTableSearch(worker, query)
+      );
+      if (query && !visible.length) {
+        root.innerHTML =
+          '<div class="harvest-empty">No hay coincidencias en esta lista.</div>';
+      } else {
+        root.innerHTML = workers
+          .map((w, index) => {
+            if (query && !workerMatchesTableSearch(w, query)) return "";
+            const manana = num(w.manana);
+            const tarde = num(w.tarde);
+            const total = manana + tarde;
+            return `
+            <article class="harvest-worker-row" data-worker-id="${w.id}" data-worker-dni="${escapeHtml(w.dni)}">
               <button type="button" class="harvest-worker-person" data-worker-id-open aria-label="Ver nombre completo">
                 <strong>${index + 1}. ${escapeHtml(w.nombre || "SIN NOMBRE")}</strong>
                 <span>DNI ${escapeHtml(w.dni)}</span>
@@ -4701,28 +6245,35 @@
               <strong class="harvest-worker-total">${fmt(total)}</strong>
               <button type="button" class="harvest-worker-remove" data-harvest-remove aria-label="Quitar trabajador">${ico("x")}</button>
             </article>`;
-        })
-        .join("");
+          })
+          .filter(Boolean)
+          .join("");
+      }
     }
     if ($("#harvestWorkerCount")) {
-      $("#harvestWorkerCount").textContent = String(workers.length);
+      const total = workers.length;
+      const shown = query
+        ? workers.filter((worker) => workerMatchesTableSearch(worker, query))
+            .length
+        : total;
+      $("#harvestWorkerCount").textContent = query
+        ? `${shown}/${total}`
+        : String(total);
     }
+    updateHarvestTableSearchMeta(workers, query);
     if ($("#harvestGrandTotal")) {
       $("#harvestGrandTotal").textContent = fmt(harvestTotal());
     }
   }
 
   function renderHarvest() {
+    syncAppDayRollover({ silent: true });
     const identity = state.identity || getIdentity() || {};
     paintGreeting("#harvestSupervisor", identity);
     if ($("#harvestDate")) {
-      $("#harvestDate").textContent = new Date(
-        `${state.harvest.fecha || todayISO()}T12:00:00`
-      ).toLocaleDateString("es-PE", {
-        weekday: "long",
-        day: "2-digit",
-        month: "long",
-      });
+      $("#harvestDate").textContent = formatDateLabelPE(
+        state.harvest.fecha || todayISO()
+      );
     }
     populateHarvestLotes();
     renderHarvestType();
@@ -4731,9 +6282,22 @@
     if ($("#harvestVariedad")) $("#harvestVariedad").textContent = state.harvest.variedad || "—";
     renderHarvestWorkers();
     renderHarvestDayChecklist();
-    setHarvestEditorLocked(false);
+    renderHarvestFinishedCount();
+    const exported = isHarvestTypeExportedToday(state.harvest.tipo);
+    setHarvestEditorLocked(
+      exported,
+      exported
+        ? `${harvestTypeShort(state.harvest.tipo)} ya enviado hoy · un solo envío a Drive`
+        : ""
+    );
+    const typeBtn = $("#btnHarvestType");
+    if (typeBtn) typeBtn.classList.toggle("is-type-sent", exported);
     hydrateIcons($("#harvestScreen"));
+    hydrateIcons($("#harvestTableSearchWrap"));
     updateNetworkUI();
+    if (isExportPreviewOpen()) {
+      refreshExportPreviewContent();
+    }
   }
 
   function openProfileModal() {
@@ -4810,20 +6374,59 @@
 
   /** Lee inputs visibles de guías por si el SO cerró sin blur. */
   function syncGuidesFromDom() {
-    if (!state.guias?.length) return;
-    $$("#cards .guides-card").forEach((article) => {
-      const guia = findGuia(article.dataset.id);
-      if (!guia) return;
-      const ng = article.querySelector('[data-field="numeroGuia"]');
-      if (ng) guia.numeroGuia = normalizeNumeroGuia(ng.value);
-      const hr = article.querySelector('[data-field="horaRecojo"]');
-      if (hr) guia.horaRecojo = String(hr.value || "").trim();
-      // Fundo por guía (botón data-pick=fundo)
-      const ja = article.querySelector('[data-field="jarras"]');
-      const jb = article.querySelector('[data-field="jabas"]');
-      if (ja) guia.jarras = num(ja.value);
-      if (jb) guia.jabas = num(jb.value);
-    });
+    if (state.guias?.length) {
+      $$("#cards .guides-card").forEach((article) => {
+        const guia = findGuia(article.dataset.id);
+        if (!guia) return;
+        const ng = article.querySelector('[data-field="numeroGuia"]');
+        if (ng) guia.numeroGuia = normalizeNumeroGuia(ng.value);
+        const hr = article.querySelector('[data-field="horaRecojo"]');
+        if (hr) guia.horaRecojo = String(hr.value || "").trim();
+        const ja = article.querySelector('[data-field="jarras"]');
+        const jb = article.querySelector('[data-field="jabas"]');
+        if (ja) guia.jarras = num(ja.value);
+        if (jb) guia.jabas = num(jb.value);
+      });
+    }
+    syncGuidesExtrasFromDom();
+  }
+
+  /** R. manual y descarte/deshidratado: lee DOM antes de guardar en celular. */
+  function syncGuidesExtrasFromDom() {
+    const ajusteInput = $("#guidesAjusteInput");
+    if (ajusteInput) {
+      setGuidesAjuste(String(ajusteInput.value || "").replace(/\D/g, ""), {
+        skipSave: true,
+      });
+    }
+    const jabasInput = $("#guidesDescarteJabasInput");
+    const jarrasInput = $("#guidesDescarteJarrasInput");
+    const jabasRaw = jabasInput
+      ? String(jabasInput.value || "").replace(/\D/g, "")
+      : null;
+    const jarrasRaw = jarrasInput
+      ? String(jarrasInput.value || "").replace(/\D/g, "")
+      : null;
+    if (jabasRaw !== null && jabasRaw !== "") {
+      setGuidesDescarteJabas(jabasRaw, { skipSave: true });
+    } else if (jarrasRaw !== null) {
+      setGuidesDescarteJarras(jarrasRaw, { skipSave: true });
+    }
+  }
+
+  /** Tras guardar/enviar guías: limpia R. manual y descarte (pantalla vacía). */
+  function clearGuidesExtrasAfterSave() {
+    state.session.ajusteJarras = 0;
+    state.session.aumentoJarras = 0;
+    state.session.descuentoJarras = 0;
+    state.session.descarteJarras = 0;
+    state.session.descarteJabas = 0;
+    const ajusteInput = $("#guidesAjusteInput");
+    const jabasInput = $("#guidesDescarteJabasInput");
+    const jarrasInput = $("#guidesDescarteJarrasInput");
+    if (ajusteInput) ajusteInput.value = "";
+    if (jabasInput) jabasInput.value = "";
+    if (jarrasInput) jarrasInput.value = "";
   }
 
   /** Lee jarras mañana/tarde visibles del registro de cosecha. */
@@ -4867,6 +6470,7 @@
     const flush = () => persistAllLocalDrafts();
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "hidden") flush();
+      else syncAppDayRollover({ silent: true });
     });
     window.addEventListener("pagehide", flush);
     window.addEventListener("beforeunload", flush);
@@ -4919,6 +6523,15 @@
   function applyGuidesPanel(open) {
     const screen = $("#harvestScreen");
     const sheet = $("#guidesSheet");
+    const onRegistro = getPage() === "registro" && !!screen;
+
+    if (sheet && !onRegistro) {
+      sheet.classList.remove("is-active");
+      sheet.setAttribute("aria-hidden", "true");
+      sheet.hidden = true;
+      return;
+    }
+
     const conteo = $("#conteoPanel") || $(".harvest-scroll");
     const harvestDate = $("#harvestDate");
     const harvestHeadSmall = $(".harvest-head .harvest-user small");
@@ -5011,7 +6624,7 @@
     return n > 0 ? n : 0;
   }
 
-  function setGuidesAjuste(raw) {
+  function setGuidesAjuste(raw, opts = {}) {
     const digits = String(raw ?? "")
       .replace(/\D/g, "")
       .replace(/^0+(?=\d)/, "");
@@ -5019,7 +6632,7 @@
     state.session.ajusteJarras = n > 0 ? n : 0;
     state.session.aumentoJarras = 0;
     state.session.descuentoJarras = 0;
-    saveStore();
+    if (!opts.skipSave) saveStore();
     syncGuidesAjusteInput();
   }
 
@@ -5030,6 +6643,59 @@
     const focused = document.activeElement === input;
     if (focused) return;
     input.value = n > 0 ? String(n) : "";
+  }
+
+  function currentGuidesDescarteJarras() {
+    const n = num(state.session.descarteJarras);
+    return n > 0 ? n : 0;
+  }
+
+  function currentGuidesDescarteJabas() {
+    const n = num(state.session.descarteJabas);
+    return n > 0 ? n : 0;
+  }
+
+  function setGuidesDescarteJabas(raw, opts = {}) {
+    const digits = String(raw ?? "")
+      .replace(/\D/g, "")
+      .replace(/^0+(?=\d)/, "");
+    const n = digits === "" ? 0 : num(digits);
+    state.session.descarteJabas = n > 0 ? n : 0;
+    if (n > 0) {
+      state.session.descarteJarras = n * JARRAS_POR_JABA;
+    } else {
+      state.session.descarteJarras = 0;
+    }
+    if (!opts.skipSave) saveStore();
+    syncGuidesDescarteInputs();
+  }
+
+  function setGuidesDescarteJarras(raw, opts = {}) {
+    const digits = String(raw ?? "")
+      .replace(/\D/g, "")
+      .replace(/^0+(?=\d)/, "");
+    const n = digits === "" ? 0 : num(digits);
+    state.session.descarteJarras = n > 0 ? n : 0;
+    if (!opts.skipSave) saveStore();
+    syncGuidesDescarteInputs();
+  }
+
+  function syncGuidesDescarteInputs() {
+    const jabasInput = $("#guidesDescarteJabasInput");
+    const jarrasInput = $("#guidesDescarteJarrasInput");
+    const jabas = currentGuidesDescarteJabas();
+    const jarras = currentGuidesDescarteJarras();
+    if (jabasInput && document.activeElement !== jabasInput) {
+      jabasInput.value = jabas > 0 ? String(jabas) : "";
+    }
+    if (jarrasInput && document.activeElement !== jarrasInput) {
+      jarrasInput.value = jarras > 0 ? String(jarras) : "";
+    }
+  }
+
+  /** @deprecated alias */
+  function currentGuidesDescarte() {
+    return currentGuidesDescarteJarras();
   }
 
   function explainGuidesAjuste() {
@@ -5072,6 +6738,7 @@
     const fechaTxt = (s.fecha || todayISO()).split("-").reverse().join("/");
     renderGuidesLicLabel();
     syncGuidesAjusteInput();
+    syncGuidesDescarteInputs();
     if ($("#guidesFecha")) $("#guidesFecha").textContent = fechaTxt;
     if ($("#guidesSupervisor")) {
       const nom = s.supervisorNombre || "Supervisor";
@@ -5147,6 +6814,7 @@
     if (!modal || !card) return;
     renderGuidesSummaryCard();
     modal.hidden = false;
+    preloadExcelVendor();
     hydrateIcons(modal);
   }
 
@@ -5270,18 +6938,22 @@
     t0.guias = cantidadGuias > 0 ? cantidadGuias : guias.length;
     t0.cantidadGuias = t0.guias;
     const ajusteJarras = currentGuidesAjuste();
+    const descarteJarras = currentGuidesDescarteJarras();
+    const descarteJabas = currentGuidesDescarteJabas();
     const id = guiasCloudQueueId(fecha, supervisorDni, fundo);
     const savedAt = new Date().toISOString();
     return {
       id,
       /** Identifica este envío (anti doble-POST); distinto si vuelve a guardar */
-      sendId: `${id}|${savedAt}|${t0.jarras}|${t0.jabas}|${t0.guias}|${ajusteJarras}`,
+      sendId: `${id}|${savedAt}|${t0.jarras}|${t0.jabas}|${t0.guias}|${ajusteJarras}|${descarteJarras}|${descarteJabas}`,
       savedAt,
       horaGuardado: savedAt,
       fecha,
       fundo,
       grupoLic,
       ajusteJarras,
+      descarteJarras,
+      descarteJabas,
       securityCode: supervisorDni,
       supervisorDni,
       supervisorNombre,
@@ -5294,6 +6966,8 @@
         fundo,
         grupoLic,
         ajusteJarras,
+        descarteJarras,
+        descarteJabas,
         supervisorDni,
         supervisorNombre,
       },
@@ -5304,6 +6978,8 @@
         jarras: t0.jarras,
         jabas: t0.jabas,
         ajusteJarras,
+        descarteJarras,
+        descarteJabas,
       },
     };
   }
@@ -5311,6 +6987,8 @@
   /** Encola cada guardado por separado (no pisa otro pendiente). */
   function queueGuiasForCloud(payload) {
     if (!payload?.id) return false;
+    const sendId = guiasSendIdFromPayload(payload);
+    if (sendId && isGuiasSendAcknowledged(sendId)) return true;
     enqueueCloudData(
       "registrarGuias",
       payload,
@@ -5337,10 +7015,25 @@
   function flushGuiasInBackground() {
     flushCloudDataQueue()
       .then((result) => {
-        if (result?.sent > 0 && result.remain === 0) {
-          toast("Guías subidas al servidor");
-        } else if (result?.remain > 0 && navigator.onLine) {
-          toast("Guías pendientes · se reintentará solo");
+        const guiasPending = loadCloudDataQueue().filter((item) =>
+          isGuiasCloudAction(item.action)
+        ).length;
+        if (result?.sent > 0 && guiasPending === 0) {
+          toast("Guías enviadas al servidor");
+        }
+        if ((result?.sent || 0) > 0 && getPage() === "vinculo") {
+          refreshVinGuiasFeed({ force: true }).catch(() => {});
+        } else if (guiasPending > 0 && navigator.onLine) {
+          const stuck = loadCloudDataQueue().some(
+            (item) =>
+              isGuiasCloudAction(item.action) &&
+              (item.attempts || 0) >= MAX_CLOUD_QUEUE_ATTEMPTS
+          );
+          toast(
+            stuck
+              ? "Guías con error · revise internet y guarde de nuevo"
+              : "Guías pendientes · se reintentará solo"
+          );
         } else if (!navigator.onLine) {
           toast("Sin internet · guías pendientes de subir");
         }
@@ -5390,11 +7083,8 @@
     state.expandedGuiaId = state.guias[0].id;
     // Pedir LIC de nuevo en el próximo registro
     state.session.grupoLic = "";
-    state.session.ajusteJarras = 0;
-    state.session.aumentoJarras = 0;
-    state.session.descuentoJarras = 0;
+    clearGuidesExtrasAfterSave();
     renderGuidesLicLabel();
-    syncGuidesAjusteInput();
     saveStore();
 
     closeGuidesSummary();
@@ -5447,6 +7137,8 @@
         num(g.jabas)
     );
     const fundosTxt = displayFundosSummary(rows) || "—";
+    const descarteJarras = currentGuidesDescarteJarras();
+    const descarteJabas = currentGuidesDescarteJabas();
     const tableRows = rows.length
       ? rows
           .map((g, idx) => {
@@ -5501,6 +7193,14 @@
           <span>TOTAL · ${rows.length} guía${rows.length === 1 ? "" : "s"}</span>
           <strong>${fmt(t.jarras)} jarras · ${fmt(t.jabas)} jabas</strong>
         </footer>
+        ${
+          descarteJarras > 0 || descarteJabas > 0
+            ? `<div class="gs-paper-descarte">
+          <span>DESCARTE / DESHIDRATADO</span>
+          <strong>${fmt(descarteJarras)} jarras · ${fmt(descarteJabas)} jabas</strong>
+        </div>`
+            : ""
+        }
       </div>`;
   }
 
@@ -5631,12 +7331,23 @@
     const id = state.identity || getIdentity() || {};
     const h = state.harvest;
     const tipo = normalizeHarvestType(h.tipo);
-    const prev = state.previewDraftByType?.[tipo];
-    const existing = todayReadySnapshots().find(
-      (snap) => normalizeHarvestType(snap.tipo) === tipo
+    const loteKey = harvestDayTypeKey({
+      fecha: h.fecha || todayISO(),
+      tipo,
+      lote: h.lote,
+      codLote: h.codLote,
+      supervisorDni: id.dni || "",
+    });
+    const existing = todayTipoHarvestSnapshots(tipo).find(
+      (snap) => harvestDayTypeKey(snap) === loteKey
     );
+    const prev = state.previewDraftByType?.[tipo];
+    const prevMatchesLote =
+      prev &&
+      harvestLoteDraftKey(prev.lote, prev.codLote) ===
+        harvestLoteDraftKey(h.lote, h.codLote);
     return {
-      id: existing?.id || prev?.id || uid(),
+      id: existing?.id || (prevMatchesLote ? prev.id : null) || uid(),
       savedAt: new Date().toISOString(),
       fecha: h.fecha || todayISO(),
       tipo,
@@ -5656,18 +7367,101 @@
     };
   }
 
-  /** ¿El borrador de un tipo tiene datos? Lote elegido o trabajador en la tabla. */
+  function harvestLoteSliceWorkerTotal(slice) {
+    return (slice?.workers || []).reduce(
+      (sum, w) => sum + num(w.manana) + num(w.tarde),
+      0
+    );
+  }
+
+  /** Lote con trabajadores y jarras > 0 — listo para Excel aunque no esté finalizado. */
+  function harvestLoteSliceHasExportData(slice) {
+    if (!slice || typeof slice !== "object") return false;
+    const lote = String(slice.lote || slice.codLote || "").trim();
+    if (!lote) return false;
+    const workers = (slice.workers || []).filter((w) => {
+      if (!w || typeof w !== "object") return false;
+      const hasDni = String(w.dni || "").replace(/\D/g, "").length > 0;
+      const hasName = String(w.nombre || "").trim().length > 0;
+      return hasDni || hasName;
+    });
+    if (!workers.length) return false;
+    return harvestLoteSliceWorkerTotal(slice) > 0;
+  }
+
+  /** ¿El borrador de un tipo tiene datos exportables? Incluye lotes en caché local. */
   function harvestDraftHasData(draft) {
     if (!draft || typeof draft !== "object") return false;
-    if (String(draft.lote || "").trim()) return true;
-    if (String(draft.codLote || "").trim()) return true;
-    return (draft.workers || []).some((w) => {
-      if (!w || typeof w !== "object") return false;
-      if (String(w.dni || "").replace(/\D/g, "").length > 0) return true;
-      if (String(w.nombre || "").trim()) return true;
-      if (num(w.manana) > 0 || num(w.tarde) > 0) return true;
-      return false;
+    const slices = [cloneHarvestLoteSlice(draft)];
+    const loteDrafts =
+      draft.loteDrafts && typeof draft.loteDrafts === "object"
+        ? draft.loteDrafts
+        : {};
+    Object.values(loteDrafts).forEach((slice) => {
+      slices.push(cloneHarvestLoteSlice(slice));
     });
+    return slices.some(harvestLoteSliceHasExportData);
+  }
+
+  function harvestTypeDraftSlices(tipo) {
+    syncCurrentHarvestDraft();
+    const bucket = harvestTypeBucket(tipo);
+    const map = new Map();
+    const current = cloneHarvestLoteSlice(bucket);
+    const currentKey = harvestLoteDraftKey(current.lote, current.codLote);
+    if (currentKey) map.set(currentKey, current);
+    const loteDrafts =
+      bucket.loteDrafts && typeof bucket.loteDrafts === "object"
+        ? bucket.loteDrafts
+        : {};
+    Object.entries(loteDrafts).forEach(([key, slice]) => {
+      const draftKey = String(key || "").trim().toUpperCase();
+      if (!draftKey) return;
+      map.set(draftKey, cloneHarvestLoteSlice(slice));
+    });
+    return Array.from(map.values());
+  }
+
+  function snapshotFromHarvestSlice(tipo, slice) {
+    if (!harvestLoteSliceHasExportData(slice)) return null;
+    const key = normalizeHarvestType(tipo);
+    const id = state.identity || getIdentity() || {};
+    const fecha = state.harvest.fecha || todayISO();
+    const loteKey = harvestDayTypeKey({
+      fecha,
+      tipo: key,
+      lote: slice.lote,
+      codLote: slice.codLote,
+      supervisorDni: id.dni || "",
+    });
+    const existing = todayTipoHarvestSnapshots(key).find(
+      (snap) => harvestDayTypeKey(snap) === loteKey
+    );
+    return {
+      id: existing?.id || uid(),
+      savedAt: existing?.savedAt || new Date().toISOString(),
+      fecha,
+      tipo: key,
+      lote: slice.lote || "",
+      codLote: slice.codLote || "",
+      modulo: slice.modulo || "",
+      turno: slice.turno || "",
+      variedad: slice.variedad || "",
+      supervisor: id.nombre || "SUPERVISOR",
+      supervisorDni: id.dni || "",
+      workers: (slice.workers || []).map((w) => ({
+        dni: w.dni,
+        nombre: w.nombre,
+        manana: num(w.manana),
+        tarde: num(w.tarde),
+      })),
+    };
+  }
+
+  function collectTipoDraftSnapshots(tipo) {
+    return harvestTypeDraftSlices(tipo)
+      .map((slice) => snapshotFromHarvestSlice(tipo, slice))
+      .filter(Boolean);
   }
 
   /**
@@ -5675,35 +7469,19 @@
    * sin perder lo ingresado al cambiar de pestaña o abrir el modal.
    */
   function snapshotFromTypeDraft(tipo) {
+    const drafts = collectTipoDraftSnapshots(tipo);
+    if (!drafts.length) return null;
     syncCurrentHarvestDraft();
-    const key = normalizeHarvestType(tipo);
-    const bucket = harvestTypeBucket(key);
-    if (!harvestDraftHasData(bucket)) return null;
-    const id = state.identity || getIdentity() || {};
+    const bucket = harvestTypeBucket(normalizeHarvestType(tipo));
+    const activeKey = harvestLoteDraftKey(bucket.lote, bucket.codLote);
+    const snapshot =
+      drafts.find(
+        (item) => harvestLoteDraftKey(item.lote, item.codLote) === activeKey
+      ) || drafts[drafts.length - 1];
     if (!state.previewDraftByType || typeof state.previewDraftByType !== "object") {
       state.previewDraftByType = {};
     }
-    const prev = state.previewDraftByType[key];
-    const snapshot = {
-      id: prev?.id || uid(),
-      savedAt: prev?.savedAt || new Date().toISOString(),
-      fecha: state.harvest.fecha || todayISO(),
-      tipo: key,
-      lote: bucket.lote || "",
-      codLote: bucket.codLote || "",
-      modulo: bucket.modulo || "",
-      turno: bucket.turno || "",
-      variedad: bucket.variedad || "",
-      supervisor: id.nombre || "SUPERVISOR",
-      supervisorDni: id.dni || "",
-      workers: (bucket.workers || []).map((w) => ({
-        dni: w.dni,
-        nombre: w.nombre,
-        manana: num(w.manana),
-        tarde: num(w.tarde),
-      })),
-    };
-    state.previewDraftByType[key] = snapshot;
+    state.previewDraftByType[normalizeHarvestType(tipo)] = snapshot;
     return snapshot;
   }
 
@@ -5725,6 +7503,7 @@
   }
 
   function buildHarvestSyncPayload(snapshot) {
+    const loteCode = harvestLoteCode(snapshot);
     return {
       localId: snapshot.id,
       id: snapshot.id,
@@ -5733,7 +7512,8 @@
       tipo: harvestTypeLabel(snapshot.tipo).toUpperCase(),
       observacion: harvestTypeObservacion(snapshot.tipo),
       totalGeneral: snapshotTotal(snapshot),
-      lote: harvestLoteCode(snapshot),
+      lote: loteCode,
+      codLote: snapshot.codLote || "",
       variedad: snapshot.variedad || "",
       supervisorDni: String(snapshot.supervisorDni || "").replace(/\D/g, ""),
       supervisorNombre: String(snapshot.supervisor || "").trim().toUpperCase(),
@@ -5743,8 +7523,84 @@
         manana: num(worker.manana),
         tarde: num(worker.tarde),
         total: num(worker.manana) + num(worker.tarde),
+        lote: loteCode,
+        codLote: snapshot.codLote || "",
       })),
     };
+  }
+
+  /** Varios lotes del mismo tipo → un solo envío a DATA-MANUAL + detalle por lote. */
+  function buildCombinedHarvestSyncPayload(snapshots) {
+    const list = (snapshots || []).filter(Boolean);
+    if (!list.length) return null;
+    if (list.length === 1) return buildHarvestSyncPayload(list[0]);
+
+    const tipo = normalizeHarvestType(list[0].tipo);
+    const anchor = buildCombinedExportAnchor(tipo, list);
+    const lotes = [];
+    const workers = [];
+
+    list.forEach((snap) => {
+      const loteCode = harvestLoteCode(snap);
+      if (loteCode && !lotes.includes(loteCode)) lotes.push(loteCode);
+      (snap.workers || []).forEach((worker) => {
+        workers.push({
+          dni: String(worker.dni || "").replace(/\D/g, ""),
+          nombre: String(worker.nombre || "").trim().toUpperCase(),
+          manana: num(worker.manana),
+          tarde: num(worker.tarde),
+          total: num(worker.manana) + num(worker.tarde),
+          lote: loteCode,
+          codLote: snap.codLote || "",
+        });
+      });
+    });
+
+    const first = list[0];
+    return {
+      localId: anchor.id,
+      id: anchor.id,
+      fecha: first.fecha || todayISO(),
+      horaGuardado: new Date().toISOString(),
+      tipo: harvestTypeLabel(tipo).toUpperCase(),
+      observacion: harvestTypeObservacion(tipo),
+      totalGeneral: list.reduce((sum, snap) => sum + snapshotTotal(snap), 0),
+      lote: lotes.join(", "),
+      codLote: "",
+      lotes,
+      variedad: first.variedad || "",
+      supervisorDni: String(first.supervisorDni || "").replace(/\D/g, ""),
+      supervisorNombre: String(first.supervisor || "").trim().toUpperCase(),
+      combined: true,
+      workers,
+    };
+  }
+
+  function removeHarvestCloudQueueItems(ids) {
+    const idSet = new Set((ids || []).map((id) => String(id)));
+    if (!idSet.size) return;
+    const next = loadCloudDataQueue().filter((item) => {
+      if (item.action !== "registrarCosecha") return true;
+      const itemId = String(item.id || item.data?.id || item.data?.localId || "");
+      return !idSet.has(itemId);
+    });
+    saveCloudDataQueue(next);
+  }
+
+  function enqueueHarvestCloudSync(snapshots) {
+    const list = (snapshots || []).filter(Boolean);
+    if (!list.length) return;
+    removeHarvestCloudQueueItems(list.map((snap) => snap.id));
+    if (list.length > 1) {
+      const payload = buildCombinedHarvestSyncPayload(list);
+      if (payload) enqueueCloudData("registrarCosecha", payload, payload.id);
+      return;
+    }
+    enqueueCloudData(
+      "registrarCosecha",
+      buildHarvestSyncPayload(list[0]),
+      list[0].id
+    );
   }
 
   function harvestLoteCode(snapshot) {
@@ -5760,9 +7616,196 @@
     return parts.join("-");
   }
 
+  function snapshotHasExportData(snapshot) {
+    if (!snapshot || typeof snapshot !== "object") return false;
+    const workers = (snapshot.workers || []).filter((w) => {
+      const dni = String(w?.dni || "").replace(/\D/g, "");
+      const nombre = String(w?.nombre || "").trim();
+      return dni.length > 0 || nombre.length > 0;
+    });
+    if (!workers.length) return false;
+    return snapshotTotal(snapshot) > 0;
+  }
+
+  function snapshotWorkerDnis(snapshot) {
+    return new Set(
+      (snapshot?.workers || [])
+        .map((w) => String(w?.dni || "").replace(/\D/g, ""))
+        .filter((dni) => dni.length === 8)
+    );
+  }
+
+  /** Quita un lote erróneo de finalizados, historial y borradores. */
+  function purgeHarvestLoteRecord(tipo, loteKey) {
+    if (!loteKey) return false;
+    const tipoKey = normalizeHarvestType(tipo);
+    let changed = false;
+
+    const nextFinished = loadFinishedHarvestLotes().filter((item) => {
+      if (normalizeHarvestType(item.tipo) !== tipoKey) return true;
+      if (item.fecha !== todayISO()) return true;
+      if (!harvestLoteMatchesKey(item, loteKey)) return true;
+      changed = true;
+      return false;
+    });
+    if (changed) saveFinishedHarvestLotes(nextFinished);
+
+    const history = loadHarvestHistory();
+    const nextHistory = history.filter((item) => {
+      if (normalizeHarvestType(item.tipo) !== tipoKey) return true;
+      if (item.fecha !== todayISO()) return true;
+      if (!harvestLoteMatchesKey(item, loteKey)) return true;
+      changed = true;
+      return false;
+    });
+    if (nextHistory.length !== history.length) {
+      try {
+        localStorage.setItem(HARVEST_HISTORY_KEY, JSON.stringify(nextHistory));
+      } catch {
+        /* ignore */
+      }
+    }
+
+    const bucket = harvestTypeBucket(tipoKey);
+    const draftKey = String(loteKey || "").trim().toUpperCase();
+    if (draftKey && bucket.loteDrafts?.[draftKey]) {
+      delete bucket.loteDrafts[draftKey];
+      changed = true;
+    }
+    if (changed) saveHarvest();
+    return changed;
+  }
+
+  /** Lote de prueba/corrección: mismo personal ya está en otro lote activo. */
+  function isMistakeHarvestSnapshot(snapshot, others) {
+    if (!snapshot || isSnapshotFinished(snapshot)) return false;
+    const loteKey = harvestLoteDraftKey(snapshot.lote, snapshot.codLote);
+    const dnis = snapshotWorkerDnis(snapshot);
+    if (!dnis.size) return true;
+    return (others || []).some((other) => {
+      const otherKey = harvestLoteDraftKey(other.lote, other.codLote);
+      if (!otherKey || otherKey === loteKey) return false;
+      if (!snapshotHasExportData(other)) return false;
+      const otherDnis = snapshotWorkerDnis(other);
+      if (!otherDnis.size) return false;
+      for (const dni of dnis) {
+        if (!otherDnis.has(dni)) return false;
+      }
+      return otherDnis.size >= dnis.size;
+    });
+  }
+
+  function pruneHarvestDraftDuplicates(tipo) {
+    const key = normalizeHarvestType(tipo);
+    const bucket = harvestTypeBucket(key);
+    const finishedKeys = new Set(
+      todayFinishedHarvestLotes(key).map((snap) =>
+        harvestLoteDraftKey(snap.lote, snap.codLote)
+      )
+    );
+    const loteDrafts = cloneLoteDraftsMap(bucket.loteDrafts);
+    let changed = false;
+    Object.keys(loteDrafts).forEach((draftKey) => {
+      if (finishedKeys.has(draftKey)) {
+        delete loteDrafts[draftKey];
+        changed = true;
+      }
+    });
+    if (changed) {
+      bucket.loteDrafts = loteDrafts;
+      saveHarvest();
+    }
+  }
+
+  function harvestLoteSortKey(snapshot) {
+    const n = parseInt(String(snapshot?.lote || "").replace(/\D/g, ""), 10);
+    return Number.isFinite(n) ? n : 9999;
+  }
+
+  /** Todos los lotes del tipo para un solo Excel (finalizados + en curso + historial válido). */
+  function collectTipoExportSnapshots(tipo) {
+    const key = normalizeHarvestType(tipo);
+    syncCurrentHarvestDraft();
+    pruneHarvestDraftDuplicates(key);
+    const map = new Map();
+
+    todayFinishedHarvestLotes(key).forEach((snap) => {
+      if (!snapshotHasExportData(snap)) return;
+      map.set(harvestDayTypeKey(snap), snap);
+    });
+
+    collectTipoDraftSnapshots(key).forEach((draft) => {
+      const draftKey = harvestDayTypeKey(draft);
+      const existing = map.get(draftKey);
+      if (!existing) {
+        map.set(draftKey, draft);
+        return;
+      }
+      if (isSnapshotFinished(existing)) return;
+      map.set(draftKey, draft);
+    });
+
+    const active = Array.from(map.values());
+    todayHarvestSnapshots(key).forEach((snap) => {
+      if (!snapshotHasExportData(snap)) return;
+      const snapKey = harvestDayTypeKey(snap);
+      if (map.has(snapKey)) return;
+      if (isMistakeHarvestSnapshot(snap, active)) {
+        purgeHarvestLoteRecord(
+          key,
+          harvestLoteDraftKey(snap.lote, snap.codLote)
+        );
+        return;
+      }
+      map.set(snapKey, snap);
+      active.push(snap);
+    });
+
+    return Array.from(map.values())
+      .filter(snapshotHasExportData)
+      .filter((snap) => !isHarvestSnapshotSent(snap))
+      .sort((a, b) => harvestLoteSortKey(a) - harvestLoteSortKey(b));
+  }
+
+  function buildCombinedExportAnchor(tipo, snapshots) {
+    const id = state.identity || getIdentity() || {};
+    const fecha = snapshots[0]?.fecha || todayISO();
+    const lotes = snapshots
+      .map((snap) => String(snap.lote || snap.codLote || "").trim())
+      .filter(Boolean);
+    const workers = snapshots.reduce(
+      (sum, snap) => sum + (snap.workers?.length || 0),
+      0
+    );
+    return {
+      id: `combined-${normalizeHarvestType(tipo)}-${fecha}-${lotes.join("-")}`,
+      tipo: normalizeHarvestType(tipo),
+      fecha,
+      lote: lotes.length === 1 ? lotes[0] : `${lotes.length} lotes`,
+      codLote: lotes.length === 1 ? snapshots[0]?.codLote || "" : "",
+      modulo: "",
+      turno: "",
+      variedad: snapshots[0]?.variedad || "",
+      supervisor:
+        id.nombre || snapshots[0]?.supervisor || identityFullName() || "SUPERVISOR",
+      supervisorDni: id.dni || snapshots[0]?.supervisorDni || "",
+      workers: new Array(workers).fill(null),
+      savedAt: snapshots[0]?.savedAt || new Date().toISOString(),
+      combined: true,
+      lotes,
+    };
+  }
+
+  function harvestExcelDate(fecha) {
+    const [y, m, d] = String(fecha || todayISO()).split("-");
+    if (!y || !m || !d) return "";
+    return `${Number(d)}/${m}/${y}`;
+  }
+
   function harvestExcelRows(snapshot) {
     const lote = harvestLoteCode(snapshot);
     const observacion = harvestTypeObservacion(snapshot.tipo);
+    const fecha = harvestExcelDate(snapshot.fecha);
     return (snapshot.workers || []).map((w, index) => ({
       DNI: w.dni,
       "NOMBRES Y APELLIDOS": w.nombre,
@@ -5773,7 +7816,73 @@
       VARIEDAD: snapshot.variedad || "",
       OBSERVACION: observacion,
       SUPERVISOR: index === 0 ? snapshot.supervisor || "" : "",
+      FECHA: fecha,
     }));
+  }
+
+  function harvestExcelRowsForSnapshots(snapshots) {
+    const list = (Array.isArray(snapshots) ? snapshots : [])
+      .filter(snapshotHasExportData)
+      .slice()
+      .sort((a, b) => {
+        const la = harvestLoteSortKey(a);
+        const lb = harvestLoteSortKey(b);
+        if (la !== lb) return la - lb;
+        return harvestLoteCode(a).localeCompare(harvestLoteCode(b), "es");
+      });
+    return list.flatMap((snap) => harvestExcelRows(snap));
+  }
+
+  /** Misma lista que la vista previa del modal (incluye lotes ya enviados para descargar). */
+  function resolveHarvestExportSnapshotList(snapshot, snapshots) {
+    if (Array.isArray(snapshots) && snapshots.length) {
+      return snapshots.filter(snapshotHasExportData);
+    }
+    if (state.activeExportSnapshots?.length && isExportPreviewOpen()) {
+      return state.activeExportSnapshots.filter(snapshotHasExportData);
+    }
+    const tipo = normalizeHarvestType(
+      snapshot?.tipo || state.activeExportSnapshot?.tipo || state.harvest.tipo
+    );
+    const pending = collectTipoExportSnapshots(tipo);
+    if (pending.length) return pending;
+    const map = new Map();
+    todayTipoHarvestSnapshots(tipo).forEach((snap) => {
+      if (!snapshotHasExportData(snap)) return;
+      map.set(harvestDayTypeKey(snap), snap);
+    });
+    todayFinishedHarvestLotes(tipo).forEach((snap) => {
+      if (!snapshotHasExportData(snap)) return;
+      const key = harvestDayTypeKey(snap);
+      if (!map.has(key)) map.set(key, snap);
+    });
+    return Array.from(map.values()).sort(
+      (a, b) => harvestLoteSortKey(a) - harvestLoteSortKey(b)
+    );
+  }
+
+  function buildHarvestExportBundle(snapshot, snapshots) {
+    const list = resolveHarvestExportSnapshotList(snapshot, snapshots);
+    if (!list.length) return null;
+    const tipo = normalizeHarvestType(list[0].tipo);
+    const anchor =
+      list.length > 1 ? buildCombinedExportAnchor(tipo, list) : list[0];
+    return { anchor, list };
+  }
+
+  function renderHarvestExcelRowHtml(row) {
+    return `<tr>
+            <td>${escapeHtml(row.DNI)}</td>
+            <td>${escapeHtml(row["NOMBRES Y APELLIDOS"])}</td>
+            <td>${fmt(row["MAÑANA"])}</td>
+            <td>${fmt(row.TARDE)}</td>
+            <td>${fmt(row["TOTAL-UNIDADES"])}</td>
+            <td>${escapeHtml(row.LOTE)}</td>
+            <td>${escapeHtml(row.VARIEDAD)}</td>
+            <td>${escapeHtml(row.OBSERVACION)}</td>
+            <td>${escapeHtml(row.SUPERVISOR)}</td>
+            <td>${escapeHtml(row.FECHA)}</td>
+          </tr>`;
   }
 
   /** Primer nombre + apellido paterno (catálogo: APELLIDOS NOMBRES). */
@@ -5808,9 +7917,11 @@
     return `${supervisor} ${tipo || "Suma"} ${diaMes}.xlsx`;
   }
 
-  function buildHarvestWorkbook(snapshot) {
+  function buildHarvestWorkbook(snapshot, snapshots) {
     if (typeof XLSX === "undefined") throw new Error("xlsx-unavailable");
-    const rows = harvestExcelRows(snapshot);
+    const bundle = buildHarvestExportBundle(snapshot, snapshots);
+    if (!bundle) throw new Error("no-rows");
+    const rows = harvestExcelRowsForSnapshots(bundle.list);
     const ws = XLSX.utils.json_to_sheet(rows);
     ws["!cols"] = [
       { wch: 13 },
@@ -5820,10 +7931,11 @@
       { wch: 19 },
       { wch: 18 },
       { wch: 18 },
-      { wch: 18 },
+      { wch: 22 },
       { wch: 26 },
+      { wch: 12 },
     ];
-    if (rows.length) ws["!autofilter"] = { ref: `A1:I${rows.length + 1}` };
+    if (rows.length) ws["!autofilter"] = { ref: `A1:J${rows.length + 1}` };
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Registro");
     return wb;
@@ -5874,26 +7986,44 @@
   }
 
   function buildHarvestFile(snapshot) {
-    const wb = buildHarvestWorkbook(snapshot);
+    const bundle =
+      buildHarvestExportBundle(snapshot, state.activeExportSnapshots) ||
+      refreshTipoExportBundle(snapshot);
+    if (!bundle?.list?.length) return null;
+    const wb = buildHarvestWorkbook(bundle.anchor, bundle.list);
     const bytes = XLSX.write(wb, { bookType: "xlsx", type: "array" });
-    return createXlsxFile(bytes, harvestFileName(snapshot));
+    return createXlsxFile(bytes, harvestFileName(bundle.anchor));
   }
 
   /** Solo muestra el resumen: guardar ocurre dentro del modal */
   function previewHarvestSummary() {
-    // Persistir en caché local antes de abrir modal/tabla
     saveHarvest();
-    if (!validateHarvestSelectsBeforeSave(null, { requireWorkers: true })) {
+    syncCurrentHarvestDraft();
+    const tipo = normalizeHarvestType(state.harvest.tipo);
+    const snapshots = collectTipoExportSnapshots(tipo);
+    if (!snapshots.length) {
+      toast(
+        `Sin registro de ${harvestTypeShort(tipo)} · elija lote o finalice uno`
+      );
       return null;
     }
-    const snapshot =
-      snapshotFromTypeDraft(state.harvest.tipo) || makeHarvestSnapshot();
-    if (!validateHarvestSelectsBeforeSave(snapshot, { requireWorkers: true })) {
-      return null;
+    const draft = snapshotFromTypeDraft(tipo);
+    if (
+      draft &&
+      harvestDraftHasData(harvestTypeBucket(tipo)) &&
+      !isSnapshotSaved(draft)
+    ) {
+      if (!validateHarvestSelectsBeforeSave(draft, { requireWorkers: true })) {
+        return null;
+      }
+      rememberPreviewDraft(draft);
     }
-    rememberPreviewDraft(snapshot);
-    openExportPreview(snapshot, { saved: false });
-    return snapshot;
+    const anchor = buildCombinedExportAnchor(tipo, snapshots);
+    openExportPreview(anchor, {
+      snapshots,
+      saved: snapshots.every(isSnapshotSaved),
+    });
+    return anchor;
   }
 
   /**
@@ -5922,7 +8052,10 @@
       }
       return false;
     }
-    if (isHarvestLoteBlocked(lote, tipo)) {
+    if (
+      !opts.allowBlockedLote &&
+      isHarvestLoteBlocked(lote, tipo)
+    ) {
       toast(
         `Lote ${lote} ya enviado en ${harvestTypeShort(tipo)} hoy · elija otro`
       );
@@ -6005,13 +8138,15 @@
     state.activeExportSnapshot = savedSnap;
     state.activeExportSaved = true;
     updateExportPreviewSavedUI();
-    enqueueCloudData(
-      "registrarCosecha",
-      buildHarvestSyncPayload(savedSnap),
-      savedSnap.id
-    );
+    if (!opts.skipCloudEnqueue) {
+      enqueueCloudData(
+        "registrarCosecha",
+        buildHarvestSyncPayload(savedSnap),
+        savedSnap.id
+      );
+    }
     // Limpia solo ESTE tipo; deja Resta/Descarte (u otras) intactas
-    if (!skipReset) resetHarvestTypeAfterSave(savedSnap.tipo);
+    if (!skipReset) resetHarvestTypeAfterSave(savedSnap.tipo, savedSnap);
     if (state.previewDraftSnapshot?.id === savedSnap.id) {
       state.previewDraftSnapshot = savedSnap;
     }
@@ -6023,6 +8158,7 @@
       );
     }
     captureSavedWorkers(savedSnap.workers);
+    removeFinishedHarvestLote(savedSnap);
     flushCloudDataQueue().catch(() => {});
     renderExportPreviewTypes(savedSnap);
     return savedSnap;
@@ -6033,29 +8169,46 @@
    * Así nadie olvida pulsar Guardar; el formulario queda limpio.
    */
   async function saveAndUploadHarvestFromPreview(button) {
-    let snapshot = state.activeExportSnapshot;
-    if (!snapshot) {
+    let anchor = state.activeExportSnapshot;
+    if (!anchor) {
       toast("No hay registro para subir");
       return;
     }
+    const tipoKey = normalizeHarvestType(anchor.tipo);
+    if (isHarvestTypeExportedToday(tipoKey)) {
+      toast(`${harvestTypeShort(tipoKey)} ya enviado hoy · un solo envío a Drive`);
+      updateExportPreviewSavedUI();
+      return;
+    }
+    const initial = refreshTipoExportBundle(anchor);
+    if (!initial) {
+      toast("No hay registro para subir");
+      return;
+    }
+    let snapshots = initial.list;
+    anchor = initial.anchor;
     if (!scriptExcelDriveUrl()) {
       toast("Drive no configurado en la app");
       return;
     }
 
-    const needsSave = !state.activeExportSaved && !isSnapshotSaved(snapshot);
+    const needsSave = snapshots.some((snap) => !isSnapshotSaved(snap));
     if (needsSave) {
-      if (
-        !validateHarvestSelectsBeforeSave(snapshot, {
-          requireWorkers: true,
-          focus: true,
-        })
-      ) {
-        return;
+      for (const snap of snapshots) {
+        if (isSnapshotSaved(snap)) continue;
+        if (
+          !validateHarvestSelectsBeforeSave(snap, {
+            requireWorkers: true,
+            focus: true,
+            allowBlockedLote: true,
+          })
+        ) {
+          return;
+        }
       }
     }
 
-    const existing = getHarvestDriveUrl(snapshot);
+    const existing = getHarvestDriveUrl(anchor);
     const run = async () => {
       if (button) {
         setBtnLoading(
@@ -6069,20 +8222,50 @@
       try {
         if (needsSave) {
           await new Promise((r) => window.setTimeout(r, 280));
-          const saved = persistHarvestSnapshot(snapshot, {
-            skipReset: false,
-            silent: true,
-          });
-          if (!saved) return;
-          snapshot = saved;
-          state.previewDraftSnapshot = null;
-          state.activeExportSnapshot = saved;
+          const newlySaved = [];
+          const savedList = [];
+          for (const snap of snapshots) {
+            if (isSnapshotSaved(snap)) {
+              savedList.push(snap);
+              continue;
+            }
+            const saved = persistHarvestSnapshot(snap, {
+              skipReset: true,
+              silent: true,
+              skipCloudEnqueue: true,
+            });
+            if (!saved) return;
+            newlySaved.push(saved);
+            savedList.push(saved);
+          }
+          if (newlySaved.length) {
+            enqueueHarvestCloudSync(
+              newlySaved.length === savedList.length ? savedList : newlySaved
+            );
+            flushCloudDataQueue().catch(() => {});
+          }
+          savedList.forEach((snap) =>
+            resetHarvestTypeAfterSave(snap.tipo, snap)
+          );
+          state.activeExportSnapshots = savedList;
+          anchor = buildCombinedExportAnchor(
+            normalizeHarvestType(anchor.tipo),
+            savedList
+          );
+          state.activeExportSnapshot = anchor;
           state.activeExportSaved = true;
+          state.previewDraftSnapshot = null;
           renderHarvestDayChecklist();
           renderExportPreviewDayStatus();
         }
 
-        await uploadOrQueueHarvestToDrive(snapshot, null);
+        const fresh = refreshTipoExportBundle(anchor);
+        if (fresh) {
+          anchor = fresh.anchor;
+          snapshots = fresh.list;
+        }
+
+        await uploadOrQueueHarvestToDrive(anchor, null);
         focusNextMissingHarvestType();
         closeExportPreview();
       } finally {
@@ -6091,23 +8274,17 @@
       }
     };
 
-    // Ya en Drive o 2.º intento en el mismo modal → confirmar
-    if (existing || (state.driveUploadPresses || 0) >= 1) {
-      confirmModal(
-        existing ? "Excel ya en Drive" : "Subir otra vez a Drive",
-        existing
-          ? "Este archivo ya está en Drive. ¿Compartir el enlace otra vez?"
-          : "Tenga cuidado: no envíe muchos archivos a la nube. Con un solo envío es suficiente.",
-        () => {
-          state.driveUploadPresses = (state.driveUploadPresses || 0) + 1;
-          run();
-        },
-        existing ? "Sí, compartir" : "Sí, subir"
-      );
+    // Ya en Drive → solo compartir enlace (sin re-subir)
+    if (existing) {
+      if (button) setBtnLoading(button, true, "Abriendo…");
+      try {
+        await uploadOrQueueHarvestToDrive(anchor, null);
+      } finally {
+        if (button) setBtnLoading(button, false);
+      }
       return;
     }
 
-    state.driveUploadPresses = (state.driveUploadPresses || 0) + 1;
     await run();
   }
 
@@ -6120,9 +8297,15 @@
     const driveBtn = $("#btnUploadDriveHarvest");
     if (driveBtn && !driveBtn.classList.contains("is-loading")) {
       const snap = state.activeExportSnapshot;
+      const tipoKey = normalizeHarvestType(snap?.tipo);
+      const typeExported = isHarvestTypeExportedToday(tipoKey);
       const hasUrl = !!(snap && getHarvestDriveUrl(snap));
-      const label = hasUrl
-        ? "Compartir enlace Drive"
+      const blocked = typeExported || hasUrl;
+      driveBtn.disabled = blocked;
+      driveBtn.setAttribute("aria-disabled", blocked ? "true" : "false");
+      driveBtn.classList.toggle("is-uploaded", blocked);
+      const label = blocked
+        ? "Subido a Drive"
         : saved
           ? "Subir a Drive"
           : "Guardar y subir a Drive";
@@ -6173,54 +8356,95 @@
     renderExportPreviewDayStatus();
   }
 
-  function openExportPreview(snapshot, opts = {}) {
-    if (!snapshot) return;
-    state.activeExportSnapshot = snapshot;
-    state.driveUploadPresses = 0;
-    // Desde el historial ya está guardado; desde "Ver resumen" todavía no.
-    state.activeExportSaved = opts.saved !== false;
-    if (!state.activeExportSaved) state.previewDraftSnapshot = snapshot;
-    updateExportPreviewSavedUI();
-    renderExportPreviewTypes(snapshot);
-    renderExportPreviewDayStatus();
+  function isExportPreviewOpen() {
+    const modal = $("#exportPreview");
+    return !!(modal && !modal.hidden);
+  }
+
+  function exportPreviewStatusText(snapshots) {
+    const list = Array.isArray(snapshots) ? snapshots : [];
+    const finished = list.filter(isSnapshotFinished).length;
+    const pending = list.length - finished;
+    if (!list.length) return "";
+    if (finished && pending) return `${finished} finalizado(s) · ${pending} en curso`;
+    if (pending) return `${pending} en curso`;
+    return `${finished} finalizado(s)`;
+  }
+
+  /** Refresca filas/meta del modal con lotes finalizados + borradores en vivo. */
+  function refreshExportPreviewContent(tipo) {
+    const key = normalizeHarvestType(
+      tipo || state.activeExportSnapshot?.tipo || state.harvest.tipo
+    );
+    syncCurrentHarvestDraft();
+    const list = collectTipoExportSnapshots(key);
+    if (!list.length) return false;
+
+    const anchor =
+      list.length > 1 ? buildCombinedExportAnchor(key, list) : list[0];
+    state.activeExportSnapshot = anchor;
+    state.activeExportSnapshots = list;
+    state.activeExportSaved = list.every(isSnapshotSaved);
+    if (!state.activeExportSaved && list.length === 1) {
+      state.previewDraftSnapshot = list[0];
+    }
+
     const rows = $("#exportPreviewRows");
     if (rows) {
-      rows.innerHTML = harvestExcelRows(snapshot)
-        .map(
-          (row) => `<tr>
-            <td>${escapeHtml(row.DNI)}</td>
-            <td>${escapeHtml(row["NOMBRES Y APELLIDOS"])}</td>
-            <td>${fmt(row["MAÑANA"])}</td>
-            <td>${fmt(row.TARDE)}</td>
-            <td>${fmt(row["TOTAL-UNIDADES"])}</td>
-            <td>${escapeHtml(row.LOTE)}</td>
-            <td>${escapeHtml(row.VARIEDAD)}</td>
-            <td>${escapeHtml(row.OBSERVACION)}</td>
-            <td>${escapeHtml(row.SUPERVISOR)}</td>
-          </tr>`
-        )
-        .join("");
+      const excelRows = harvestExcelRowsForSnapshots(list);
+      rows.innerHTML = excelRows.map(renderHarvestExcelRowHtml).join("");
     }
-    const saved = new Date(snapshot.savedAt);
     const meta = $("#exportPreviewMeta");
     if (meta) {
-      meta.textContent = `${harvestTypeShort(snapshot.tipo)} · ${snapshot.fecha} · Lote ${
-        snapshot.codLote || snapshot.lote || "—"
-      } · ${snapshot.workers.length} trabajador(es) · ${snapshot.supervisor}`;
-      if (!Number.isNaN(saved.getTime())) {
-        meta.textContent += ` · ${saved.toLocaleTimeString("es-PE", {
-          hour: "2-digit",
-          minute: "2-digit",
-        })}`;
-      }
+      const personas = list.reduce(
+        (sum, snap) => sum + (snap.workers?.length || 0),
+        0
+      );
+      const total = list.reduce((sum, snap) => sum + snapshotTotal(snap), 0);
+      const lotesTxt =
+        list.length > 1
+          ? `${list.length} lotes`
+          : `Lote ${list[0].codLote || list[0].lote || "—"}`;
+      const statusTxt = exportPreviewStatusText(list);
+      meta.textContent = `${harvestTypeShort(key)} · ${anchor.fecha} · ${lotesTxt} · ${statusTxt} · ${personas} persona(s) · ${fmt(total)} jarras · ${anchor.supervisor}`;
     }
     if ($("#exportPreviewTotal")) {
-      $("#exportPreviewTotal").textContent = `${fmt(
-        snapshotTotal(snapshot)
-      )} jarras`;
+      const total = list.reduce((sum, snap) => sum + snapshotTotal(snap), 0);
+      $("#exportPreviewTotal").textContent = `${fmt(total)} jarras`;
     }
+    renderExportPreviewDayStatus();
+    updateExportPreviewSavedUI();
+    return true;
+  }
+
+  function openExportPreview(snapshot, opts = {}) {
+    const tipo = normalizeHarvestType(
+      opts.tipo || snapshot?.tipo || state.harvest.tipo
+    );
+    if (isHarvestTypeExportedToday(tipo)) {
+      if (!opts.silent) {
+        toast(`${harvestTypeShort(tipo)} ya enviado hoy · un solo envío a Drive`);
+      }
+      return;
+    }
+    try {
+      saveHarvest();
+    } catch {
+      /* ignore */
+    }
+    if (!refreshExportPreviewContent(tipo)) {
+      if (!opts.silent) {
+        toast(
+          `Sin registro de ${harvestTypeShort(tipo)} · elija lote y agregue trabajadores`
+        );
+      }
+      return;
+    }
+    state.driveUploadPresses = 0;
+    renderExportPreviewTypes(state.activeExportSnapshot);
     const modal = $("#exportPreview");
     if (modal) modal.hidden = false;
+    preloadExcelVendor();
     hydrateIcons(modal);
   }
 
@@ -6228,6 +8452,7 @@
     // Al cerrar el modal NO se borra lo ingresado: queda en caché por tipo
     saveHarvest();
     state.driveUploadPresses = 0;
+    state.activeExportSnapshots = null;
     const modal = $("#exportPreview");
     if (modal) modal.hidden = true;
     resetViewportLayout();
@@ -6239,32 +8464,13 @@
     saveAndUploadHarvestFromPreview(button);
   }
 
-  /** No cierra a ciegas si falta Suma/Resta/Descarte o enviar. */
+  /** Cierra la vista previa sin bloquear: es solo para revisar datos. */
   function requestCloseExportPreview() {
-    const missing = harvestMissingTypesToday();
-    const unsent = harvestUnsentTypesToday();
-    if (!missing.length && !unsent.length) {
-      closeExportPreview();
-      return;
-    }
-    const lines = [];
-    if (missing.length) {
-      lines.push(`Falta registrar: ${missing.map((m) => m.short).join(", ")}`);
-    }
-    if (unsent.length) {
-      lines.push(`Falta enviar: ${unsent.map((m) => m.short).join(", ")}`);
-    }
-    confirmModal(
-      "Conteo incompleto",
-      `${lines.join(". ")}. ¿Cerrar igual?`,
-      () => closeExportPreview(),
-      "Cerrar igual"
-    );
+    closeExportPreview();
   }
 
-  function downloadHarvestSnapshot(snapshot, opts = {}) {
+  async function downloadHarvestSnapshot(snapshot, opts = {}) {
     if (!snapshot) return false;
-    // Desde resumen / historial: un solo Excel (opts.single o por defecto true en preview)
     const forceSingle = opts.single !== false;
     if (!forceSingle) {
       const ready = availableExportSnapshots();
@@ -6274,8 +8480,22 @@
       }
     }
     try {
-      const wb = buildHarvestWorkbook(snapshot);
-      const ok = downloadXlsxWorkbook(wb, harvestFileName(snapshot));
+      if (!(await ensureXlsxLoaded())) {
+        if (!opts.silent) toast("Cargando Excel… intente de nuevo");
+        return false;
+      }
+      const snapshots =
+        opts.snapshots ||
+        (isExportPreviewOpen() ? state.activeExportSnapshots : null);
+      const bundle =
+        buildHarvestExportBundle(snapshot, snapshots) ||
+        refreshTipoExportBundle(snapshot);
+      if (!bundle?.list?.length) {
+        if (!opts.silent) toast("No hay filas para descargar");
+        return false;
+      }
+      const wb = buildHarvestWorkbook(bundle.anchor, bundle.list);
+      const ok = downloadXlsxWorkbook(wb, harvestFileName(bundle.anchor));
       if (ok && !opts.silent) toast("Excel descargado");
       return ok;
     } catch {
@@ -6344,7 +8564,11 @@
       return;
     }
     if (typeof XLSX === "undefined") {
-      toast("Espere a que cargue el Excel e intente otra vez");
+      toast("Cargando Excel…");
+      ensureXlsxLoaded().then((ok) => {
+        if (ok) shareOneExcelNative(snapshot);
+        else toast("Excel no disponible · recargue la app");
+      });
       return;
     }
 
@@ -6670,7 +8894,10 @@
               minute: "2-digit",
             });
         const driveUrl = getHarvestDriveUrl(item);
-        const drivePending = !driveUrl && isDriveUploadPending(item.id);
+        const driveUploaded = !!driveUrl;
+        const typeExported = isHarvestTypeExportedToday(item.tipo);
+        const driveBlocked = driveUploaded || typeExported;
+        const drivePending = !driveBlocked && isDriveUploadPending(item.id);
         return `<article class="history-item" data-history-id="${escapeHtml(
           item.id
         )}">
@@ -6687,21 +8914,22 @@
           )}${
             drivePending
               ? `<br><em class="history-drive-note">Drive pendiente de subir</em>`
-              : driveUrl
-                ? `<br><em class="history-drive-note is-ok">En Drive</em>`
+              : driveUploaded
+                ? `<br><em class="history-drive-note is-ok">Subido a Drive</em>`
                 : ""
           }</p>
           <div class="history-item-actions">
-            <button type="button" data-history-action="preview">Ver</button>
             <button type="button" data-history-action="download">Descargar</button>
             <button type="button" class="history-drive-btn${
-              drivePending ? " is-pending" : driveUrl ? " is-ready" : ""
-            }" data-history-action="drive">${
-              drivePending
-                ? "Drive pendiente"
-                : driveUrl
-                  ? "Compartir Drive"
-                  : "Subir Drive"
+              drivePending ? " is-pending" : driveBlocked ? " is-uploaded" : ""
+            }" data-history-action="drive"${
+              driveBlocked ? " disabled aria-disabled=\"true\"" : ""
+            }>${
+              driveBlocked
+                ? "Subido a Drive"
+                : drivePending
+                  ? "Subir al Drive"
+                  : "Subir al Drive"
             }</button>
           </div>
         </article>`;
@@ -6754,7 +8982,8 @@
     if (!payload) return;
     const entry = {
       id: uid(),
-      savedAt: new Date().toISOString(),
+      sendId: payload.sendId || "",
+      savedAt: payload.savedAt || new Date().toISOString(),
       fecha: payload.fecha || todayISO(),
       fundo: payload.fundo || "",
       supervisor: payload.supervisorNombre || "",
@@ -6762,6 +8991,8 @@
       totalGuias: payload.totals?.guias || 0,
       totalJarras: payload.totals?.jarras || 0,
       totalJabas: payload.totals?.jabas || 0,
+      descarteJarras: payload.descarteJarras ?? payload.totals?.descarteJarras ?? 0,
+      descarteJabas: payload.descarteJabas ?? payload.totals?.descarteJabas ?? 0,
       guias: (payload.guias || []).map((g) => ({
         numeroGuia: g.numeroGuia || "",
         lote: g.lote || "",
@@ -7085,13 +9316,49 @@
       return;
     }
     const lote = findLote(value);
-    state.harvest.lote = lote?.lote || "";
-    state.harvest.codLote = lote?.codLote || "";
-    state.harvest.modulo = lote?.modulo || "";
-    state.harvest.turno = lote?.turno || "";
-    state.harvest.variedad = lote?.variedad || "";
+    const tipoKey = normalizeHarvestType(state.harvest.tipo);
+    syncCurrentHarvestDraft();
+    const bucket = harvestTypeBucket(tipoKey);
+    const prevKey = harvestLoteDraftKey(bucket.lote, bucket.codLote);
+    const nextKey = harvestLoteDraftKey(lote?.lote, lote?.codLote);
+    if (prevKey && nextKey && prevKey === nextKey) return;
+
+    const currentWorkers = (bucket.workers || []).map(normalizeHarvestWorker);
+    const saved = nextKey ? bucket.loteDrafts?.[nextKey] : null;
+    const savedHasWorkers = (saved?.workers || []).length > 0;
+    const carryWorkers = currentWorkers.length > 0 && !savedHasWorkers;
+
+    if (prevKey && prevKey !== nextKey && !carryWorkers) {
+      stashActiveHarvestLoteDraft(bucket);
+    }
+
+    if (carryWorkers) {
+      applyHarvestLoteDraft(bucket, lote, {
+        lote: lote?.lote || "",
+        codLote: lote?.codLote || "",
+        modulo: lote?.modulo || "",
+        turno: lote?.turno || "",
+        variedad: lote?.variedad || "",
+        workers: currentWorkers,
+      });
+      if (prevKey && prevKey !== nextKey) {
+        purgeHarvestLoteRecord(tipoKey, prevKey);
+        delete bucket.loteDrafts[prevKey];
+      }
+      if (nextKey) {
+        bucket.loteDrafts[nextKey] = cloneHarvestLoteSlice(bucket);
+      }
+    } else {
+      applyHarvestLoteDraft(bucket, lote, saved);
+    }
+
+    attachCurrentHarvestDraft();
+    clearHarvestWorkerForm();
     saveHarvest();
     renderHarvest();
+    if (carryWorkers) {
+      toast("Lote corregido · trabajadores conservados");
+    }
   }
 
   function previewHarvestWorker() {
@@ -7099,17 +9366,29 @@
     if ($("#harvestWorkerDni") && $("#harvestWorkerDni").value !== dni) {
       $("#harvestWorkerDni").value = dni.slice(0, 8);
     }
-    const persona = lookupPersona(dni) || lookupSupervisor(dni);
+    const persona =
+      lookupPersona(dni) ||
+      lookupSupervisor(dni) ||
+      lookupSavedSessionWorker(dni);
     const name = $("#harvestWorkerName");
     const msg = $("#harvestWorkerMsg");
-    if (name) name.value = persona?.nombre || "";
+    if (name) {
+      name.value = persona?.nombre || "";
+      const canType = dni.length === 8 && !persona;
+      name.disabled = !canType;
+      if (canType) name.placeholder = "Escriba el nombre";
+      else name.placeholder = "ACTUALIZADO";
+    }
     if (msg) {
-      msg.textContent =
-        dni.length === 8 && !persona
-          ? "DNI no está en la base · toque el ícono de usuarios"
-          : dni.length && dni.length < 8
-            ? "El DNI debe tener 8 dígitos"
-            : "";
+      if (dni.length && dni.length < 8) {
+        msg.textContent = "El DNI debe tener 8 dígitos";
+      } else if (dni.length === 8 && lookupSavedSessionWorker(dni) && !lookupPersona(dni) && !lookupSupervisor(dni)) {
+        msg.textContent = "DNI guardado · puede agregarlo a este lote";
+      } else if (dni.length === 8 && !persona) {
+        msg.textContent = "Escriba el nombre o toque el ícono de usuarios";
+      } else {
+        msg.textContent = "";
+      }
     }
   }
 
@@ -7150,6 +9429,90 @@
     resetViewportLayout();
   }
 
+  function isHarvestWorkerInCurrentLote(dni) {
+    const key = String(dni || "").replace(/\D/g, "");
+    if (key.length !== 8) return false;
+    return (state.harvest.workers || []).some((w) => w.dni === key);
+  }
+
+  function normalizeWorkerSearchQuery(query) {
+    return String(query || "")
+      .trim()
+      .toUpperCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+  }
+
+  function harvestTableSearchQuery() {
+    return String($("#harvestTableSearch")?.value || "").trim();
+  }
+
+  function workerMatchesTableSearch(worker, query) {
+    const raw = String(query || "").trim();
+    if (!raw) return true;
+    const digits = raw.replace(/\D/g, "");
+    const letters = normalizeWorkerSearchQuery(raw.replace(/\d/g, ""));
+    const dni = String(worker?.dni || "");
+    const nombre = normalizeWorkerSearchQuery(worker?.nombre);
+    if (digits.length >= 1 && dni.includes(digits)) return true;
+    if (letters.length >= 1 && nombre.includes(letters)) return true;
+    if (letters.length >= 1) {
+      return nombre
+        .split(/\s+/)
+        .some((part) => part.startsWith(letters) || part.includes(letters));
+    }
+    return false;
+  }
+
+  function updateHarvestTableSearchMeta(workers, query) {
+    const meta = $("#harvestTableSearchMeta");
+    if (!meta) return;
+    const total = (workers || []).length;
+    if (!query || !total) {
+      meta.hidden = true;
+      meta.textContent = "";
+      return;
+    }
+    const shown = workers.filter((worker) =>
+      workerMatchesTableSearch(worker, query)
+    ).length;
+    meta.hidden = false;
+    meta.textContent =
+      shown === 1
+        ? "1 persona en esta lista"
+        : `${shown} de ${total} en esta lista`;
+  }
+
+  function clearHarvestTableSearch() {
+    const input = $("#harvestTableSearch");
+    if (input) input.value = "";
+    renderHarvestWorkers();
+  }
+
+  function focusHarvestTableSearchMatch() {
+    const query = harvestTableSearchQuery();
+    if (!query) return;
+    const row = $("#harvestWorkers .harvest-worker-row");
+    if (!row) {
+      toast("No hay coincidencias en esta lista");
+      return;
+    }
+    row.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    row.classList.add("is-search-hit");
+    window.setTimeout(() => row.classList.remove("is-search-hit"), 1200);
+    row.querySelector('[data-harvest-field="manana"]')?.focus();
+  }
+
+  function onHarvestTableSearchInput() {
+    renderHarvestWorkers();
+  }
+
+  function onHarvestTableSearchKeydown(e) {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    focusHarvestTableSearchMatch();
+  }
+
   function pushHarvestWorker(dni, nombre, { fromManual = false } = {}) {
     const key = String(dni || "").replace(/\D/g, "");
     const name = String(nombre || "")
@@ -7164,8 +9527,8 @@
       toast("Ingrese el nombre completo");
       return false;
     }
-    if (state.harvest.workers.some((w) => w.dni === key)) {
-      toast("Este DNI ya está agregado");
+    if (isHarvestWorkerInCurrentLote(key)) {
+      toast("Este DNI ya está en este lote · puede usarlo en otro lote");
       return false;
     }
     if (fromManual) {
@@ -7190,6 +9553,25 @@
 
   function copyYesterdayWorkers() {
     openWorkerPick();
+  }
+
+  function hideHarvestCopyEmptyTip() {
+    const tip = $("#harvestCopyEmptyTip");
+    if (tip) tip.hidden = true;
+    clearTimeout(hideHarvestCopyEmptyTip._t);
+  }
+
+  function showHarvestCopyEmptyTip() {
+    const tip = $("#harvestCopyEmptyTip");
+    if (!tip) {
+      toast("Aún no tenemos registros");
+      return;
+    }
+    tip.hidden = false;
+    tip.removeAttribute("hidden");
+    hydrateIcons(tip);
+    clearTimeout(hideHarvestCopyEmptyTip._t);
+    hideHarvestCopyEmptyTip._t = setTimeout(hideHarvestCopyEmptyTip, 3500);
   }
 
   function localSavedWorkersPool() {
@@ -7222,9 +9604,10 @@
     }
     const pool = localSavedWorkersPool();
     if (!pool.length) {
-      toast("Aún no hay personal guardado. Confirme un registro y los DNI quedan aquí");
+      showHarvestCopyEmptyTip();
       return;
     }
+    hideHarvestCopyEmptyTip();
     if ($("#workerPickAll")) $("#workerPickAll").checked = false;
     if ($("#workerPickQuery")) $("#workerPickQuery").value = "";
     renderWorkerPickList(pool);
@@ -7282,6 +9665,7 @@
   }
 
   function closeWorkerPick() {
+    hideHarvestCopyEmptyTip();
     const sheet = $("#workerPick");
     if (!sheet) return;
     sheet.hidden = true;
@@ -7306,7 +9690,7 @@
     });
     closeWorkerPick();
     if (!added) {
-      toast("Esos trabajadores ya están en este tipo");
+      toast("Esos trabajadores ya están en este lote");
       return;
     }
     toast(
@@ -7316,26 +9700,43 @@
 
   function addHarvestWorker() {
     const dni = String($("#harvestWorkerDni")?.value || "").replace(/\D/g, "");
-    const persona = lookupPersona(dni) || lookupSupervisor(dni);
+    const saved = lookupSavedSessionWorker(dni);
+    const persona = lookupPersona(dni) || lookupSupervisor(dni) || saved;
+    const typedName = String($("#harvestWorkerName")?.value || "")
+      .trim()
+      .replace(/\s+/g, " ")
+      .toUpperCase();
     const msg = $("#harvestWorkerMsg");
     if (dni.length !== 8) {
       if (msg) msg.textContent = "El DNI debe tener exactamente 8 dígitos";
       return;
     }
-    if (!persona?.nombre) {
-      if (msg) {
-        msg.textContent =
-          "DNI no está en la base · toque el ícono de usuarios";
+    const nombre = String(persona?.nombre || typedName || "").trim();
+    if (nombre.length < 3) {
+      const name = $("#harvestWorkerName");
+      if (name) {
+        name.disabled = false;
+        name.focus();
       }
-      openManualWorker();
+      if (msg) {
+        msg.textContent = "Escriba el nombre o toque el ícono de usuarios";
+      }
       return;
     }
-    if (!pushHarvestWorker(dni, persona.nombre)) {
-      if (msg) msg.textContent = "Este DNI ya está agregado";
+    const fromManual =
+      !lookupPersona(dni) && !lookupSupervisor(dni) && (!saved || !!typedName);
+    if (!pushHarvestWorker(dni, nombre, { fromManual })) {
+      if (msg && isHarvestWorkerInCurrentLote(dni)) {
+        msg.textContent = "Este DNI ya está en este lote · puede usarlo en otro lote";
+      }
       return;
     }
     if ($("#harvestWorkerDni")) $("#harvestWorkerDni").value = "";
-    if ($("#harvestWorkerName")) $("#harvestWorkerName").value = "";
+    if ($("#harvestWorkerName")) {
+      $("#harvestWorkerName").value = "";
+      $("#harvestWorkerName").disabled = true;
+      $("#harvestWorkerName").placeholder = "ACTUALIZADO";
+    }
     if (msg) msg.textContent = "";
     $("#harvestWorkerDni")?.focus();
     toast("Trabajador agregado");
@@ -7587,13 +9988,16 @@
   }
 
   function updateClock() {
+    syncAppDayRollover({ silent: true });
     renderDateWidgets(state.session.fecha || todayISO());
   }
 
   function updateNetworkUI() {
     state.online = navigator.onLine;
-    const pending =
-      loadVinculoQueue().length + loadCloudDataQueue().length;
+    const vinculoPending = loadVinculoQueue().length;
+    const cloudPending = loadCloudDataQueue().length;
+    const drivePending = loadDriveQueue().length;
+    const pending = vinculoPending + cloudPending + drivePending;
     const onlineLabel = state.online ? "Con internet" : "Sin internet";
     const pendingLabel = `${pending} pendiente${pending === 1 ? "" : "s"}`;
     let label = onlineLabel;
@@ -7658,10 +10062,17 @@
     }
     const hint = $("#offlineHint");
     if (hint) {
+      const parts = [];
+      if (cloudPending) parts.push(`${cloudPending} guía(s)/dato(s)`);
+      if (vinculoPending) parts.push(`${vinculoPending} vínculo(s)`);
+      if (drivePending) parts.push(`${drivePending} Excel`);
+      const detail = parts.length ? parts.join(" · ") : "";
       hint.textContent = !state.online
         ? "Sin internet · se guarda local y sube solo"
         : pending
-          ? `${pending} pendiente(s) de subir`
+          ? detail
+            ? `${pending} pendiente(s): ${detail}`
+            : `${pending} pendiente(s) de subir`
           : "Conectado · puede subir a la nube";
     }
     updateClock();
@@ -8128,10 +10539,10 @@
     }
   }
 
-  function exportExcel(opts = {}) {
+  async function exportExcel(opts = {}) {
     if (!requireQrLogin()) return false;
-    if (typeof XLSX === "undefined") {
-      if (!opts.silent) toast("Excel no disponible");
+    if (!(await ensureXlsxLoaded())) {
+      if (!opts.silent) toast("Excel no disponible · recargue la app");
       return false;
     }
     const rows = rowsFromGuias();
@@ -8165,8 +10576,12 @@
     return ok;
   }
 
-  function exportPdf() {
+  async function exportPdf() {
     if (!requireQrLogin()) return;
+    if (!(await ensureJsPdfLoaded())) {
+      toast("PDF no disponible");
+      return;
+    }
     const jspdf = window.jspdf?.jsPDF;
     if (!jspdf) {
       toast("PDF no disponible");
@@ -8333,21 +10748,16 @@
     const lock = $("#lockScreen");
     if (lock) lock.classList.add("is-busy");
     setBtnLoading(btn, true, "Verificando…");
-    showAppLoader("Verificando contraseña…");
     try {
       if (!navigator.onLine) {
         if (msg) msg.textContent = "Necesita internet para validar el primer acceso";
-        hideAppLoader();
         return;
       }
       const result = await verifyPinRemote(password, identity.dni);
       if (result.ok && result.token) {
-        const loaderMsg = $("#appLoaderMsg");
-        if (loaderMsg) loaderMsg.textContent = "Entrando a la app…";
-        afterQrLogin(identity, result.token);
+        await afterQrLogin(identity, result.token);
         toast("Identidad confirmada");
       } else {
-        hideAppLoader();
         if (msg) msg.textContent = result.error || "Contraseña incorrecta";
         if ($("#loginPass")) {
           $("#loginPass").value = "";
@@ -8355,7 +10765,6 @@
         }
       }
     } catch {
-      hideAppLoader();
       if (msg) msg.textContent = "No se pudo validar. Revise su conexión";
     } finally {
       state.unlocking = false;
@@ -8387,7 +10796,7 @@
   }
 
   async function importPersonas(file) {
-    if (typeof XLSX === "undefined") {
+    if (!(await ensureXlsxLoaded())) {
       toast("Lector Excel no cargado");
       return;
     }
@@ -8469,6 +10878,24 @@
     });
     on("#guidesAjusteInput", "blur", () => {
       syncGuidesAjusteInput();
+    });
+    on("#guidesDescarteJabasInput", "input", (e) => {
+      const el = e.target;
+      const digits = String(el.value || "").replace(/\D/g, "");
+      el.value = digits;
+      setGuidesDescarteJabas(digits);
+    });
+    on("#guidesDescarteJabasInput", "blur", () => {
+      syncGuidesDescarteInputs();
+    });
+    on("#guidesDescarteJarrasInput", "input", (e) => {
+      const el = e.target;
+      const digits = String(el.value || "").replace(/\D/g, "");
+      el.value = digits;
+      setGuidesDescarteJarras(digits);
+    });
+    on("#guidesDescarteJarrasInput", "blur", () => {
+      syncGuidesDescarteInputs();
     });
     on("#guidesSummaryModal", "click", (e) => {
       if (state.savingGuias) return;
@@ -8564,7 +10991,10 @@
     on("#btnDownloadHarvest", "click", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      downloadHarvestSnapshot(state.activeExportSnapshot, { single: true });
+      downloadHarvestSnapshot(state.activeExportSnapshot, {
+        single: true,
+        snapshots: state.activeExportSnapshots,
+      });
     });
     on("#btnUploadDriveHarvest", "click", (e) => {
       e.preventDefault();
@@ -8585,6 +11015,9 @@
       openExportPreview(snapshot, { saved: isSnapshotSaved(snapshot) });
     });
     on("#btnCopyYesterdayWorkers", "click", copyYesterdayWorkers);
+    on("#harvestScreen", "click", (e) => {
+      if (!e.target?.closest?.(".harvest-copy-wrap")) hideHarvestCopyEmptyTip();
+    });
     on("#btnCloseWorkerPick", "click", closeWorkerPick);
     on("#workerPick", "click", (e) => {
       if (e.target?.id === "workerPick") closeWorkerPick();
@@ -8659,12 +11092,16 @@
       const snapshot = historySnapshotById(item.dataset.historyId);
       if (!snapshot) return;
       const action = button.dataset.historyAction;
-      if (action === "preview") {
-        closeHarvestHistory();
-        openExportPreview(snapshot);
-      } else if (action === "download") {
+      if (action === "download") {
         downloadHarvestSnapshot(snapshot, { single: true });
       } else if (action === "drive") {
+        if (
+          button.disabled ||
+          getHarvestDriveUrl(snapshot) ||
+          isHarvestTypeExportedToday(snapshot.tipo)
+        ) {
+          return;
+        }
         uploadOrQueueHarvestToDrive(snapshot, button);
       }
     });
@@ -8677,6 +11114,36 @@
       );
     });
     on("#btnHarvestLote", "click", () => openPicker("harvestLote"));
+    on("#btnHarvestLoteFinish", "click", (e) => {
+      e.preventDefault();
+      finishHarvestLote();
+    });
+    on("#harvestFinishedLoteCount", "click", (e) => {
+      e.preventDefault();
+      openFinishedLotePick();
+    });
+    on("#btnCloseFinishedLotePick", "click", closeFinishedLotePick);
+    on("#finishedLotePick", "click", (e) => {
+      if (e.target?.id === "finishedLotePick") closeFinishedLotePick();
+    });
+    on("#finishedLotePickList", "click", (e) => {
+      const btn = e.target.closest("[data-finished-lote-id]");
+      if (!btn) return;
+      showFinishedLoteDetail(btn.dataset.finishedLoteId);
+    });
+    on("#btnFinishedLotePickBack", "click", resetFinishedLotePickView);
+    on("#btnFinishedLotePreview", "click", () => {
+      if (!activeFinishedLotePickId) return;
+      openFinishedHarvestLotePreview(activeFinishedLotePickId);
+    });
+    on("#btnFinishedLoteEdit", "click", () => {
+      if (!activeFinishedLotePickId) return;
+      editFinishedHarvestLote(activeFinishedLotePickId);
+    });
+    on("#btnFinishedLoteDelete", "click", () => {
+      if (!activeFinishedLotePickId) return;
+      deleteFinishedHarvestLote(activeFinishedLotePickId);
+    });
     on("#btnHarvestType", "click", () => openPicker("harvestType"));
     on("#btnManualWorker", "click", (e) => {
       e.preventDefault();
@@ -8701,6 +11168,8 @@
         .slice(0, 8);
     });
     on("#harvestWorkerDni", "input", previewHarvestWorker);
+    on("#harvestTableSearch", "input", onHarvestTableSearchInput);
+    on("#harvestTableSearch", "keydown", onHarvestTableSearchKeydown);
     on("#harvestWorkerForm", "submit", (e) => {
       e.preventDefault();
       addHarvestWorker();
@@ -8715,6 +11184,16 @@
     on("#btnStopCam", "click", stopCamera);
     on("#btnVinGrupoLic", "click", () => openPicker("grupoLic"));
     on("#btnVinGrupo", "click", () => openPicker("grupoNum"));
+    on("#btnVinGuiasRefresh", "click", () => {
+      refreshVinGuiasFeed({ force: true }).catch(() => {});
+    });
+    on("#vinGuiasDniSearch", "input", () => {
+      clearTimeout(state.vinGuiasSearchTimer);
+      state.vinGuiasSearchTimer = setTimeout(() => {
+        const val = String($("#vinGuiasDniSearch")?.value || "");
+        applyVinGuiasDniFilter(val);
+      }, 180);
+    });
 
     on("#vinculoForm", "submit", async (e) => {
       e.preventDefault();
@@ -9152,7 +11631,9 @@
         }
       }
       ensureAppLoader();
-      if (actionLoaderMsg) showAppLoader(actionLoaderMsg);
+      ensureSessionBootLoader();
+      const bootHandled = await finishSessionBootOnArrival();
+      if (!bootHandled && actionLoaderMsg) showAppLoader(actionLoaderMsg);
       if (
         !hasSession &&
         document.body.classList.contains("app-booting") &&
@@ -9284,6 +11765,9 @@
             if (!ok) return null;
             const result = await flushVinculoQueue();
             await flushCloudDataQueue();
+            if (getPage() === "vinculo") {
+              refreshVinGuiasFeed({ force: true }).catch(() => {});
+            }
             return result;
           })
           .then((result) => {

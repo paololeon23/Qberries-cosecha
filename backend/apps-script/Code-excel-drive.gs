@@ -133,6 +133,15 @@ function pingPayload_() {
   };
 }
 
+function upsertExcelFileInFolder_(folder, blob, fileName) {
+  var safeName = safeFileName_(fileName);
+  var it = folder.getFilesByName(safeName);
+  while (it.hasNext()) {
+    it.next().setTrashed(true);
+  }
+  return folder.createFile(blob);
+}
+
 function uploadExcel_(data) {
   var fileName = safeFileName_(data.fileName || data.name || 'cosecha.xlsx');
   var b64 = String(data.base64 || data.content || '').replace(/\s+/g, '');
@@ -146,7 +155,9 @@ function uploadExcel_(data) {
   var bytes = Utilities.base64Decode(b64);
   var blob = Utilities.newBlob(bytes, mime, fileName);
   var folder = resolveFolderForTipo_(tipo);
-  var file = folder.createFile(blob);
+  var file = data.replaceExisting
+    ? upsertExcelFileInFolder_(folder, blob, fileName)
+    : folder.createFile(blob);
 
   // Enlace usable para pasar por WhatsApp / correo
   try {

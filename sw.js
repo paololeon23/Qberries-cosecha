@@ -1,5 +1,5 @@
-﻿const CACHE = "qb-supervisores-v416";
-const ASSETS = [
+﻿const CACHE = "qb-supervisores-v464";
+const CORE_ASSETS = [
   "/",
   "/index.html",
   "/inicio/",
@@ -25,10 +25,13 @@ const ASSETS = [
   "/data/grupos-licapa.json",
   "/data/trabajadores.json",
   "/vendor/jsQR.min.js",
-  "/vendor/xlsx.full.min.js",
-  "/vendor/qrcode.min.js",
-  "/vendor/jspdf.umd.min.js",
   "/vendor/sweetalert2.all.min.js",
+];
+/** Excel/PDF/QR: solo bajo demanda (más liviano al abrir). El fetch las guarda en caché. */
+const LAZY_ASSETS = [
+  "/vendor/xlsx.full.min.js",
+  "/vendor/jspdf.umd.min.js",
+  "/vendor/qrcode.min.js",
 ];
 
 function putInCache(req, res) {
@@ -42,7 +45,7 @@ function putInCache(req, res) {
 async function refreshCachedAssets() {
   const cache = await caches.open(CACHE);
   await Promise.all(
-    ASSETS.map((url) =>
+    [...CORE_ASSETS, ...LAZY_ASSETS].map((url) =>
       fetch(url, { cache: "reload" })
         .then((res) => {
           if (res && res.ok) return cache.put(url, res);
@@ -69,7 +72,7 @@ self.addEventListener("install", (event) => {
         "/data/trabajadores.json",
         "/data/supervisores-cosecha.json",
       ];
-      const optional = ASSETS.filter((u) => !required.includes(u));
+      const optional = CORE_ASSETS.filter((u) => !required.includes(u));
       const requiredResults = await Promise.all(
         required.map((url) =>
           cache.add(url).then(() => true).catch(() => false)
@@ -78,7 +81,6 @@ self.addEventListener("install", (event) => {
       const okRequired = requiredResults.every(Boolean);
       await Promise.all(optional.map((url) => cache.add(url).catch(() => null)));
       if (!okRequired) {
-        // No activar una instalación incompleta (offline rompería la app)
         throw new Error("SW precache incomplete");
       }
       await self.skipWaiting();
@@ -144,7 +146,6 @@ self.addEventListener("fetch", (event) => {
           return res;
         })
         .catch(() => cached);
-      /* Caché al instante (sin pestañeo). Lo descargado se guarda. */
       return cached || network;
     })
   );

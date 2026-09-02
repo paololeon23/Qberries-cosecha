@@ -16,13 +16,16 @@
  *
  * ENDPOINTS
  *  POST { action: "registrarGuias", data: {...} }
+ *  GET  ?action=listarGuias&fecha=YYYY-MM-DD&dni=70839380&limit=200
  *  GET/POST action=ping
  *
  * HOJA DATA-GUIAS (cada guardado = UNA FILA NUEVA, se acumula):
- * NOMBRE SUPERVISOR | DNI SUPERVISOR | FECHA | GRUPO LIC | TOTAL JARRAS | TOTAL JABAS | FUNDO | LOTES | N° GUIAS | CANTIDAD GUIAS | REGISTRO MANUAL | HORA SUBIDA
+ * NOMBRE SUPERVISOR | DNI SUPERVISOR | FECHA | GRUPO LIC | TOTAL JARRAS | TOTAL JABAS |
+ * JARRAS DESCARTE | JABAS DESCARTE | FUNDO | LOTES | N° GUIAS | CANTIDAD GUIAS | REGISTRO MANUAL | HORA SUBIDA
  * - Cada subida agrega fila (12:00 y 18:00 = 2 filas). No pisa la anterior.
  * - Anti-duplicado solo por sendId (reintento de red del mismo envío).
  * - TOTAL JARRAS / TOTAL JABAS / CANTIDAD GUIAS / REGISTRO MANUAL: números (para sumar fácil)
+ * - JARRAS DESCARTE / JABAS DESCARTE: inputs DESCARTE / DESHIDRATADO de la app. 0 = vacío
  * - CANTIDAD GUIAS = conteo de N° en la lista (exacto)
  * - REGISTRO MANUAL: cantidad manual (aumento o descuento). 0 = vacío / no aplica
  * - FUNDO va junto a LOTES: "Licapa I" | "Licapa I - Licapa II" | "Licapa I - Licapa II - Licapa III"
@@ -38,6 +41,8 @@ var HEADERS = [
   'GRUPO LIC',
   'TOTAL JARRAS',
   'TOTAL JABAS',
+  'JARRAS DESCARTE',
+  'JABAS DESCARTE',
   'FUNDO',
   'LOTES',
   'N° GUIAS',
@@ -71,6 +76,15 @@ function doGet(e) {
         created: !!savedGet.created,
         duplicate: !!savedGet.duplicate,
         data: savedGet
+      });
+    }
+    if (action === 'listarGuias') {
+      var listed = listarGuias_(p);
+      return jsonOut_({
+        ok: true,
+        api: 'guias',
+        action: 'listarGuias',
+        data: listed
       });
     }
     return jsonOut_({ ok: false, api: 'guias', message: 'Acción GET no válida: ' + action });
@@ -160,10 +174,6 @@ function markSendIdDone_(d) {
   } catch (_) {}
 }
 
-/**
- * Cada guardado = fila nueva en el Sheet (se acumula).
- * Totales numéricos separados; lotes y N° guías solo como dato.
- */
 function registrarGuias_(d) {
   d = d || {};
   var session = d.session && typeof d.session === 'object' ? d.session : {};
@@ -360,6 +370,24 @@ function saveGuiasSummary_(d, session, guias, totals, supervisorNombre, supervis
   );
   if (!(ajuste > 0)) ajuste = 0;
 
+  var descarteJarras = number_(
+    d.descarteJarras != null
+      ? d.descarteJarras
+      : totals.descarteJarras != null
+        ? totals.descarteJarras
+        : session.descarteJarras
+  );
+  if (!(descarteJarras > 0)) descarteJarras = 0;
+
+  var descarteJabas = number_(
+    d.descarteJabas != null
+      ? d.descarteJabas
+      : totals.descarteJabas != null
+        ? totals.descarteJabas
+        : session.descarteJabas
+  );
+  if (!(descarteJabas > 0)) descarteJabas = 0;
+
   var row = [
     supervisorNombre,
     supervisorDni,
@@ -367,6 +395,8 @@ function saveGuiasSummary_(d, session, guias, totals, supervisorNombre, supervis
     grupoLic,
     jarras,
     jabas,
+    descarteJarras,
+    descarteJabas,
     fundoTxt,
     lotes.join(', '),
     numerosTxt,
@@ -417,6 +447,66 @@ function normalizeFundo_(value) {
     return 'Licapa I';
   }
   return 'Licapa I';
+}
+
+/**
+ * GET listarGuias — filas del día (rápido, lee solo columnas necesarias).
+ * ?action=listarGuias&fecha=2026-09-01&dni=70839380&limit=200
+ */
+function listarGuias_(params) {
+  params = params || {};
+  var fecha =
+    normalizeFechaRow_(params.fecha) ||
+    Utilities.formatDate(new Date(), 'America/Lima', 'yyyy-MM-dd');
+  var dniFilter = digits_(params.dni);
+  var limit = Math.min(500, Math.max(1, number_(params.limit) || 200));
+
+  var sh = sheet_();
+  var lastRow = sh.getLastRow();
+  if (lastRow < 2) {
+    return { fecha: fecha, count: 0, items: [] };
+  }
+
+  var data = sh.getRange(2, 1, lastRow - 1, HEADERS.length).getValues();
+  var items = [];
+  for (var i = data.length - 1; i >= 0; i--) {
+    var row = data[i];
+    var rowFecha = normalizeFechaRow_(row[2]);
+    if (rowFecha !== fecha) continue;
+    var rowDni = digits_(row[1]);
+    if (dniFilter && rowDni.indexOf(dniFilter) < 0) continue;
+
+    items.push({
+      supervisorNombre: clean_(row[0]).toUpperCase(),
+      supervisorDni: rowDni,
+      fecha: rowFecha,
+      grupoLic: clean_(row[3]),
+      totalJarras: number_(row[4]),
+      totalJabas: number_(row[5]),
+      descarteJarras: number_(row[6]),
+      descarteJabas: number_(row[7]),
+      fundo: clean_(row[8]),
+      lotes: clean_(row[9]),
+      numerosGuias: clean_(row[10]),
+      cantidadGuias: number_(row[11]),
+      registroManual: number_(row[12]),
+      horaSubida: clean_(row[13]),
+      rowNum: i + 2,
+      subido: true
+    });
+    if (items.length >= limit) break;
+  }
+
+  return { fecha: fecha, count: items.length, items: items };
+}
+
+function normalizeFechaRow_(value) {
+  if (value instanceof Date && !isNaN(value.getTime())) {
+    return Utilities.formatDate(value, 'America/Lima', 'yyyy-MM-dd');
+  }
+  var s = clean_(value);
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  return s;
 }
 
 function sheet_() {
@@ -484,6 +574,17 @@ function migrateSheetLayout_(sh) {
     var fundoParts = fundoRaw ? fundoRaw.split(/,| - /) : [];
     var fundoTxt = formatFundosSheet_(fundoParts);
 
+    var descJarras = 0;
+    var descJabas = 0;
+    if (colOf('JARRAS DESCARTE') >= 0) {
+      descJarras = number_(row[colOf('JARRAS DESCARTE')]);
+    } else if (colOf('DESCARTE DESHIDRATADO') >= 0) {
+      descJarras = number_(row[colOf('DESCARTE DESHIDRATADO')]);
+    }
+    if (colOf('JABAS DESCARTE') >= 0) {
+      descJabas = number_(row[colOf('JABAS DESCARTE')]);
+    }
+
     out.push([
       colOf('NOMBRE SUPERVISOR') >= 0 ? row[colOf('NOMBRE SUPERVISOR')] : '',
       colOf('DNI SUPERVISOR') >= 0 ? String(row[colOf('DNI SUPERVISOR')]) : '',
@@ -491,6 +592,8 @@ function migrateSheetLayout_(sh) {
       colOf('GRUPO LIC') >= 0 ? row[colOf('GRUPO LIC')] : '',
       colOf('TOTAL JARRAS') >= 0 ? row[colOf('TOTAL JARRAS')] : '',
       colOf('TOTAL JABAS') >= 0 ? row[colOf('TOTAL JABAS')] : '',
+      descJarras,
+      descJabas,
       fundoTxt,
       colOf('LOTES') >= 0 ? row[colOf('LOTES')] : '',
       nTxt,
@@ -678,7 +781,16 @@ function testRegistrarGuias() {
               jabas: 2
             }
           ],
-          totals: { guias: 2, cantidadGuias: 2, jarras: 36, jabas: 3 }
+          descarteJarras: 24,
+          descarteJabas: 2,
+          totals: {
+            guias: 2,
+            cantidadGuias: 2,
+            jarras: 36,
+            jabas: 3,
+            descarteJarras: 24,
+            descarteJabas: 2
+          }
         }
       })
     }

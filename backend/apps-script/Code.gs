@@ -32,6 +32,8 @@
     * DNI | NOMBRE | CELULAR | GRUPO LIC | GRUPO | NOMBRE SUPERVISOR GLOBAL | DNI INICIO SESION | ULTIMA HORA REGISTRO
     * Hoja 1: historial detallado anterior (ya no recibe registros nuevos)
     * DATA-MANUAL: resumen de cada registro, sin ID visible
+    * DATA-COSECHA-SUMA / DATA-COSECHA-DESCARTE / DATA-COSECHA-RESTA:
+    *   detalle unificado por tipo (1 fila por trabajador, todos los supervisores)
     * TRABAJADORES-MANUALES: trabajadores agregados manualmente
     */
 
@@ -39,6 +41,13 @@
     var HARVEST_SHEET_NAME = 'Hoja 1';
     var SUMMARY_SHEET_NAME = 'DATA-MANUAL';
     var MANUAL_SHEET_NAME = 'TRABAJADORES-MANUALES';
+
+    /** Hojas de detalle separadas por tipo (no mezclar Suma / Descarte / Resta). */
+    var DETAIL_SHEETS = {
+      SUMA: 'DATA-COSECHA-SUMA',
+      DESCARTE: 'DATA-COSECHA-DESCARTE',
+      RESTA: 'DATA-COSECHA-RESTA'
+    };
 
     /**
     * Token por defecto vacío a propósito (Netlify secrets scan).
@@ -94,8 +103,23 @@
       'TOTAL DE TODO',
       'TOTAL DE TRABAJADORES',
       'LOTE O LOTES',
+      'VARIOS LOTES',
       'DÍA',
       'HORA REGISTRO'
+    ];
+
+    /** Detalle por trabajador (como Excel de campo). */
+    var DETAIL_HEADERS = [
+      'DNI',
+      'NOMBRES Y APELLIDOS',
+      'MAÑANA',
+      'TARDE',
+      'TOTAL-UNIDADES',
+      'LOTE',
+      'VARIEDAD',
+      'OBSERVACION',
+      'SUPERVISOR',
+      'FECHA'
     ];
 
     var _jsonpCb = '';
@@ -445,28 +469,35 @@
       return 'lid:' + String(id || '').trim();
     }
 
-    /** Evita doble POST del mismo registro (reintentos / doble clic). */
+    /** Evita doble POST del mismo registro (reintentos / doble clic). Solo LEE. */
     function isDuplicateLocalId_(id) {
       var key = localIdKey_(id);
       if (!key || key === 'lid:') return false;
       try {
-        var cache = CacheService.getScriptCache();
-        if (cache.get(key)) return true;
-        cache.put(key, '1', 21600);
+        if (CacheService.getScriptCache().get(key)) return true;
       } catch (_) {}
       return false;
     }
 
+    /** Marcar localId solo después de escribir en el Sheet. */
+    function markLocalIdDone_(id) {
+      var key = localIdKey_(id);
+      if (!key || key === 'lid:') return;
+      try {
+        CacheService.getScriptCache().put(key, '1', 21600);
+      } catch (_) {}
+    }
+
     /**
-    * Guarda solamente el resumen solicitado en DATA-MANUAL.
-    * No agrega filas por trabajador ni escribe IDs en la hoja.
+    * Guarda resumen en DATA-MANUAL + detalle unificado en DATA-COSECHA.
     */
     function registrarCosecha_(d) {
       d = d || {};
       var localId = clean_(d.localId || d.id);
       if (localId && isDuplicateLocalId_(localId)) {
-        return { created: false, duplicate: true, rows: 0 };
+        return { created: false, duplicate: true, rows: 0, detailRows: 0 };
       }
+
       var workers = Array.isArray(d.workers) ? d.workers : [];
       var supervisorDni = digits_(d.supervisorDni);
       if (!workers.length) throw new Error('Faltan trabajadores');
@@ -477,11 +508,37 @@
       try {
         got = lock.tryLock(8000);
         if (!got) throw new Error('El servidor está ocupado. Intente de nuevo.');
-        var created = saveHarvestSummary_(d);
+
+        var shDetail = detailSheetForType_(d.tipo);
+        if (localId && detailRowsExistAny_(localId)) {
+          if (localId) markLocalIdDone_(localId);
+          return {
+            created: false,
+            duplicate: true,
+            rows: 0,
+            detailRows: 0,
+            detailSheet: shDetail.getName()
+          };
+        }
+
+        var detailRows = saveHarvestDetail_(d, localId);
+        if (!detailRows) {
+          throw new Error('No se pudo guardar el detalle (revise DNI y nombres)');
+        }
+        var summaryCreated = saveHarvestSummary_(d);
+
+        if (detailRows > 0 || summaryCreated) {
+          if (localId) markLocalIdDone_(localId);
+        }
+
         return {
-          created: created,
-          duplicate: !created,
-          rows: created ? 1 : 0
+          created: detailRows > 0 || summaryCreated,
+          duplicate: detailRows === 0 && !summaryCreated,
+          rows: detailRows,
+          detailRows: detailRows,
+          summaryCreated: !!summaryCreated,
+          detailSheet: shDetail.getName(),
+          tipo: summaryType_(d.tipo)
         };
       } finally {
         if (got) {
@@ -496,23 +553,44 @@
     */
     function saveHarvestSummary_(d) {
       var workers = Array.isArray(d.workers) ? d.workers : [];
+      var stats = buildSummaryLoteStats_(workers, d);
+      var lotes = stats.order;
       var totalDia = 0;
       var totalTarde = 0;
-      var totalTrabajadores = 0;
-      var workerSeen = {};
-      var lotes = [];
-      for (var i = 0; i < workers.length; i++) {
-        var workerKey = digits_(workers[i] && workers[i].dni);
-        if (!workerKey || workerSeen[workerKey]) continue;
-        workerSeen[workerKey] = true;
-        totalTrabajadores++;
-        totalDia += number_(workers[i] && workers[i].manana);
-        totalTarde += number_(workers[i] && workers[i].tarde);
-        addUniqueLote_(lotes, workers[i] && (workers[i].lote || workers[i].codLote));
+      var colDia = 0;
+      var colTarde = 0;
+      var colTrabajadores = 0;
+      var colLotes = '';
+      var sep = ' , ';
+
+      for (var li = 0; li < lotes.length; li++) {
+        totalDia += stats.map[lotes[li]].manana;
+        totalTarde += stats.map[lotes[li]].tarde;
       }
-      addUniqueLote_(lotes, d.lote);
-      if (Array.isArray(d.lotes)) {
-        for (var j = 0; j < d.lotes.length; j++) addUniqueLote_(lotes, d.lotes[j]);
+
+      function workersOnLote_(lote) {
+        var entry = stats.map[lote] || {};
+        return Object.keys(entry.dnis || {}).length;
+      }
+
+      if (lotes.length > 1) {
+        colDia = lotes
+          .map(function (lote) { return stats.map[lote].manana; })
+          .join(sep);
+        colTarde = lotes
+          .map(function (lote) { return stats.map[lote].tarde; })
+          .join(sep);
+        colTrabajadores = lotes
+          .map(function (lote) { return workersOnLote_(lote); })
+          .join(sep);
+        colLotes = lotes.join(sep);
+      } else {
+        colDia = totalDia;
+        colTarde = totalTarde;
+        colTrabajadores = lotes.length
+          ? workersOnLote_(lotes[0])
+          : countUniqueWorkers_(workers);
+        colLotes = lotes.length ? lotes[0] : '';
       }
 
       var fecha = clean_(d.fecha) || Utilities.formatDate(
@@ -523,11 +601,12 @@
       var row = [
         clean_(d.supervisorNombre).toUpperCase(),
         summaryType_(d.tipo),
-        totalDia,
-        totalTarde,
+        colDia,
+        colTarde,
         totalDia + totalTarde,
-        totalTrabajadores,
-        lotes.join(', '),
+        colTrabajadores,
+        colLotes,
+        lotes.length > 1 ? 'SI' : 'NO',
         fecha,
         formatHora_(d.horaGuardado)
       ];
@@ -539,9 +618,191 @@
       return true;
     }
 
+    /**
+    * Detalle por tipo: SUMA / DESCARTE / RESTA en hojas separadas.
+    */
+    function saveHarvestDetail_(d, localId) {
+      d = d || {};
+      localId = clean_(localId || d.localId || d.id);
+      var workers = Array.isArray(d.workers) ? d.workers : [];
+      if (!workers.length) return 0;
+
+      var tipo = summaryType_(d.tipo);
+      var sh = detailSheetForType_(tipo);
+      if (localId && detailRowsExist_(sh, localId)) return 0;
+
+      var fecha =
+        clean_(d.fecha) ||
+        Utilities.formatDate(new Date(), 'America/Lima', 'yyyy-MM-dd');
+      var observacion = clean_(d.observacion || defaultObservacion_(d.tipo)).toUpperCase();
+      var variedad = clean_(d.variedad).toUpperCase();
+      var loteBase = formatHarvestLote_(d);
+      var supervisorNombre = clean_(d.supervisorNombre).toUpperCase();
+
+      if (!countUniqueWorkers_(workers)) return 0;
+
+      var rows = [];
+      var seen = {};
+      for (var i = 0; i < workers.length; i++) {
+        var w = workers[i] || {};
+        var dni = digits_(w.dni);
+        if (!dni || dni.length < 8) continue;
+        var nombre = clean_(w.nombre || w.name).toUpperCase();
+        if (!nombre) continue;
+        var lote = formatWorkerLote_(w, d, loteBase);
+        var rowKey = dni + '|' + lote;
+        if (seen[rowKey]) continue;
+        seen[rowKey] = true;
+
+        var manana = number_(w.manana);
+        var tarde = number_(w.tarde);
+        var total = number_(w.total);
+        if (!(total > 0)) total = manana + tarde;
+
+        rows.push([
+          dni,
+          nombre,
+          manana,
+          tarde,
+          total,
+          lote,
+          variedad,
+          observacion,
+          rows.length === 0 ? supervisorNombre : '',
+          formatHarvestFecha_(fecha)
+        ]);
+      }
+
+      if (!rows.length) return 0;
+      var startRow = sh.getLastRow() + 1;
+      sh.getRange(startRow, 1, rows.length, DETAIL_HEADERS.length).setValues(rows);
+      sh.getRange(startRow, 1, rows.length, 1).setNumberFormat('@');
+      return rows.length;
+    }
+
+    function countUniqueWorkers_(workers) {
+      var seen = {};
+      var n = 0;
+      for (var i = 0; i < workers.length; i++) {
+        var dni = digits_(workers[i] && workers[i].dni);
+        if (!dni || dni.length < 8 || seen[dni]) continue;
+        seen[dni] = true;
+        n++;
+      }
+      return n;
+    }
+
+    function detailRowsExist_(sh, localId) {
+      localId = clean_(localId);
+      if (!localId) return false;
+      return isDuplicateLocalId_(localId);
+    }
+
+    /** Anti-duplicado global por localId (caché del servidor). */
+    function detailRowsExistAny_(localId) {
+      localId = clean_(localId);
+      if (!localId) return false;
+      return isDuplicateLocalId_(localId);
+    }
+
+    function detailSheetNameForType_(tipo) {
+      var key = summaryType_(tipo);
+      return DETAIL_SHEETS[key] || DETAIL_SHEETS.SUMA;
+    }
+
+    function formatHarvestLote_(d) {
+      d = d || {};
+      if (Array.isArray(d.lotes) && d.lotes.length > 1) {
+        return '';
+      }
+      if (Array.isArray(d.lotes) && d.lotes.length === 1) {
+        return normalizeLoteToken_(d.lotes[0]);
+      }
+      var raw = normalizeLoteToken_(d.lote || d.codLote || d.loteCodigo);
+      if (raw.indexOf(',') >= 0) return '';
+      if (raw) return raw;
+      return '';
+    }
+
+    function normalizeLoteToken_(value) {
+      var lote = clean_(value).toUpperCase();
+      if (!lote) return '';
+      if (lote.indexOf(',') >= 0) {
+        lote = clean_(lote.split(',')[0]).toUpperCase();
+      }
+      return lote;
+    }
+
+    function formatWorkerLote_(worker, payload, fallback) {
+      worker = worker || {};
+      payload = payload || {};
+      var fromWorker = clean_(worker.lote || worker.codLote || worker.loteCodigo).toUpperCase();
+      if (fromWorker) return fromWorker;
+      var fb = clean_(fallback).toUpperCase();
+      if (fb) return fb;
+      return formatHarvestLote_(payload);
+    }
+
+    function defaultObservacion_(tipo) {
+      var t = summaryType_(tipo);
+      if (t === 'DESCARTE') return 'DESCARTE - DESHIDRATADO';
+      if (t === 'RESTA') return 'RESTA';
+      return 'SUMA';
+    }
+
     function addUniqueLote_(list, value) {
       var lote = clean_(value).toUpperCase();
       if (lote && list.indexOf(lote) < 0) list.push(lote);
+    }
+
+    /** Totales mañana/tarde/trabajadores por lote (solo desde filas reales). */
+    function buildSummaryLoteStats_(workers, d) {
+      d = d || {};
+      workers = Array.isArray(workers) ? workers : [];
+      var loteMap = {};
+      var order = [];
+
+      function ensureLote(value) {
+        var lote = normalizeLoteToken_(value);
+        if (!lote) return '';
+        if (!loteMap[lote]) {
+          loteMap[lote] = { manana: 0, tarde: 0, dnis: {} };
+          order.push(lote);
+        }
+        return lote;
+      }
+
+      for (var i = 0; i < workers.length; i++) {
+        var w = workers[i] || {};
+        var lote = ensureLote(formatWorkerLote_(w, d, ''));
+        if (!lote) continue;
+        var dni = digits_(w.dni);
+        loteMap[lote].manana += number_(w.manana);
+        loteMap[lote].tarde += number_(w.tarde);
+        if (dni && dni.length >= 8) loteMap[lote].dnis[dni] = true;
+      }
+
+      order = order.filter(function (lote) {
+        var entry = loteMap[lote] || {};
+        var workersCount = Object.keys(entry.dnis || {}).length;
+        return workersCount > 0 || number_(entry.manana) + number_(entry.tarde) > 0;
+      });
+
+      if (Array.isArray(d.lotes) && d.lotes.length) {
+        var preferred = [];
+        for (var j = 0; j < d.lotes.length; j++) {
+          var key = normalizeLoteToken_(d.lotes[j]);
+          if (key && loteMap[key] && preferred.indexOf(key) < 0) {
+            preferred.push(key);
+          }
+        }
+        for (var k = 0; k < order.length; k++) {
+          if (preferred.indexOf(order[k]) < 0) preferred.push(order[k]);
+        }
+        order = preferred;
+      }
+
+      return { order: order, map: loteMap };
     }
 
     function summaryType_(value) {
@@ -695,6 +956,7 @@
 
     var _shCache = null;
     var _harvestShCache = null;
+    var _detailShCache = {};
     var _manualShCache = null;
 
     function sheet_() {
@@ -739,6 +1001,58 @@
       }
       ensureExactSummaryHeaders_(ss, sh);
       return ss.getSheetByName(SUMMARY_SHEET_NAME);
+    }
+
+    function detailSheetForType_(tipo) {
+      var key = summaryType_(tipo);
+      var name = detailSheetNameForType_(tipo);
+      if (_detailShCache[name]) return _detailShCache[name];
+      var ss = SpreadsheetApp.getActiveSpreadsheet();
+      if (!ss) throw new Error('No hay spreadsheet activo');
+      var sh = ss.getSheetByName(name);
+      if (!sh) sh = ss.insertSheet(name);
+      ensureExactDetailHeaders_(ss, sh, name);
+      sh = ss.getSheetByName(name);
+      styleDetailHeaders_(sh, key);
+      _detailShCache[name] = sh;
+      return sh;
+    }
+
+    function ensureExactDetailHeaders_(ss, sh, sheetName) {
+      sheetName = clean_(sheetName) || sh.getName();
+      if (!sh.getLastRow()) {
+        writeTableHeaders_(sh, DETAIL_HEADERS);
+        return;
+      }
+      var current = sh
+        .getRange(1, 1, 1, Math.max(sh.getLastColumn(), DETAIL_HEADERS.length))
+        .getDisplayValues()[0]
+        .slice(0, DETAIL_HEADERS.length)
+        .map(function (value) { return clean_(value).toUpperCase(); });
+      var expected = DETAIL_HEADERS.map(function (value) {
+        return clean_(value).toUpperCase();
+      });
+      if (current.join('|') === expected.join('|')) return;
+
+      var backupName = sheetName + '-ANTERIOR-' + Utilities.formatDate(
+        new Date(),
+        'America/Lima',
+        'yyyyMMdd-HHmmss'
+      );
+      sh.setName(backupName);
+      var fresh = ss.insertSheet(sheetName);
+      writeTableHeaders_(fresh, DETAIL_HEADERS);
+    }
+
+    function styleDetailHeaders_(sh, tipoKey) {
+      var bg = '#5ead51';
+      if (tipoKey === 'DESCARTE') bg = '#c45c26';
+      if (tipoKey === 'RESTA') bg = '#b42318';
+      sh.getRange(1, 1, 1, DETAIL_HEADERS.length)
+        .setFontWeight('bold')
+        .setBackground(bg)
+        .setFontColor('#ffffff');
+      sh.setFrozenRows(1);
     }
 
     function manualSheet_() {
@@ -928,6 +1242,18 @@
     function number_(value) {
       var n = Number(value);
       return isFinite(n) ? n : 0;
+    }
+
+    function formatHarvestFecha_(fecha) {
+      var raw = clean_(fecha);
+      if (!raw) {
+        return Utilities.formatDate(new Date(), 'America/Lima', 'd/MM/yyyy');
+      }
+      var parts = raw.split('-');
+      if (parts.length === 3) {
+        return Number(parts[2]) + '/' + parts[1] + '/' + parts[0];
+      }
+      return raw;
     }
 
     function formatHora_(value) {
