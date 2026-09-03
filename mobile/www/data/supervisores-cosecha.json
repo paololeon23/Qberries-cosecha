@@ -7,8 +7,8 @@
     "macroPartida": "COSTO DE COSECHA",
     "actividad": "SUPERVISOR DE COSECHA"
   },
-  "count": 73,
-  "updatedAt": "2026-08-21T15:35:00.000Z",
+  "count": 76,
+  "updatedAt": "2026-09-03T17:00:00.000Z",
   "byDni": {
     "18851808": {
       "nombre": "AGUIRRE NORIEGA MARCO ANTONIO",
@@ -110,6 +110,13 @@
     },
     "47390654": {
       "nombre": "BERNABE GALARRETA NEPTALI ESPERANZA",
+      "cargo": "SUPERVISOR DE COSECHA",
+      "celular": "",
+      "supervisorGlobal": "VERDE PINILLOS LUIS PABLITO",
+      "encargadoDni": "77795510"
+    },
+    "47540370": {
+      "nombre": "PINGO CASTILLO LIZEL YVET",
       "cargo": "SUPERVISOR DE COSECHA",
       "celular": "",
       "supervisorGlobal": "VERDE PINILLOS LUIS PABLITO",
@@ -423,6 +430,13 @@
       "supervisorGlobal": "VERDE PINILLOS LUIS PABLITO",
       "encargadoDni": "77795510"
     },
+    "74959142": {
+      "nombre": "DELGADO ABANTO SUSAN",
+      "cargo": "SUPERVISOR DE COSECHA",
+      "celular": "",
+      "supervisorGlobal": "VERDE PINILLOS LUIS PABLITO",
+      "encargadoDni": "77795510"
+    },
     "74959924": {
       "nombre": "ARMAS DIAZ CRISTIAN DANIEL",
       "cargo": "SUPERVISOR DE COSECHA",
@@ -509,6 +523,13 @@
     },
     "80447458": {
       "nombre": "POLO RODRIGUEZ SANTOS TIMOTEO",
+      "cargo": "SUPERVISOR DE COSECHA",
+      "celular": "",
+      "supervisorGlobal": "VERDE PINILLOS LUIS PABLITO",
+      "encargadoDni": "77795510"
+    },
+    "81560694": {
+      "nombre": "VILLANUEVA JACKELINE",
       "cargo": "SUPERVISOR DE COSECHA",
       "celular": "",
       "supervisorGlobal": "VERDE PINILLOS LUIS PABLITO",

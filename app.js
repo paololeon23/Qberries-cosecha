@@ -40,7 +40,7 @@
   const FUNDO_OPTIONS = ["Licapa I", "Licapa II", "Licapa III"];
 /** Ficha de vínculo en pausa: en Vincular se muestra historial de guías. */
   const VINCULO_FORM_PAUSED = true;
-  const APP_VERSION = "v471";
+  const APP_VERSION = "v472";
 
   function normalizeFundo(value) {
     const raw = String(value || "").trim();
