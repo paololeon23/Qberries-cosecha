@@ -1,4 +1,4 @@
-﻿const CACHE = "qb-supervisores-v464";
+﻿const CACHE = "qb-supervisores-v471";
 const CORE_ASSETS = [
   "/",
   "/index.html",
@@ -27,6 +27,7 @@ const CORE_ASSETS = [
   "/vendor/jsQR.min.js",
   "/vendor/sweetalert2.all.min.js",
 ];
+/** Excel/PDF/QR: solo bajo demanda (más liviano al abrir). El fetch las guarda en caché. */
 const LAZY_ASSETS = [
   "/vendor/xlsx.full.min.js",
   "/vendor/jspdf.umd.min.js",

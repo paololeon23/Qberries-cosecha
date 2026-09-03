@@ -143,37 +143,44 @@ function upsertExcelFileInFolder_(folder, blob, fileName) {
 }
 
 function uploadExcel_(data) {
-  var fileName = safeFileName_(data.fileName || data.name || 'cosecha.xlsx');
-  var b64 = String(data.base64 || data.content || '').replace(/\s+/g, '');
-  if (!b64) throw new Error('Falta el archivo (base64)');
-  if (b64.length > 12 * 1024 * 1024) {
-    throw new Error('El Excel es demasiado grande para subir');
-  }
-
-  var tipo = normalizeTipo_(data.tipo || data.typeKey || data.folder || data.observacion || '');
-  var mime = String(data.mimeType || data.type || XLSX_MIME).trim() || XLSX_MIME;
-  var bytes = Utilities.base64Decode(b64);
-  var blob = Utilities.newBlob(bytes, mime, fileName);
-  var folder = resolveFolderForTipo_(tipo);
-  var file = data.replaceExisting
-    ? upsertExcelFileInFolder_(folder, blob, fileName)
-    : folder.createFile(blob);
-
-  // Enlace usable para pasar por WhatsApp / correo
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
   try {
-    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-  } catch (shareErr) {
-    // Si la cuenta restringe "cualquiera con el link", igual devolvemos getUrl()
-  }
+    var fileName = safeFileName_(data.fileName || data.name || 'cosecha.xlsx');
+    var b64 = String(data.base64 || data.content || '').replace(/\s+/g, '');
+    if (!b64) throw new Error('Falta el archivo (base64)');
+    if (b64.length > 12 * 1024 * 1024) {
+      throw new Error('El Excel es demasiado grande para subir');
+    }
 
-  return {
-    fileId: file.getId(),
-    name: file.getName(),
-    url: file.getUrl(),
-    folder: folder.getName(),
-    folderId: folder.getId(),
-    tipo: tipo
-  };
+    var tipo = normalizeTipo_(data.tipo || data.typeKey || data.folder || data.observacion || '');
+    var mime = String(data.mimeType || data.type || XLSX_MIME).trim() || XLSX_MIME;
+    var bytes = Utilities.base64Decode(b64);
+    var blob = Utilities.newBlob(bytes, mime, fileName);
+    var folder = resolveFolderForTipo_(tipo);
+    // Siempre reemplaza el archivo del mismo nombre (evita duplicados por doble toque)
+    var replace = data.replaceExisting !== false;
+    var file = replace
+      ? upsertExcelFileInFolder_(folder, blob, fileName)
+      : folder.createFile(blob);
+
+    try {
+      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    } catch (shareErr) {
+      // Si la cuenta restringe "cualquiera con el link", igual devolvemos getUrl()
+    }
+
+    return {
+      fileId: file.getId(),
+      name: file.getName(),
+      url: file.getUrl(),
+      folder: folder.getName(),
+      folderId: folder.getId(),
+      tipo: tipo
+    };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 /**
@@ -230,7 +237,14 @@ function getOrCreateSubfolder_(parent, name) {
   if (!want) throw new Error('Nombre de subcarpeta vacío');
   var it = parent.getFoldersByName(want);
   if (it.hasNext()) return it.next();
-  return parent.createFolder(want);
+  // Revisa otra vez tras crear (evita carpetas duplicadas por carrera)
+  try {
+    return parent.createFolder(want);
+  } catch (err) {
+    var again = parent.getFoldersByName(want);
+    if (again.hasNext()) return again.next();
+    throw err;
+  }
 }
 
 function resolveRootFolder_() {

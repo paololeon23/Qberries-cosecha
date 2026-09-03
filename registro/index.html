@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
@@ -299,6 +299,7 @@
                   />
                 </label>
               </div>
+              <p class="guides-descarte-hint">El total debe ser el mismo que te salió en el conteo.</p>
             </div>
 
             <div class="guides-bottom-panel">
@@ -347,6 +348,18 @@
               <input id="pickerNewTurno" type="text" inputmode="numeric" placeholder="Ej. 2" autocomplete="off" />
             </label>
             </div>
+            <label class="picker-create-variedad">
+              <span>Variedad</span>
+              <input type="hidden" id="pickerNewVariedad" value="" />
+              <button type="button" class="picker-variedad-trigger" id="btnPickerVariedad" aria-haspopup="listbox" aria-expanded="false">
+                <span class="ph" id="pickerVariedadLabel">Elegir variedad</span>
+                <span class="chev" data-icon="chevron-down"></span>
+              </button>
+              <div class="picker-variedad-menu" id="pickerVariedadMenu" role="listbox" hidden>
+                <button type="button" class="picker-variedad-option" role="option" data-variedad="Sekoya Pop">Sekoya Pop</button>
+                <button type="button" class="picker-variedad-option" role="option" data-variedad="Mágica">Mágica</button>
+              </div>
+            </label>
             <button type="submit" class="picker-create-save" id="pickerCreateSave">Guardar</button>
           </form>
         </div>

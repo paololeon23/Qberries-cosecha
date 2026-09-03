@@ -40,7 +40,7 @@
   const FUNDO_OPTIONS = ["Licapa I", "Licapa II", "Licapa III"];
 /** Ficha de vínculo en pausa: en Vincular se muestra historial de guías. */
   const VINCULO_FORM_PAUSED = true;
-  const APP_VERSION = "v464";
+  const APP_VERSION = "v471";
 
   function normalizeFundo(value) {
     const raw = String(value || "").trim();
@@ -579,39 +579,53 @@
     if (!scriptExcelDriveUrl()) {
       return { sent: 0, remain: loadDriveQueue().length };
     }
+    if (state.driveUploadBusy) {
+      return { sent: 0, remain: loadDriveQueue().length, busy: true };
+    }
     const queue = loadDriveQueue();
     if (!queue.length) return { sent: 0, remain: 0 };
 
+    state.driveUploadBusy = true;
     const remain = [];
     let sent = 0;
-    for (const item of queue) {
-      const snapshot = historySnapshotById(item.id);
-      if (!snapshot) continue; // registro fuera de TTL: descartar
-      try {
-        const result = await uploadHarvestExcelToDrive(snapshot);
-        if (result.ok && result.url) {
-          saveHarvestDriveUrl(snapshot, result.url, result.name);
-          markHarvestSnapshotSent(snapshot);
-          sent += 1;
-        } else {
+    try {
+      for (const item of queue) {
+        const snapshot = historySnapshotById(item.id);
+        if (!snapshot) continue; // registro fuera de TTL: descartar
+        if (
+          getHarvestDriveUrl(snapshot) ||
+          isHarvestTypeExportedToday(snapshot.tipo)
+        ) {
+          continue; // ya subido: no reenviar
+        }
+        try {
+          const result = await uploadHarvestExcelToDrive(snapshot);
+          if (result.ok && result.url) {
+            saveHarvestDriveUrl(snapshot, result.url, result.name);
+            markHarvestSnapshotSent(snapshot);
+            sent += 1;
+          } else {
+            remain.push(item);
+          }
+        } catch {
           remain.push(item);
         }
-      } catch {
-        remain.push(item);
       }
+      saveDriveQueue(remain);
+      updateNetworkUI();
+      if (sent > 0) {
+        toast(
+          remain.length
+            ? `Drive: ${sent} subido(s) · ${remain.length} pendiente(s)`
+            : `Drive: ${sent} Excel subido(s)`
+        );
+        renderHarvestHistory();
+        renderHarvestDayChecklist();
+      }
+      return { sent, remain: remain.length };
+    } finally {
+      state.driveUploadBusy = false;
     }
-    saveDriveQueue(remain);
-    updateNetworkUI();
-    if (sent > 0) {
-      toast(
-        remain.length
-          ? `Drive: ${sent} subido(s) · ${remain.length} pendiente(s)`
-          : `Drive: ${sent} Excel subido(s)`
-      );
-      renderHarvestHistory();
-      renderHarvestDayChecklist();
-    }
-    return { sent, remain: remain.length };
   }
 
   async function shareDriveLink(link, fileName) {
@@ -645,6 +659,10 @@
       toast("No hay registro para subir");
       return { ok: false };
     }
+    if (state.driveUploadBusy) {
+      toast("Subida en curso · espere");
+      return { ok: false, busy: true };
+    }
     if (isHarvestTypeExportedToday(snapshot.tipo)) {
       toast(
         `${harvestTypeShort(snapshot.tipo)} ya enviado hoy · un solo envío a Drive`
@@ -670,11 +688,12 @@
       return { ok: false, queued: true };
     }
 
+    // Lock sincrónico ANTES de cualquier await (bloquea doble toque)
+    state.driveUploadBusy = true;
     if (button) setBtnLoading(button, true, "Subiendo…");
     try {
       const result = await uploadHarvestExcelToDrive(snapshot);
       if (!result.ok) {
-        // Red falló: dejar pendiente para reintento
         enqueueDriveUpload(snapshot);
         toast(
           result.message
@@ -684,7 +703,6 @@
         renderHarvestHistory();
         return { ok: false, queued: true };
       }
-      // Quitar de cola si estaba
       saveDriveQueue(loadDriveQueue().filter((item) => item.id !== snapshot.id));
       saveHarvestDriveUrl(snapshot, result.url, result.name);
       state.lastDriveExcelUrl = result.url;
@@ -695,6 +713,7 @@
       await shareDriveLink(result.url, result.name);
       return { ok: true };
     } finally {
+      state.driveUploadBusy = false;
       if (button) setBtnLoading(button, false);
     }
   }
@@ -1937,6 +1956,7 @@
     activeExportSnapshots: /** @type {object[]|null} */ (null),
     activeExportSaved: false,
     /** Clics a “Subir a Drive” en el modal abierto (2.º clic pide confirmación). */
+    driveUploadBusy: false,
     driveUploadPresses: 0,
     previewDraftSnapshot: null,
     /** Borradores del modal por tipo (Suma/Resta/Descarte) sin perder datos. */
@@ -2307,14 +2327,38 @@
       });
     });
 
-    const lotes = [...lMap.values()].sort((a, b) => {
-      const na = Number(a.lote);
-      const nb = Number(b.lote);
-      if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
-      return a.lote.localeCompare(b.lote, "es");
-    });
+    const lotes = [...lMap.values()].sort((a, b) => compareLoteLabels_(a.lote, b.lote));
 
     return { grupos, lotes };
+  }
+
+  /** Orden natural: 207 → 208 A → 208 B → 209 (A antes que B). */
+  function compareLoteLabels_(a, b) {
+    const pa = parseLoteSortParts_(a);
+    const pb = parseLoteSortParts_(b);
+    if (pa.num !== pb.num) return pa.num - pb.num;
+    if (pa.suffix !== pb.suffix) {
+      return pa.suffix.localeCompare(pb.suffix, "es", { sensitivity: "base" });
+    }
+    return String(a || "").localeCompare(String(b || ""), "es", {
+      numeric: true,
+      sensitivity: "base",
+    });
+  }
+
+  function parseLoteSortParts_(value) {
+    const raw = String(value || "")
+      .trim()
+      .toUpperCase()
+      .replace(/\s+/g, " ");
+    const m = raw.match(/^(\d+)\s*([A-Z]*)(.*)$/);
+    if (!m) {
+      return { num: Number.POSITIVE_INFINITY, suffix: raw };
+    }
+    return {
+      num: Number(m[1]) || 0,
+      suffix: `${m[2] || ""}${String(m[3] || "").trim()}`.trim(),
+    };
   }
 
   async function fetchCatalogFile(path) {
@@ -2965,6 +3009,8 @@
     if ($("#pickerNewLote")) $("#pickerNewLote").value = "";
     if ($("#pickerNewModulo")) $("#pickerNewModulo").value = "";
     if ($("#pickerNewTurno")) $("#pickerNewTurno").value = "";
+    resetPickerVariedad();
+    closePickerVariedadMenu();
   }
 
   function showPickerCreate() {
@@ -2983,7 +3029,58 @@
     if ($("#pickerNewLote")) $("#pickerNewLote").value = typed.replace(/^lote\s*/i, "");
     if ($("#pickerNewModulo")) $("#pickerNewModulo").value = "";
     if ($("#pickerNewTurno")) $("#pickerNewTurno").value = "";
+    resetPickerVariedad();
+    closePickerVariedadMenu();
+    hydrateIcons(form);
     setTimeout(() => $("#pickerNewLote")?.focus({ preventScroll: true }), 40);
+  }
+
+  function resetPickerVariedad() {
+    const input = $("#pickerNewVariedad");
+    const label = $("#pickerVariedadLabel");
+    if (input) input.value = "";
+    if (label) {
+      label.textContent = "Elegir variedad";
+      label.classList.add("ph");
+    }
+    $$("#pickerVariedadMenu [data-variedad]").forEach((btn) =>
+      btn.classList.remove("is-selected")
+    );
+  }
+
+  function closePickerVariedadMenu() {
+    const menu = $("#pickerVariedadMenu");
+    const trigger = $("#btnPickerVariedad");
+    if (menu) menu.hidden = true;
+    if (trigger) {
+      trigger.classList.remove("is-open");
+      trigger.setAttribute("aria-expanded", "false");
+    }
+  }
+
+  function togglePickerVariedadMenu() {
+    const menu = $("#pickerVariedadMenu");
+    const trigger = $("#btnPickerVariedad");
+    if (!menu || !trigger) return;
+    const open = menu.hidden;
+    menu.hidden = !open;
+    trigger.classList.toggle("is-open", open);
+    trigger.setAttribute("aria-expanded", open ? "true" : "false");
+  }
+
+  function setPickerVariedad(value) {
+    const v = String(value || "").trim();
+    const input = $("#pickerNewVariedad");
+    const label = $("#pickerVariedadLabel");
+    if (input) input.value = v;
+    if (label) {
+      label.textContent = v || "Elegir variedad";
+      label.classList.toggle("ph", !v);
+    }
+    $$("#pickerVariedadMenu [data-variedad]").forEach((btn) => {
+      btn.classList.toggle("is-selected", btn.dataset.variedad === v);
+    });
+    closePickerVariedadMenu();
   }
 
   function onPickerCreateSave(e) {
@@ -2993,6 +3090,7 @@
     const lote = String($("#pickerNewLote")?.value || "").trim();
     const modulo = String($("#pickerNewModulo")?.value || "").trim();
     const turno = String($("#pickerNewTurno")?.value || "").trim();
+    const variedad = String($("#pickerNewVariedad")?.value || "").trim();
     if (!lote) {
       toast("Escriba el lote");
       $("#pickerNewLote")?.focus({ preventScroll: true });
@@ -3008,7 +3106,12 @@
       $("#pickerNewTurno")?.focus({ preventScroll: true });
       return;
     }
-    const row = addCustomLote(lote, modulo, turno);
+    if (!variedad) {
+      toast("Elija la variedad");
+      $("#btnPickerVariedad")?.focus({ preventScroll: true });
+      return;
+    }
+    const row = addCustomLote(lote, modulo, turno, variedad);
     if (row) applyPickerValue(row.lote);
   }
 
@@ -6401,16 +6504,17 @@
     }
     const jabasInput = $("#guidesDescarteJabasInput");
     const jarrasInput = $("#guidesDescarteJarrasInput");
-    const jabasRaw = jabasInput
-      ? String(jabasInput.value || "").replace(/\D/g, "")
-      : null;
-    const jarrasRaw = jarrasInput
-      ? String(jarrasInput.value || "").replace(/\D/g, "")
-      : null;
-    if (jabasRaw !== null && jabasRaw !== "") {
-      setGuidesDescarteJabas(jabasRaw, { skipSave: true });
-    } else if (jarrasRaw !== null) {
-      setGuidesDescarteJarras(jarrasRaw, { skipSave: true });
+    // Leer ambos por separado: NO recalcular jarras desde jabas aquí
+    // (si el usuario bajó 24→20, debe respetarse).
+    if (jabasInput) {
+      const digits = String(jabasInput.value || "").replace(/\D/g, "");
+      const n = digits === "" ? 0 : num(digits);
+      state.session.descarteJabas = n > 0 ? n : 0;
+    }
+    if (jarrasInput) {
+      const digits = String(jarrasInput.value || "").replace(/\D/g, "");
+      const n = digits === "" ? 0 : num(digits);
+      state.session.descarteJarras = n > 0 ? n : 0;
     }
   }
 
@@ -6661,10 +6765,9 @@
       .replace(/^0+(?=\d)/, "");
     const n = digits === "" ? 0 : num(digits);
     state.session.descarteJabas = n > 0 ? n : 0;
-    if (n > 0) {
+    // Solo al escribir jabas: sugiere jarras (12 c/u). Luego el usuario puede editarlas.
+    if (n > 0 && !opts.keepJarras) {
       state.session.descarteJarras = n * JARRAS_POR_JABA;
-    } else {
-      state.session.descarteJarras = 0;
     }
     if (!opts.skipSave) saveStore();
     syncGuidesDescarteInputs();
@@ -7058,6 +7161,12 @@
     const btnSave = $("#btnSaveGuidesSummary");
     const btnCancel = $("#btnCancelGuidesSummary");
     const btnClose = $("#btnCloseGuidesSummary");
+    const unlock = () => {
+      state.savingGuias = false;
+      if (btnSave) btnSave.disabled = false;
+      if (btnCancel) btnCancel.disabled = false;
+      if (btnClose) btnClose.disabled = false;
+    };
 
     // Solo guardar (celular + nube). NO descarga Excel.
     state.savingGuias = true;
@@ -7065,47 +7174,45 @@
     if (btnCancel) btnCancel.disabled = true;
     if (btnClose) btnClose.disabled = true;
 
-    const payload = persistAndQueueGuias();
-    if (!payload) {
-      state.savingGuias = false;
-      if (btnSave) btnSave.disabled = false;
-      if (btnCancel) btnCancel.disabled = false;
-      if (btnClose) btnClose.disabled = false;
-      toast("Falta supervisor para guardar");
-      return;
+    try {
+      const payload = persistAndQueueGuias();
+      if (!payload) {
+        unlock();
+        toast("Falta supervisor para guardar");
+        return;
+      }
+
+      pushGuiasHistory(payload);
+      saveStore();
+
+      // Tras guardar: limpiar inputs / guías de pantalla (sesión del supervisor se mantiene)
+      state.guias = [emptyGuia()];
+      state.expandedGuiaId = state.guias[0].id;
+      // Pedir LIC de nuevo en el próximo registro
+      state.session.grupoLic = "";
+      clearGuidesExtrasAfterSave();
+      renderGuidesLicLabel();
+      saveStore();
+
+      closeGuidesSummary();
+      renderCards();
+      updateKpis();
+      updateMeta();
+      updateNetworkUI();
+
+      if (!navigator.onLine) {
+        toast("Guardado · pantalla limpia · pendiente de subir");
+      } else {
+        toast("Guardado · pantalla limpia · subiendo…");
+      }
+
+      flushGuiasInBackground();
+    } catch {
+      toast("No se pudo guardar · intente de nuevo");
+    } finally {
+      // Evita doble toque; siempre libera el candado aunque falle algo arriba.
+      setTimeout(unlock, 800);
     }
-
-    pushGuiasHistory(payload);
-    saveStore();
-
-    // Tras guardar: limpiar inputs / guías de pantalla (sesión del supervisor se mantiene)
-    state.guias = [emptyGuia()];
-    state.expandedGuiaId = state.guias[0].id;
-    // Pedir LIC de nuevo en el próximo registro
-    state.session.grupoLic = "";
-    clearGuidesExtrasAfterSave();
-    renderGuidesLicLabel();
-    saveStore();
-
-    closeGuidesSummary();
-    renderCards();
-    updateKpis();
-    updateMeta();
-    updateNetworkUI();
-
-    if (!navigator.onLine) {
-      toast("Guardado · pantalla limpia · pendiente de subir");
-    } else {
-      toast("Guardado · pantalla limpia · subiendo…");
-    }
-
-    flushGuiasInBackground();
-    setTimeout(() => {
-      state.savingGuias = false;
-      if (btnSave) btnSave.disabled = false;
-      if (btnCancel) btnCancel.disabled = false;
-      if (btnClose) btnClose.disabled = false;
-    }, 1500);
   }
 
   function formatGuiaLoteSummary(guia) {
@@ -8169,6 +8276,10 @@
    * Así nadie olvida pulsar Guardar; el formulario queda limpio.
    */
   async function saveAndUploadHarvestFromPreview(button) {
+    if (state.driveUploadBusy) {
+      toast("Subida en curso · espere");
+      return;
+    }
     let anchor = state.activeExportSnapshot;
     if (!anchor) {
       toast("No hay registro para subir");
@@ -8209,14 +8320,20 @@
     }
 
     const existing = getHarvestDriveUrl(anchor);
+
+    // Bloqueo inmediato: evita doble toque / envíos paralelos a Drive
+    state.driveUploadBusy = true;
+    if (button) {
+      button.disabled = true;
+      button.setAttribute("aria-disabled", "true");
+      setBtnLoading(
+        button,
+        true,
+        needsSave ? "Guardando…" : existing ? "Abriendo…" : "Subiendo…"
+      );
+    }
+
     const run = async () => {
-      if (button) {
-        setBtnLoading(
-          button,
-          true,
-          needsSave ? "Guardando…" : existing ? "Abriendo…" : "Subiendo…"
-        );
-      }
       if (needsSave) showAppLoader("Guardando y subiendo…");
       else if (!existing) showAppLoader("Subiendo a Drive…");
       try {
@@ -8265,27 +8382,78 @@
           snapshots = fresh.list;
         }
 
-        await uploadOrQueueHarvestToDrive(anchor, null);
+        // Subida directa (ya hay lock en state.driveUploadBusy)
+        await uploadHarvestExcelToDriveUnlocked_(anchor);
         focusNextMissingHarvestType();
         closeExportPreview();
       } finally {
         hideAppLoader();
-        if (button) setBtnLoading(button, false);
       }
     };
 
-    // Ya en Drive → solo compartir enlace (sin re-subir)
-    if (existing) {
-      if (button) setBtnLoading(button, true, "Abriendo…");
-      try {
-        await uploadOrQueueHarvestToDrive(anchor, null);
-      } finally {
-        if (button) setBtnLoading(button, false);
+    try {
+      // Ya en Drive → solo compartir enlace (sin re-subir)
+      if (existing) {
+        markHarvestExportSent(anchor);
+        await shareDriveLink(existing, harvestFileName(anchor));
+        return;
       }
-      return;
+      await run();
+    } finally {
+      state.driveUploadBusy = false;
+      if (button) setBtnLoading(button, false);
+      updateExportPreviewSavedUI();
     }
+  }
 
-    await run();
+  /** Subida a Drive sin re-entrar al lock (ya lo tiene el caller). */
+  async function uploadHarvestExcelToDriveUnlocked_(snapshot) {
+    if (!snapshot) {
+      toast("No hay registro para subir");
+      return { ok: false };
+    }
+    if (isHarvestTypeExportedToday(snapshot.tipo)) {
+      toast(
+        `${harvestTypeShort(snapshot.tipo)} ya enviado hoy · un solo envío a Drive`
+      );
+      return { ok: false, blocked: true };
+    }
+    if (!scriptExcelDriveUrl()) {
+      toast("Drive no configurado en la app");
+      return { ok: false };
+    }
+    const existing = getHarvestDriveUrl(snapshot);
+    if (existing) {
+      markHarvestExportSent(snapshot);
+      await shareDriveLink(existing, harvestFileName(snapshot));
+      return { ok: true };
+    }
+    if (!navigator.onLine) {
+      enqueueDriveUpload(snapshot);
+      toast("Sin internet · Drive en pendiente. Se sube al reconectar.");
+      renderHarvestHistory();
+      return { ok: false, queued: true };
+    }
+    const result = await uploadHarvestExcelToDrive(snapshot);
+    if (!result.ok) {
+      enqueueDriveUpload(snapshot);
+      toast(
+        result.message
+          ? `${result.message} · quedó pendiente`
+          : "No se pudo subir · quedó pendiente"
+      );
+      renderHarvestHistory();
+      return { ok: false, queued: true };
+    }
+    saveDriveQueue(loadDriveQueue().filter((item) => item.id !== snapshot.id));
+    saveHarvestDriveUrl(snapshot, result.url, result.name);
+    state.lastDriveExcelUrl = result.url;
+    markHarvestExportSent(snapshot);
+    toast("Excel subido a Drive");
+    toast(harvestDayProgressMessage());
+    renderHarvestHistory();
+    await shareDriveLink(result.url, result.name);
+    return { ok: true };
   }
 
   function updateExportPreviewSavedUI() {
@@ -8461,6 +8629,13 @@
   }
 
   function requestUploadDriveFromPreview(button) {
+    if (state.driveUploadBusy) {
+      toast("Subida en curso · espere");
+      return;
+    }
+    if (button?.disabled || button?.getAttribute("aria-disabled") === "true") {
+      return;
+    }
     saveAndUploadHarvestFromPreview(button);
   }
 
@@ -10830,6 +11005,27 @@
     on("#pickerClose", "click", closePicker);
     on("#pickerAdd", "click", onPickerAdd);
     on("#pickerCreate", "submit", onPickerCreateSave);
+    on("#btnPickerVariedad", "click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      togglePickerVariedadMenu();
+    });
+    on("#pickerVariedadMenu", "click", (e) => {
+      const opt = e.target?.closest?.("[data-variedad]");
+      if (!opt) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setPickerVariedad(opt.dataset.variedad);
+    });
+    on("#pickerCreate", "click", (e) => {
+      if (
+        e.target?.closest?.("#btnPickerVariedad") ||
+        e.target?.closest?.("#pickerVariedadMenu")
+      ) {
+        return;
+      }
+      closePickerVariedadMenu();
+    });
     on("#pickerQuery", "input", renderPickerList);
     on("#pickerList", "click", (e) => {
       const item = e.target.closest("[data-pick-value]");
@@ -10874,28 +11070,31 @@
       const el = e.target;
       const digits = String(el.value || "").replace(/\D/g, "");
       el.value = digits;
-      setGuidesAjuste(digits);
+      setGuidesAjuste(digits, { skipSave: true });
     });
     on("#guidesAjusteInput", "blur", () => {
       syncGuidesAjusteInput();
+      saveStore();
     });
     on("#guidesDescarteJabasInput", "input", (e) => {
       const el = e.target;
       const digits = String(el.value || "").replace(/\D/g, "");
       el.value = digits;
-      setGuidesDescarteJabas(digits);
+      setGuidesDescarteJabas(digits, { skipSave: true });
     });
     on("#guidesDescarteJabasInput", "blur", () => {
       syncGuidesDescarteInputs();
+      saveStore();
     });
     on("#guidesDescarteJarrasInput", "input", (e) => {
       const el = e.target;
       const digits = String(el.value || "").replace(/\D/g, "");
       el.value = digits;
-      setGuidesDescarteJarras(digits);
+      setGuidesDescarteJarras(digits, { skipSave: true });
     });
     on("#guidesDescarteJarrasInput", "blur", () => {
       syncGuidesDescarteInputs();
+      saveStore();
     });
     on("#guidesSummaryModal", "click", (e) => {
       if (state.savingGuias) return;
@@ -10999,6 +11198,7 @@
     on("#btnUploadDriveHarvest", "click", (e) => {
       e.preventDefault();
       e.stopPropagation();
+      if (state.driveUploadBusy) return;
       requestUploadDriveFromPreview(e.currentTarget);
     });
     on("#exportPreviewTypes", "click", (e) => {
@@ -11096,6 +11296,7 @@
         downloadHarvestSnapshot(snapshot, { single: true });
       } else if (action === "drive") {
         if (
+          state.driveUploadBusy ||
           button.disabled ||
           getHarvestDriveUrl(snapshot) ||
           isHarvestTypeExportedToday(snapshot.tipo)
@@ -11464,7 +11665,7 @@
   function bind() {
     const scrollParent_ = (el) =>
       el?.closest?.(
-        ".picker-list, #vinculoScreen:not(.is-thanks) .vinculo-scroll, #vinculoScreen:not(.is-thanks), .session-screen, .security-screen, .app-scroll, .harvest-scroll, .guides-scroll, .guides-sheet, .home-scroll, .export-preview, .history-sheet, .help-sheet"
+        ".picker-list, .check-pick-list, .guides-summary-card, #vinculoScreen:not(.is-thanks) .vinculo-scroll, #vinculoScreen:not(.is-thanks), .session-screen, .security-screen, .app-scroll, .harvest-scroll, .guides-scroll, .guides-sheet, .home-scroll, .export-preview, .history-sheet, .help-sheet"
       );
 
     if (!bind._global) {
@@ -11513,19 +11714,21 @@
           }
           return;
         }
-        const pickerList = e.target?.closest?.(".picker-list");
-        if (pickerList) {
-          const canScroll = pickerList.scrollHeight > pickerList.clientHeight + 1;
+        const pickList = e.target?.closest?.(
+          ".picker-list, .check-pick-list, .guides-summary-card"
+        );
+        if (pickList) {
+          const canScroll = pickList.scrollHeight > pickList.clientHeight + 1;
           if (!canScroll) return;
-          const atTop = pickerList.scrollTop <= 0;
+          const atTop = pickList.scrollTop <= 0;
           const atBottom =
-            pickerList.scrollTop + pickerList.clientHeight >=
-            pickerList.scrollHeight - 1;
+            pickList.scrollTop + pickList.clientHeight >=
+            pickList.scrollHeight - 1;
           let dy = 0;
           if (e.type === "wheel") dy = e.deltaY;
           else if (e.touches && e.touches[0]) {
             dy =
-              (pickerList._touchY || e.touches[0].clientY) -
+              (pickList._touchY || e.touches[0].clientY) -
               e.touches[0].clientY;
           }
           if ((atTop && dy < 0) || (atBottom && dy > 0)) e.preventDefault();
