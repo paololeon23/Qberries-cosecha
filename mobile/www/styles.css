@@ -6784,6 +6784,41 @@ html.is-android body.kb-open .export-preview {
   line-height: 1.35;
   color: #5a7a5f;
 }
+.guides-descarte-auto {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 12px;
+  border-radius: 12px;
+  background: #fff;
+  border: 1.5px solid #c8e0c8;
+}
+.guides-descarte-auto > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.guides-descarte-auto span {
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: #1b6b3a;
+  letter-spacing: 0.02em;
+}
+.guides-descarte-auto small {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: #5a7a5f;
+}
+.guides-descarte-auto strong {
+  flex-shrink: 0;
+  font-size: 1.05rem;
+  font-weight: 900;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
 
 /* Panel totales · formal */
 .guides-bottom-panel {

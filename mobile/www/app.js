@@ -40,7 +40,7 @@
   const FUNDO_OPTIONS = ["Licapa I", "Licapa II", "Licapa III"];
 /** Ficha de vínculo en pausa: en Vincular se muestra historial de guías. */
   const VINCULO_FORM_PAUSED = true;
-  const APP_VERSION = "v472";
+  const APP_VERSION = "v473";
 
   function normalizeFundo(value) {
     const raw = String(value || "").trim();
@@ -591,12 +591,12 @@
     try {
       for (const item of queue) {
         const snapshot = historySnapshotById(item.id);
-        if (!snapshot) continue;
+        if (!snapshot) continue; // registro fuera de TTL: descartar
         if (
           getHarvestDriveUrl(snapshot) ||
           isHarvestTypeExportedToday(snapshot.tipo)
         ) {
-          continue;
+          continue; // ya subido: no reenviar
         }
         try {
           const result = await uploadHarvestExcelToDrive(snapshot);
@@ -688,6 +688,7 @@
       return { ok: false, queued: true };
     }
 
+    // Lock sincrónico ANTES de cualquier await (bloquea doble toque)
     state.driveUploadBusy = true;
     if (button) setBtnLoading(button, true, "Subiendo…");
     try {
@@ -837,6 +838,7 @@
     return loadScriptOnce(vendorScriptUrl("jspdf.umd.min.js"));
   }
 
+  /** Carga Excel en segundo plano (al abrir resumen), sin bloquear la pantalla. */
   function preloadExcelVendor() {
     if (typeof XLSX !== "undefined") return;
     loadScriptOnce(vendorScriptUrl("xlsx.full.min.js")).catch(() => {});
@@ -2070,6 +2072,7 @@
         HARVEST_KEY,
         JSON.stringify({ ...state.harvest, savedAt: new Date().toISOString() })
       );
+      syncGuidesDescarteFromHarvest();
     } catch {
       toast("No hay espacio para guardar · libere memoria del celular");
     }
@@ -6492,7 +6495,7 @@
     syncGuidesExtrasFromDom();
   }
 
-  /** R. manual y descarte/deshidratado: lee DOM antes de guardar en celular. */
+  /** R. manual: lee DOM. Descarte se toma del conteo (no se escribe a mano). */
   function syncGuidesExtrasFromDom() {
     const ajusteInput = $("#guidesAjusteInput");
     if (ajusteInput) {
@@ -6500,35 +6503,17 @@
         skipSave: true,
       });
     }
-    const jabasInput = $("#guidesDescarteJabasInput");
-    const jarrasInput = $("#guidesDescarteJarrasInput");
-    // Leer ambos por separado: NO recalcular jarras desde jabas aquí
-    // (si el usuario bajó 24→20, debe respetarse).
-    if (jabasInput) {
-      const digits = String(jabasInput.value || "").replace(/\D/g, "");
-      const n = digits === "" ? 0 : num(digits);
-      state.session.descarteJabas = n > 0 ? n : 0;
-    }
-    if (jarrasInput) {
-      const digits = String(jarrasInput.value || "").replace(/\D/g, "");
-      const n = digits === "" ? 0 : num(digits);
-      state.session.descarteJarras = n > 0 ? n : 0;
-    }
+    syncGuidesDescarteFromHarvest({ skipDom: true });
   }
 
-  /** Tras guardar/enviar guías: limpia R. manual y descarte (pantalla vacía). */
+  /** Tras guardar/enviar guías: limpia R. manual. Descarte sigue el conteo. */
   function clearGuidesExtrasAfterSave() {
     state.session.ajusteJarras = 0;
     state.session.aumentoJarras = 0;
     state.session.descuentoJarras = 0;
-    state.session.descarteJarras = 0;
-    state.session.descarteJabas = 0;
     const ajusteInput = $("#guidesAjusteInput");
-    const jabasInput = $("#guidesDescarteJabasInput");
-    const jarrasInput = $("#guidesDescarteJarrasInput");
     if (ajusteInput) ajusteInput.value = "";
-    if (jabasInput) jabasInput.value = "";
-    if (jarrasInput) jarrasInput.value = "";
+    syncGuidesDescarteFromHarvest();
   }
 
   /** Lee jarras mañana/tarde visibles del registro de cosecha. */
@@ -6747,51 +6732,40 @@
     input.value = n > 0 ? String(n) : "";
   }
 
+  /** Descarte en Guías = Total general del conteo Descarte (suma de todos los lotes). */
   function currentGuidesDescarteJarras() {
-    const n = num(state.session.descarteJarras);
+    const n = harvestTipoTotalJarras("descarte-deshidratado");
     return n > 0 ? n : 0;
   }
 
   function currentGuidesDescarteJabas() {
-    const n = num(state.session.descarteJabas);
-    return n > 0 ? n : 0;
-  }
-
-  function setGuidesDescarteJabas(raw, opts = {}) {
-    const digits = String(raw ?? "")
-      .replace(/\D/g, "")
-      .replace(/^0+(?=\d)/, "");
-    const n = digits === "" ? 0 : num(digits);
-    state.session.descarteJabas = n > 0 ? n : 0;
-    // Solo al escribir jabas: sugiere jarras (12 c/u). Luego el usuario puede editarlas.
-    if (n > 0 && !opts.keepJarras) {
-      state.session.descarteJarras = n * JARRAS_POR_JABA;
-    }
-    if (!opts.skipSave) saveStore();
-    syncGuidesDescarteInputs();
-  }
-
-  function setGuidesDescarteJarras(raw, opts = {}) {
-    const digits = String(raw ?? "")
-      .replace(/\D/g, "")
-      .replace(/^0+(?=\d)/, "");
-    const n = digits === "" ? 0 : num(digits);
-    state.session.descarteJarras = n > 0 ? n : 0;
-    if (!opts.skipSave) saveStore();
-    syncGuidesDescarteInputs();
-  }
-
-  function syncGuidesDescarteInputs() {
-    const jabasInput = $("#guidesDescarteJabasInput");
-    const jarrasInput = $("#guidesDescarteJarrasInput");
-    const jabas = currentGuidesDescarteJabas();
     const jarras = currentGuidesDescarteJarras();
-    if (jabasInput && document.activeElement !== jabasInput) {
-      jabasInput.value = jabas > 0 ? String(jabas) : "";
+    return jarras > 0 ? Math.floor(jarras / JARRAS_POR_JABA) : 0;
+  }
+
+  /** Copia el total del conteo a sesión + UI de Guías (tiempo real). */
+  function syncGuidesDescarteFromHarvest(opts = {}) {
+    const jarras = currentGuidesDescarteJarras();
+    const jabas = currentGuidesDescarteJabas();
+    state.session.descarteJarras = jarras;
+    state.session.descarteJabas = jabas;
+    if (opts.skipDom) return;
+    const totalEl = $("#guidesDescarteAutoTotal");
+    if (totalEl) {
+      totalEl.textContent =
+        jarras > 0 ? `${fmt(jarras)} jarras` : "0 jarras";
     }
-    if (jarrasInput && document.activeElement !== jarrasInput) {
-      jarrasInput.value = jarras > 0 ? String(jarras) : "";
+    const lotsEl = $("#guidesDescarteAutoLots");
+    if (lotsEl) {
+      const n = collectTipoHarvestDaySnapshots("descarte-deshidratado").length;
+      lotsEl.textContent =
+        n > 1 ? `${n} lotes` : n === 1 ? "1 lote" : "Sin conteo aún";
     }
+  }
+
+  /** @deprecated alias */
+  function syncGuidesDescarteInputs() {
+    syncGuidesDescarteFromHarvest();
   }
 
   /** @deprecated alias */
@@ -7301,7 +7275,7 @@
         ${
           descarteJarras > 0 || descarteJabas > 0
             ? `<div class="gs-paper-descarte">
-          <span>DESCARTE / DESHIDRATADO</span>
+          <span>DESCARTE / DESHIDRATADO · del conteo</span>
           <strong>${fmt(descarteJarras)} jarras · ${fmt(descarteJabas)} jabas</strong>
         </div>`
             : ""
@@ -7827,8 +7801,8 @@
     return Number.isFinite(n) ? n : 9999;
   }
 
-  /** Todos los lotes del tipo para un solo Excel (finalizados + en curso + historial válido). */
-  function collectTipoExportSnapshots(tipo) {
+  /** Todos los lotes del tipo del día (finalizados + en curso + historial válido). */
+  function collectTipoHarvestDaySnapshots(tipo, { includeSent = true } = {}) {
     const key = normalizeHarvestType(tipo);
     syncCurrentHarvestDraft();
     pruneHarvestDraftDuplicates(key);
@@ -7868,8 +7842,21 @@
 
     return Array.from(map.values())
       .filter(snapshotHasExportData)
-      .filter((snap) => !isHarvestSnapshotSent(snap))
+      .filter((snap) => includeSent || !isHarvestSnapshotSent(snap))
       .sort((a, b) => harvestLoteSortKey(a) - harvestLoteSortKey(b));
+  }
+
+  /** Lotes del tipo para un solo Excel (sin los ya enviados a Drive). */
+  function collectTipoExportSnapshots(tipo) {
+    return collectTipoHarvestDaySnapshots(tipo, { includeSent: false });
+  }
+
+  /** Suma de jarras del tipo (todos los lotes), igual que “Total general” del preview. */
+  function harvestTipoTotalJarras(tipo) {
+    return collectTipoHarvestDaySnapshots(tipo).reduce(
+      (sum, snap) => sum + snapshotTotal(snap),
+      0
+    );
   }
 
   function buildCombinedExportAnchor(tipo, snapshots) {
@@ -8319,6 +8306,7 @@
 
     const existing = getHarvestDriveUrl(anchor);
 
+    // Bloqueo inmediato: evita doble toque / envíos paralelos a Drive
     state.driveUploadBusy = true;
     if (button) {
       button.disabled = true;
@@ -8379,6 +8367,7 @@
           snapshots = fresh.list;
         }
 
+        // Subida directa (ya hay lock en state.driveUploadBusy)
         await uploadHarvestExcelToDriveUnlocked_(anchor);
         focusNextMissingHarvestType();
         closeExportPreview();
@@ -8388,6 +8377,7 @@
     };
 
     try {
+      // Ya en Drive → solo compartir enlace (sin re-subir)
       if (existing) {
         markHarvestExportSent(anchor);
         await shareDriveLink(existing, harvestFileName(anchor));
@@ -8401,6 +8391,7 @@
     }
   }
 
+  /** Subida a Drive sin re-entrar al lock (ya lo tiene el caller). */
   async function uploadHarvestExcelToDriveUnlocked_(snapshot) {
     if (!snapshot) {
       toast("No hay registro para subir");
@@ -8574,6 +8565,7 @@
       const total = list.reduce((sum, snap) => sum + snapshotTotal(snap), 0);
       $("#exportPreviewTotal").textContent = `${fmt(total)} jarras`;
     }
+    syncGuidesDescarteFromHarvest();
     renderExportPreviewDayStatus();
     updateExportPreviewSavedUI();
     return true;
@@ -11068,26 +11060,6 @@
     });
     on("#guidesAjusteInput", "blur", () => {
       syncGuidesAjusteInput();
-      saveStore();
-    });
-    on("#guidesDescarteJabasInput", "input", (e) => {
-      const el = e.target;
-      const digits = String(el.value || "").replace(/\D/g, "");
-      el.value = digits;
-      setGuidesDescarteJabas(digits, { skipSave: true });
-    });
-    on("#guidesDescarteJabasInput", "blur", () => {
-      syncGuidesDescarteInputs();
-      saveStore();
-    });
-    on("#guidesDescarteJarrasInput", "input", (e) => {
-      const el = e.target;
-      const digits = String(el.value || "").replace(/\D/g, "");
-      el.value = digits;
-      setGuidesDescarteJarras(digits, { skipSave: true });
-    });
-    on("#guidesDescarteJarrasInput", "blur", () => {
-      syncGuidesDescarteInputs();
       saveStore();
     });
     on("#guidesSummaryModal", "click", (e) => {
