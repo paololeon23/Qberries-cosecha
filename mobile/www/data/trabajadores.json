@@ -7,8 +7,8 @@
     "actividad": "COSECHA",
     "excluye": "SUPERVISOR DE COSECHA"
   },
-  "count": 2852,
-  "updatedAt": "2026-08-20T08:26:54.210Z",
+  "count": 2853,
+  "updatedAt": "2026-09-04T15:50:00.000Z",
   "byDni": {
     "10007166": {
       "nombre": "RUIZ VICTORIO SANTOS BASILIA",
@@ -6524,6 +6524,10 @@
     },
     "61220243": {
       "nombre": "RODRIGUEZ ALTAMIRANO JESUS ADRIAN",
+      "cargo": "COSECHA"
+    },
+    "61220274": {
+      "nombre": "VEGA MATTA BRAYAN ESTEBAN",
       "cargo": "COSECHA"
     },
     "61220525": {
