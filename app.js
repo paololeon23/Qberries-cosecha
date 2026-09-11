@@ -40,7 +40,7 @@
   const FUNDO_OPTIONS = ["Licapa I", "Licapa II", "Licapa III"];
 /** Ficha de vínculo en pausa: en Vincular se muestra historial de guías. */
   const VINCULO_FORM_PAUSED = true;
-  const APP_VERSION = "v474";
+  const APP_VERSION = "v486";
 
   function normalizeFundo(value) {
     const raw = String(value || "").trim();
@@ -433,7 +433,7 @@
     return { anchor, list };
   }
 
-  async function uploadHarvestExcelToDrive(snapshot) {
+  async function uploadHarvestExcelToDrive(snapshot, opts = {}) {
     const url = scriptExcelDriveUrl();
     if (!url) {
       return {
@@ -449,10 +449,23 @@
       return { ok: false, message: "Excel no disponible · recargue la app" };
     }
 
-    const bundle =
-      buildHarvestExportBundle(snapshot, state.activeExportSnapshots) ||
-      refreshTipoExportBundle(snapshot);
-    if (!bundle) {
+    let bundle = null;
+    if (Array.isArray(opts.snapshots) && opts.snapshots.length) {
+      bundle = buildHarvestExportBundle(snapshot, opts.snapshots);
+    } else if (opts.single) {
+      bundle = buildHarvestExportBundle(snapshot, [snapshot]);
+    } else {
+      const previewList = isExportPreviewOpen()
+        ? state.activeExportSnapshots
+        : null;
+      bundle =
+        buildHarvestExportBundle(snapshot, previewList) ||
+        refreshTipoExportBundle(snapshot);
+    }
+    if (!bundle?.list?.length && snapshotHasExportData(snapshot)) {
+      bundle = { anchor: snapshot, list: [snapshot] };
+    }
+    if (!bundle?.list?.length) {
       return { ok: false, message: "No hay filas para el Excel" };
     }
     snapshot = bundle.anchor;
@@ -654,7 +667,7 @@
    * Sube a Drive o deja pendiente si no hay internet.
    * Si ya hay link, ofrece compartir el enlace.
    */
-  async function uploadOrQueueHarvestToDrive(snapshot, button) {
+  async function uploadOrQueueHarvestToDrive(snapshot, button, opts = {}) {
     if (!snapshot) {
       toast("No hay registro para subir");
       return { ok: false };
@@ -692,7 +705,7 @@
     state.driveUploadBusy = true;
     if (button) setBtnLoading(button, true, "Subiendo…");
     try {
-      const result = await uploadHarvestExcelToDrive(snapshot);
+      const result = await uploadHarvestExcelToDrive(snapshot, opts);
       if (!result.ok) {
         enqueueDriveUpload(snapshot);
         toast(
@@ -1877,6 +1890,10 @@
     /** Total descarte / deshidratado del día. 0 = no aplica */
     descarteJarras: 0,
     descarteJabas: 0,
+    descarteLote: "",
+    descarteCodLote: "",
+    /** Filas: { id, lote, codLote, jabas } */
+    descarteItems: [],
     supervisorDni: "",
     supervisorNombre: "",
     javeroDni: "",
@@ -2017,6 +2034,13 @@
       state.session.ajusteJarras = num(state.session.ajusteJarras) || 0;
       state.session.descarteJarras = num(state.session.descarteJarras) || 0;
       state.session.descarteJabas = num(state.session.descarteJabas) || 0;
+      state.session.descarteLote = String(state.session.descarteLote || "").trim();
+      state.session.descarteCodLote = String(state.session.descarteCodLote || "").trim();
+      state.session.descarteItems = normalizeGuidesDescarteItems(
+        state.session.descarteItems,
+        state.session
+      );
+      recomputeGuidesDescarteTotals({ skipSave: true });
       state.guias = Array.isArray(parsed.guias) ? parsed.guias : [];
     } catch {
       state.session = emptySession();
@@ -2072,7 +2096,6 @@
         HARVEST_KEY,
         JSON.stringify({ ...state.harvest, savedAt: new Date().toISOString() })
       );
-      syncGuidesDescarteFromHarvest();
     } catch {
       toast("No hay espacio para guardar · libere memoria del celular");
     }
@@ -2657,9 +2680,10 @@
       kind === "grupoNum" ||
       kind === "guidesLic" ||
       kind === "harvestLote" ||
+      kind === "guidesDescarteLote" ||
       kind === "harvestType"
     ) {
-      state.picker = { kind, guiaId: "" };
+      state.picker = { kind, guiaId: guiaId || "" };
       const title = $("#pickerTitle");
       const query = $("#pickerQuery");
       const search = query?.closest(".picker-search");
@@ -2690,7 +2714,9 @@
       if (search) {
         search.hidden = kind === "harvestType";
       }
-      if (addBtn) addBtn.hidden = kind !== "harvestLote";
+      if (addBtn) {
+        addBtn.hidden = kind !== "harvestLote";
+      }
       hidePickerCreate();
       renderPickerList();
       const backdrop = $("#picker");
@@ -2849,6 +2875,24 @@
           };
         });
     }
+    if (ctx.kind === "guidesDescarteLote") {
+      return collectGuidesSelectedLotes()
+        .filter((l) => {
+          if (!q) return true;
+          const loteQuery = q.replace(/^lote\s*/i, "").trim();
+          const hay = `${l.lote} ${l.codLote || ""}`.toLowerCase();
+          return hay.includes(loteQuery);
+        })
+        .map((l) => ({
+          key: l.lote,
+          primary: `Lote ${l.lote}`,
+          secondary: `${l.modulo || "—"} · T${l.turno || "—"} · ${l.variedad || l.codLote || ""}`.replace(
+            /\s·\s$/,
+            ""
+          ),
+          raw: l,
+        }));
+    }
     return state.lotes
       .filter((l) => {
         if (!q) return true;
@@ -2877,6 +2921,8 @@
       selected = $("#vinGrupo")?.value || "";
     } else if (state.picker?.kind === "harvestLote") {
       selected = state.harvest.lote || "";
+    } else if (state.picker?.kind === "guidesDescarteLote") {
+      selected = findGuidesDescarteItem(state.picker.guiaId)?.lote || "";
     } else if (state.picker?.kind === "harvestType") {
       selected = state.harvest.tipo || "suma-jarras";
     } else if (state.picker && findGuia(state.picker.guiaId)) {
@@ -2891,7 +2937,11 @@
     }
 
     if (!items.length) {
-      list.innerHTML = `<div class="picker-empty">Sin resultados.</div>`;
+      const emptyMsg =
+        state.picker?.kind === "guidesDescarteLote"
+          ? "Primero elija lotes en las guías de arriba."
+          : "Sin resultados.";
+      list.innerHTML = `<div class="picker-empty">${emptyMsg}</div>`;
       return;
     }
 
@@ -2952,6 +3002,12 @@
       toast(`Lote ${v}`);
       return;
     }
+    if (ctx.kind === "guidesDescarteLote") {
+      setGuidesDescarteLote(v);
+      closePicker();
+      toast(`Lote ${v}`);
+      return;
+    }
     if (ctx.kind === "harvestType") {
       if (isHarvestTypeExportedToday(v)) {
         toast(`${harvestTypeShort(v)} ya enviado hoy · elija otro tipo`);
@@ -2996,6 +3052,7 @@
     saveStore();
     closePicker();
     renderCards();
+    if (ctx.kind === "lote") pruneGuidesDescarteAgainstGuias();
     toast(ctx.kind === "grupo" ? `Grupo ${v}` : `Lote ${v}`);
   }
 
@@ -4006,6 +4063,22 @@
     return canUseCloudApi();
   }
 
+  /**
+   * Reintenta colas al volver internet / al abrir la app.
+   * Guías + Drive no dependen de Netlify; vínculo sí.
+   */
+  function flushPendingUploadsOnReconnect() {
+    if (!navigator.onLine) return;
+    flushDriveQueue().catch(() => {});
+    // Guías (Apps Script) y cosecha en cola: no bloquear por Netlify.
+    flushCloudDataQueue().catch(() => {});
+    ensureCloudReady_(2000)
+      .then((ok) => {
+        if (ok) flushVinculoQueue().catch(() => {});
+      })
+      .catch(() => {});
+  }
+
   async function flushVinculoQueue() {
     return runVinculoFlushExclusive(async () => {
     state.online = navigator.onLine;
@@ -4440,8 +4513,8 @@
         const fundo = escapeHtml(item.fundo || "Licapa");
         const grupo = escapeHtml(item.grupoLic || "");
         const desc =
-          item.descarteJarras > 0 || item.descarteJabas > 0
-            ? `<span class="vin-guias-meta">Descarte: ${fmt(item.descarteJarras)} j · ${fmt(item.descarteJabas)} jb</span>`
+          item.descarteJabas > 0
+            ? `<span class="vin-guias-meta">Descarte: ${fmt(item.descarteJabas)} jabas</span>`
             : "";
         return `<article class="vin-guias-card">
           <div class="vin-guias-card-top">
@@ -5899,8 +5972,11 @@
   }
 
   function setHarvestEditorLocked(locked, note) {
-    const screen = $("#harvestScreen") || $("#conteoPanel");
-    if (screen) screen.classList.toggle("is-type-locked", !!locked);
+    // Solo bloquea Conteo. Guías nunca deben quedar inhabilitadas por un tipo cerrado.
+    const conteo = $("#conteoPanel");
+    if (conteo) conteo.classList.toggle("is-type-locked", !!locked);
+    const screen = $("#harvestScreen");
+    if (screen) screen.classList.remove("is-type-locked");
     const saveBtn = $("#btnHarvestSave");
     if (saveBtn) {
       saveBtn.disabled = !!locked;
@@ -6495,7 +6571,7 @@
     syncGuidesExtrasFromDom();
   }
 
-  /** R. manual: lee DOM. Descarte se toma del conteo (no se escribe a mano). */
+  /** R. manual y descarte: lee DOM antes de guardar. */
   function syncGuidesExtrasFromDom() {
     const ajusteInput = $("#guidesAjusteInput");
     if (ajusteInput) {
@@ -6503,17 +6579,22 @@
         skipSave: true,
       });
     }
-    syncGuidesDescarteFromHarvest({ skipDom: true });
+    syncGuidesDescarteItemsFromDom({ skipSave: true });
   }
 
-  /** Tras guardar/enviar guías: limpia R. manual. Descarte sigue el conteo. */
+  /** Tras guardar/enviar guías: limpia R. manual y descarte. */
   function clearGuidesExtrasAfterSave() {
     state.session.ajusteJarras = 0;
     state.session.aumentoJarras = 0;
     state.session.descuentoJarras = 0;
+    state.session.descarteJarras = 0;
+    state.session.descarteJabas = 0;
+    state.session.descarteLote = "";
+    state.session.descarteCodLote = "";
+    state.session.descarteItems = [emptyGuidesDescarteItem()];
     const ajusteInput = $("#guidesAjusteInput");
     if (ajusteInput) ajusteInput.value = "";
-    syncGuidesDescarteFromHarvest();
+    renderGuidesDescarteList();
   }
 
   /** Lee jarras mañana/tarde visibles del registro de cosecha. */
@@ -6732,40 +6813,337 @@
     input.value = n > 0 ? String(n) : "";
   }
 
-  /** Descarte en Guías = Total general del conteo Descarte (suma de todos los lotes). */
-  function currentGuidesDescarteJarras() {
-    const n = harvestTipoTotalJarras("descarte-deshidratado");
-    return n > 0 ? n : 0;
+  /** Lotes ya elegidos en las guías (únicos). Descarte solo puede usar estos. */
+  function collectGuidesSelectedLotes() {
+    const map = new Map();
+    (state.guias || []).forEach((g) => {
+      const lote = String(g?.lote || "").trim();
+      if (!lote) return;
+      const key = lote.toUpperCase();
+      if (map.has(key)) return;
+      const row = findLote(lote);
+      map.set(key, {
+        lote,
+        codLote: String(g.codLote || row?.codLote || "").trim(),
+        modulo: String(g.modulo || row?.modulo || "").trim(),
+        turno: String(g.turno || row?.turno || "").trim(),
+        variedad: String(g.variedad || row?.variedad || "").trim(),
+      });
+    });
+    return Array.from(map.values());
+  }
+
+  /**
+   * Si un lote ya no está en las guías, se limpia del descarte
+   * (no se autoelige nada; solo se quita lo inválido).
+   */
+  function pruneGuidesDescarteAgainstGuias(opts = {}) {
+    const allowed = new Set(
+      collectGuidesSelectedLotes().map((l) => String(l.lote).trim().toUpperCase())
+    );
+    const items = ensureGuidesDescarteItems();
+    let changed = false;
+    items.forEach((it) => {
+      const lote = String(it.lote || "").trim();
+      if (!lote) return;
+      if (allowed.has(lote.toUpperCase())) return;
+      it.lote = "";
+      it.codLote = "";
+      it.modulo = "";
+      it.turno = "";
+      it.jabas = 0;
+      changed = true;
+    });
+    if (!changed) return false;
+    const useful = items.filter((it) => it.lote || num(it.jabas) > 0);
+    state.session.descarteItems = useful.length
+      ? useful
+      : [emptyGuidesDescarteItem()];
+    recomputeGuidesDescarteTotals({ skipSave: true });
+    if (!opts.skipSave) saveStore();
+    if (!opts.skipDom) renderGuidesDescarteList();
+    return true;
+  }
+
+  function emptyGuidesDescarteItem() {
+    return {
+      id: uid(),
+      lote: "",
+      codLote: "",
+      modulo: "",
+      turno: "",
+      jabas: 0,
+    };
+  }
+
+  /** Migra el formato viejo (1 lote) a lista de filas. */
+  function normalizeGuidesDescarteItems(rawItems, session = state.session) {
+    if (Array.isArray(rawItems) && rawItems.length) {
+      return rawItems.map((it) => {
+        const lote = String(it?.lote || "").trim();
+        const row = lote ? findLote(lote) : null;
+        return {
+          id: String(it?.id || uid()),
+          lote,
+          codLote: String(it?.codLote || row?.codLote || "").trim(),
+          modulo: String(it?.modulo || row?.modulo || "").trim(),
+          turno: String(it?.turno || row?.turno || "").trim(),
+          jabas: Math.max(0, num(it?.jabas)),
+        };
+      });
+    }
+    const lote = String(session?.descarteLote || "").trim();
+    const jabas = Math.max(0, num(session?.descarteJabas));
+    if (lote || jabas > 0) {
+      const row = lote ? findLote(lote) : null;
+      return [
+        {
+          id: uid(),
+          lote,
+          codLote: String(session?.descarteCodLote || row?.codLote || "").trim(),
+          modulo: String(row?.modulo || "").trim(),
+          turno: String(row?.turno || "").trim(),
+          jabas,
+        },
+      ];
+    }
+    return [emptyGuidesDescarteItem()];
+  }
+
+  function ensureGuidesDescarteItems() {
+    if (!Array.isArray(state.session.descarteItems) || !state.session.descarteItems.length) {
+      state.session.descarteItems = normalizeGuidesDescarteItems(
+        state.session.descarteItems,
+        state.session
+      );
+    }
+    return state.session.descarteItems;
+  }
+
+  function findGuidesDescarteItem(id) {
+    return ensureGuidesDescarteItems().find((it) => it.id === id) || null;
+  }
+
+  function recomputeGuidesDescarteTotals(opts = {}) {
+    const items = ensureGuidesDescarteItems();
+    const jabas = items.reduce((sum, it) => sum + Math.max(0, num(it.jabas)), 0);
+    const first = items.find((it) => String(it.lote || "").trim());
+    state.session.descarteJabas = jabas > 0 ? jabas : 0;
+    state.session.descarteJarras = 0;
+    state.session.descarteLote = first ? String(first.lote).trim() : "";
+    state.session.descarteCodLote = first ? String(first.codLote || "").trim() : "";
+    if (!opts.skipSave) saveStore();
+    updateGuidesDescarteTotalEl();
+  }
+
+  function currentGuidesDescarteItems() {
+    return ensureGuidesDescarteItems()
+      .map((it) => {
+        const lote = String(it.lote || "").trim();
+        const row = lote ? findLote(lote) : null;
+        return {
+          id: it.id,
+          lote,
+          codLote: String(it.codLote || row?.codLote || "").trim(),
+          modulo: String(it.modulo || row?.modulo || "").trim(),
+          turno: String(it.turno || row?.turno || "").trim(),
+          jabas: Math.max(0, num(it.jabas)),
+        };
+      })
+      .filter((it) => it.lote || it.jabas > 0);
+  }
+
+  function formatDescarteLoteCompact(item) {
+    return formatGuiaLoteSummary({
+      lote: item?.lote,
+      modulo: item?.modulo,
+      turno: item?.turno,
+    }).replace(/^—$/, "");
+  }
+
+  function padDescarteJabasDistrib(n) {
+    return String(Math.max(0, Math.floor(num(n)))).padStart(6, "0");
+  }
+
+  /** Textos para Sheet: LOTES DESCARTE + JABAS DESCARTE DISTRIBUCION. */
+  function buildGuidesDescarteSheetPack() {
+    const items = currentGuidesDescarteItems();
+    const lotes = [];
+    const jabas = [];
+    items.forEach((it) => {
+      const loteTxt = formatDescarteLoteCompact(it) || (it.lote ? `LT${it.lote}` : "—");
+      lotes.push(loteTxt);
+      jabas.push(padDescarteJabasDistrib(it.jabas));
+    });
+    return {
+      descarteLotes: lotes.join(", "),
+      descarteJabasDistribucion: jabas.join(", "),
+      descarteItems: items,
+    };
+  }
+
+  function currentGuidesDescarteLote() {
+    recomputeGuidesDescarteTotals({ skipSave: true });
+    return String(state.session.descarteLote || "").trim();
   }
 
   function currentGuidesDescarteJabas() {
-    const jarras = currentGuidesDescarteJarras();
-    return jarras > 0 ? Math.floor(jarras / JARRAS_POR_JABA) : 0;
+    recomputeGuidesDescarteTotals({ skipSave: true });
+    const n = num(state.session.descarteJabas);
+    return n > 0 ? n : 0;
   }
 
-  /** Copia el total del conteo a sesión + UI de Guías (tiempo real). */
-  function syncGuidesDescarteFromHarvest(opts = {}) {
-    const jarras = currentGuidesDescarteJarras();
-    const jabas = currentGuidesDescarteJabas();
-    state.session.descarteJarras = jarras;
-    state.session.descarteJabas = jabas;
-    if (opts.skipDom) return;
-    const totalEl = $("#guidesDescarteAutoTotal");
-    if (totalEl) {
-      totalEl.textContent =
-        jarras > 0 ? `${fmt(jarras)} jarras` : "0 jarras";
+  /** Ya no se calculan jarras de descarte: solo jabas. */
+  function currentGuidesDescarteJarras() {
+    return 0;
+  }
+
+  function updateGuidesDescarteTotalEl() {
+    const el = $("#guidesDescarteTotal");
+    if (!el) return;
+    const jabas = num(state.session.descarteJabas);
+    el.textContent = `${fmt(jabas)} jabas`;
+  }
+
+  function setGuidesDescarteLote(lote, opts = {}) {
+    const itemId = opts.itemId || state.picker?.guiaId || "";
+    const item = findGuidesDescarteItem(itemId) || ensureGuidesDescarteItems()[0];
+    if (!item) return;
+    const v = String(lote || "").trim();
+    const row = findLote(v);
+    item.lote = v;
+    item.codLote = row?.codLote || "";
+    item.modulo = row?.modulo || "";
+    item.turno = row?.turno || "";
+    recomputeGuidesDescarteTotals({ skipSave: true });
+    if (!opts.skipSave) saveStore();
+    renderGuidesDescarteList();
+  }
+
+  function setGuidesDescarteItemJabas(itemId, raw, opts = {}) {
+    const item = findGuidesDescarteItem(itemId);
+    if (!item) return;
+    const digits = String(raw ?? "")
+      .replace(/\D/g, "")
+      .replace(/^0+(?=\d)/, "");
+    const n = digits === "" ? 0 : num(digits);
+    item.jabas = n > 0 ? n : 0;
+    recomputeGuidesDescarteTotals({ skipSave: true });
+    if (!opts.skipSave) saveStore();
+    if (!opts.skipDom) updateGuidesDescarteTotalEl();
+  }
+
+  function syncGuidesDescarteItemsFromDom(opts = {}) {
+    $$("#guidesDescarteList [data-descarte-id]").forEach((row) => {
+      const id = row.dataset.descarteId;
+      const item = findGuidesDescarteItem(id);
+      if (!item) return;
+      const input = row.querySelector("[data-descarte-jabas]");
+      if (!input) return;
+      const digits = String(input.value || "")
+        .replace(/\D/g, "")
+        .replace(/^0+(?=\d)/, "");
+      item.jabas = digits === "" ? 0 : Math.max(0, num(digits));
+    });
+    recomputeGuidesDescarteTotals({ skipSave: !!opts.skipSave });
+  }
+
+  function addGuidesDescarteItem() {
+    syncGuidesDescarteItemsFromDom({ skipSave: true });
+    ensureGuidesDescarteItems().push(emptyGuidesDescarteItem());
+    saveStore();
+    renderGuidesDescarteList();
+  }
+
+  function removeGuidesDescarteItem(itemId) {
+    syncGuidesDescarteItemsFromDom({ skipSave: true });
+    const items = ensureGuidesDescarteItems();
+    if (items.length <= 1) {
+      items[0].lote = "";
+      items[0].codLote = "";
+      items[0].modulo = "";
+      items[0].turno = "";
+      items[0].jabas = 0;
+    } else {
+      state.session.descarteItems = items.filter((it) => it.id !== itemId);
+      if (!state.session.descarteItems.length) {
+        state.session.descarteItems = [emptyGuidesDescarteItem()];
+      }
     }
-    const lotsEl = $("#guidesDescarteAutoLots");
-    if (lotsEl) {
-      const n = collectTipoHarvestDaySnapshots("descarte-deshidratado").length;
-      lotsEl.textContent =
-        n > 1 ? `${n} lotes` : n === 1 ? "1 lote" : "Sin conteo aún";
+    recomputeGuidesDescarteTotals({ skipSave: true });
+    saveStore();
+    renderGuidesDescarteList();
+  }
+
+  function renderGuidesDescarteList() {
+    const list = $("#guidesDescarteList");
+    if (!list) return;
+    pruneGuidesDescarteAgainstGuias({ skipSave: false, skipDom: true });
+    const focused =
+      document.activeElement?.closest?.("[data-descarte-id]")?.dataset
+        ?.descarteId || "";
+    const focusJabas = document.activeElement?.matches?.("[data-descarte-jabas]");
+    const items = ensureGuidesDescarteItems();
+    list.innerHTML = items
+      .map((it) => {
+        const lote = String(it.lote || "").trim();
+        const jabas = num(it.jabas) > 0 ? String(num(it.jabas)) : "";
+        return `
+        <div class="guides-descarte-row" data-descarte-id="${escapeHtml(it.id)}">
+          <label>
+            <small>LOTE</small>
+            <button
+              type="button"
+              class="select-trigger guides-descarte-lote-btn"
+              data-descarte-lote
+              aria-label="Seleccionar lote de descarte"
+            >
+              <span class="${lote ? "" : "ph"}">${lote ? `Lote ${escapeHtml(lote)}` : "Elegir lote"}</span>
+              <span class="chev" data-icon="search"></span>
+            </button>
+          </label>
+          <label>
+            <small>JABAS</small>
+            <input
+              data-descarte-jabas
+              type="text"
+              inputmode="numeric"
+              maxlength="5"
+              placeholder="00"
+              value="${escapeHtml(jabas)}"
+              autocomplete="off"
+              aria-label="Cantidad de jabas de descarte"
+            />
+          </label>
+          <button
+            type="button"
+            class="guides-descarte-del"
+            data-descarte-del
+            aria-label="Quitar fila"
+          >
+            <span data-icon="trash"></span>
+          </button>
+        </div>`;
+      })
+      .join("");
+    hydrateIcons(list);
+    updateGuidesDescarteTotalEl();
+    if (focused && focusJabas) {
+      const input = list.querySelector(
+        `[data-descarte-id="${CSS.escape(focused)}"] [data-descarte-jabas]`
+      );
+      input?.focus({ preventScroll: true });
     }
   }
 
   /** @deprecated alias */
+  function syncGuidesDescarteUi() {
+    renderGuidesDescarteList();
+  }
+
+  /** @deprecated alias */
   function syncGuidesDescarteInputs() {
-    syncGuidesDescarteFromHarvest();
+    renderGuidesDescarteList();
   }
 
   /** @deprecated alias */
@@ -7015,12 +7393,17 @@
     const ajusteJarras = currentGuidesAjuste();
     const descarteJarras = currentGuidesDescarteJarras();
     const descarteJabas = currentGuidesDescarteJabas();
+    const descarteLote = currentGuidesDescarteLote();
+    const descartePack = buildGuidesDescarteSheetPack();
+    const descarteItems = descartePack.descarteItems;
+    const descarteLotes = descartePack.descarteLotes;
+    const descarteJabasDistribucion = descartePack.descarteJabasDistribucion;
     const id = guiasCloudQueueId(fecha, supervisorDni, fundo);
     const savedAt = new Date().toISOString();
     return {
       id,
       /** Identifica este envío (anti doble-POST); distinto si vuelve a guardar */
-      sendId: `${id}|${savedAt}|${t0.jarras}|${t0.jabas}|${t0.guias}|${ajusteJarras}|${descarteJarras}|${descarteJabas}`,
+      sendId: `${id}|${savedAt}|${t0.jarras}|${t0.jabas}|${t0.guias}|${ajusteJarras}|${descarteJarras}|${descarteJabas}|${descarteItems.length}|${descarteLotes}`,
       savedAt,
       horaGuardado: savedAt,
       fecha,
@@ -7029,6 +7412,10 @@
       ajusteJarras,
       descarteJarras,
       descarteJabas,
+      descarteLote,
+      descarteLotes,
+      descarteJabasDistribucion,
+      descarteItems,
       securityCode: supervisorDni,
       supervisorDni,
       supervisorNombre,
@@ -7043,6 +7430,10 @@
         ajusteJarras,
         descarteJarras,
         descarteJabas,
+        descarteLote,
+        descarteLotes,
+        descarteJabasDistribucion,
+        descarteItems,
         supervisorDni,
         supervisorNombre,
       },
@@ -7055,6 +7446,9 @@
         ajusteJarras,
         descarteJarras,
         descarteJabas,
+        descarteLote,
+        descarteLotes,
+        descarteJabasDistribucion,
       },
     };
   }
@@ -7218,6 +7612,11 @@
     const fundosTxt = displayFundosSummary(rows) || "—";
     const descarteJarras = currentGuidesDescarteJarras();
     const descarteJabas = currentGuidesDescarteJabas();
+    const descarteItems = currentGuidesDescarteItems();
+    const descarteLote =
+      descarteItems.length > 1
+        ? `${descarteItems.length} lotes`
+        : descarteItems[0]?.lote || currentGuidesDescarteLote();
     const tableRows = rows.length
       ? rows
           .map((g, idx) => {
@@ -7273,10 +7672,17 @@
           <strong>${fmt(t.jarras)} jarras · ${fmt(t.jabas)} jabas</strong>
         </footer>
         ${
-          descarteJarras > 0 || descarteJabas > 0
+          descarteJabas > 0 || descarteItems.length
             ? `<div class="gs-paper-descarte">
-          <span>DESCARTE / DESHIDRATADO · del conteo</span>
-          <strong>${fmt(descarteJarras)} jarras · ${fmt(descarteJabas)} jabas</strong>
+          <span>DESCARTE / DESHIDRATADO${descarteLote ? ` · ${escapeHtml(descarteLote)}` : ""}</span>
+          <strong>${fmt(descarteJabas)} jabas</strong>
+          ${
+            descarteItems.length > 1
+              ? `<small>${descarteItems
+                  .map((it) => `Lote ${escapeHtml(it.lote || "—")}: ${fmt(it.jabas)} jb`)
+                  .join(" · ")}</small>`
+              : ""
+          }
         </div>`
             : ""
         }
@@ -8565,7 +8971,6 @@
       const total = list.reduce((sum, snap) => sum + snapshotTotal(snap), 0);
       $("#exportPreviewTotal").textContent = `${fmt(total)} jarras`;
     }
-    syncGuidesDescarteFromHarvest();
     renderExportPreviewDayStatus();
     updateExportPreviewSavedUI();
     return true;
@@ -8632,7 +9037,7 @@
 
   async function downloadHarvestSnapshot(snapshot, opts = {}) {
     if (!snapshot) return false;
-    const forceSingle = opts.single !== false;
+    const forceSingle = !!opts.single;
     if (!forceSingle) {
       const ready = availableExportSnapshots();
       if (ready.length > 1) {
@@ -8641,16 +9046,27 @@
       }
     }
     try {
-      if (!(await ensureXlsxLoaded())) {
-        if (!opts.silent) toast("Cargando Excel… intente de nuevo");
-        return false;
+      if (typeof XLSX === "undefined") {
+        if (!(await ensureXlsxLoaded())) {
+          if (!opts.silent) toast("Cargando Excel… intente de nuevo");
+          return false;
+        }
       }
-      const snapshots =
-        opts.snapshots ||
-        (isExportPreviewOpen() ? state.activeExportSnapshots : null);
-      const bundle =
-        buildHarvestExportBundle(snapshot, snapshots) ||
-        refreshTipoExportBundle(snapshot);
+      let snapshots = opts.snapshots;
+      if (!snapshots && forceSingle) snapshots = [snapshot];
+      if (!snapshots && isExportPreviewOpen()) {
+        snapshots = state.activeExportSnapshots;
+      }
+      let bundle = buildHarvestExportBundle(snapshot, snapshots);
+      if (!bundle?.list?.length && forceSingle && snapshotHasExportData(snapshot)) {
+        bundle = { anchor: snapshot, list: [snapshot] };
+      }
+      if (!bundle?.list?.length && !forceSingle) {
+        bundle = refreshTipoExportBundle(snapshot);
+      }
+      if (!bundle?.list?.length && snapshotHasExportData(snapshot)) {
+        bundle = { anchor: snapshot, list: [snapshot] };
+      }
       if (!bundle?.list?.length) {
         if (!opts.silent) toast("No hay filas para descargar");
         return false;
@@ -9118,6 +9534,60 @@
     return loadHarvestHistory().find((item) => item.id === id) || null;
   }
 
+  async function onHistoryListActionClick(e) {
+    const button = e.target?.closest?.("#historyList [data-history-action]");
+    if (!button) return;
+    const item = button.closest("[data-history-id]");
+    if (!item) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const snapshot = historySnapshotById(item.dataset.historyId);
+    if (!snapshot) {
+      toast("Registro no encontrado en el historial");
+      return;
+    }
+    const action = button.dataset.historyAction;
+    if (action === "download") {
+      if (button.disabled || button.classList.contains("is-loading")) return;
+      setBtnLoading(button, true, "Descargando…");
+      try {
+        await downloadHarvestSnapshot(snapshot, {
+          single: true,
+          snapshots: [snapshot],
+        });
+      } finally {
+        setBtnLoading(button, false);
+      }
+      return;
+    }
+    if (action === "drive") {
+      if (button.disabled || button.classList.contains("is-loading")) {
+        const existing = getHarvestDriveUrl(snapshot);
+        if (existing) {
+          await shareDriveLink(existing, harvestFileName(snapshot));
+        } else if (isHarvestTypeExportedToday(snapshot.tipo)) {
+          toast(
+            `${harvestTypeShort(snapshot.tipo)} ya enviado hoy · un solo envío a Drive`
+          );
+        }
+        return;
+      }
+      // Un Excel por tipo (todos los lotes pendientes); si no hay, este registro.
+      const pending = collectTipoExportSnapshots(
+        normalizeHarvestType(snapshot.tipo)
+      );
+      const list =
+        pending.length > 0
+          ? pending
+          : snapshotHasExportData(snapshot)
+            ? [snapshot]
+            : [snapshot];
+      await uploadOrQueueHarvestToDrive(snapshot, button, {
+        snapshots: list,
+      });
+    }
+  }
+
   /* ---------- Guías history ---------- */
   function loadGuiasHistory() {
     try {
@@ -9189,12 +9659,17 @@
         const when = Number.isNaN(saved.getTime())
           ? ""
           : saved.toLocaleString("es-PE", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+        const descarteJabas = num(item.descarteJabas);
+        const descarteTxt =
+          descarteJabas > 0
+            ? ` · Descarte: ${fmt(descarteJabas)} jabas`
+            : "";
         return `<article class="history-item">
           <div class="history-item-top">
             <h3>${escapeHtml(item.fundo || "Licapa")} · ${item.totalGuias || 0} guía(s)</h3>
             <time>${escapeHtml(when)}</time>
           </div>
-          <p>${fmt(item.totalJarras)} jarras · ${fmt(item.totalJabas)} jabas<br>${escapeHtml(item.supervisor || "")}</p>
+          <p>${fmt(item.totalJarras)} jarras · ${fmt(item.totalJabas)} jabas${descarteTxt}<br>${escapeHtml(item.supervisor || "")}</p>
         </article>`;
       })
       .join("");
@@ -9228,6 +9703,7 @@
     closeGuidesSheet();
     const sheet = $("#historySheet");
     if (!sheet) return;
+    preloadExcelVendor();
     renderHarvestHistory();
     renderGuiasHistory();
     switchHistoryTab("conteo");
@@ -10562,6 +11038,7 @@
         }
         saveStore();
         renderCards();
+        pruneGuidesDescarteAgainstGuias();
         alertOk("Guía eliminada");
       };
       if (guiaHasData(guia)) {
@@ -11056,11 +11533,61 @@
       const el = e.target;
       const digits = String(el.value || "").replace(/\D/g, "");
       el.value = digits;
-      setGuidesAjuste(digits, { skipSave: true });
+      setGuidesAjuste(digits);
     });
     on("#guidesAjusteInput", "blur", () => {
       syncGuidesAjusteInput();
       saveStore();
+    });
+    on("#btnGuidesDescarteAdd", "click", (e) => {
+      e.preventDefault();
+      addGuidesDescarteItem();
+    });
+    on("#guidesDescarteList", "click", (e) => {
+      const row = e.target?.closest?.("[data-descarte-id]");
+      if (!row) return;
+      const itemId = row.dataset.descarteId;
+      if (e.target?.closest?.("[data-descarte-lote]")) {
+        if (!collectGuidesSelectedLotes().length) {
+          toast("Primero elija lote en las guías de arriba");
+          return;
+        }
+        openPicker("guidesDescarteLote", itemId);
+        return;
+      }
+      if (e.target?.closest?.("[data-descarte-del]")) {
+        const item = findGuidesDescarteItem(itemId);
+        const lote = String(item?.lote || "").trim();
+        const jabas = num(item?.jabas);
+        const detail = lote
+          ? `Lote ${lote}${jabas > 0 ? ` · ${fmt(jabas)} jabas` : ""}`
+          : jabas > 0
+            ? `${fmt(jabas)} jabas`
+            : "esta fila";
+        confirmModal(
+          "Eliminar descarte",
+          `Se borrará ${detail}. ¿Continuar?`,
+          () => removeGuidesDescarteItem(itemId),
+          "Eliminar"
+        );
+      }
+    });
+    on("#guidesDescarteList", "input", (e) => {
+      const input = e.target?.closest?.("[data-descarte-jabas]");
+      if (!input) return;
+      const row = input.closest("[data-descarte-id]");
+      if (!row) return;
+      const digits = String(input.value || "").replace(/\D/g, "");
+      input.value = digits;
+      // Guarda en el celular en cada tecla (si cierra la app no se pierde).
+      setGuidesDescarteItemJabas(row.dataset.descarteId, digits, {
+        skipDom: true,
+      });
+      updateGuidesDescarteTotalEl();
+    });
+    on("#guidesDescarteList", "focusout", (e) => {
+      if (!e.target?.closest?.("[data-descarte-jabas]")) return;
+      syncGuidesDescarteItemsFromDom();
     });
     on("#guidesSummaryModal", "click", (e) => {
       if (state.savingGuias) return;
@@ -11251,27 +11778,11 @@
       state.guiasHistoryPage = (state.guiasHistoryPage || 0) + 1;
       renderGuiasHistory();
     });
-    on("#historyList", "click", (e) => {
-      const button = e.target?.closest?.("[data-history-action]");
-      const item = e.target?.closest?.("[data-history-id]");
-      if (!button || !item) return;
-      const snapshot = historySnapshotById(item.dataset.historyId);
-      if (!snapshot) return;
-      const action = button.dataset.historyAction;
-      if (action === "download") {
-        downloadHarvestSnapshot(snapshot, { single: true });
-      } else if (action === "drive") {
-        if (
-          state.driveUploadBusy ||
-          button.disabled ||
-          getHarvestDriveUrl(snapshot) ||
-          isHarvestTypeExportedToday(snapshot.tipo)
-        ) {
-          return;
-        }
-        uploadOrQueueHarvestToDrive(snapshot, button);
-      }
-    });
+    // Delegación global: tras cambiar de pestaña el #historyList se recrea.
+    if (!bindPhoneHandlers._historyDelegated) {
+      bindPhoneHandlers._historyDelegated = true;
+      document.addEventListener("click", onHistoryListActionClick);
+    }
     on("#btnHarvestLogout", "click", () => {
       confirmModal(
         "Cerrar sesión",
@@ -11764,16 +12275,8 @@
 
       document.addEventListener("visibilitychange", () => {
         if (document.visibilityState !== "visible" || !navigator.onLine) return;
-        flushDriveQueue().catch(() => {});
-        detectNetlify(2500)
-          .then((ok) => {
-            updateNetworkUI();
-            if (ok) {
-              flushVinculoQueue().catch(() => {});
-              flushCloudDataQueue().catch(() => {});
-            }
-          })
-          .catch(() => {});
+        flushPendingUploadsOnReconnect();
+        updateNetworkUI();
       });
     }
 
@@ -11928,12 +12431,11 @@
         toast("Internet recuperado · subiendo…");
         loadSupervisores().catch(() => {});
         loadPersonas().catch(() => {});
-        flushDriveQueue().catch(() => {});
+        flushPendingUploadsOnReconnect();
         ensureCloudReady_(2000)
           .then(async (ok) => {
             if (!ok) return null;
             const result = await flushVinculoQueue();
-            await flushCloudDataQueue();
             if (getPage() === "vinculo") {
               refreshVinGuiasFeed({ force: true }).catch(() => {});
             }
@@ -11954,14 +12456,7 @@
       });
       document.addEventListener("visibilitychange", () => {
         if (document.hidden || !navigator.onLine) return;
-        flushDriveQueue().catch(() => {});
-        ensureCloudReady_(2000)
-          .then((ok) =>
-            ok
-              ? Promise.all([flushVinculoQueue(), flushCloudDataQueue()])
-              : null
-          )
-          .catch(() => {});
+        flushPendingUploadsOnReconnect();
       });
       window.addEventListener("offline", () => {
         state.online = false;
@@ -11971,15 +12466,14 @@
 
       setInterval(() => {
         if (!navigator.onLine) return;
-        if (loadDriveQueue().length) flushDriveQueue().catch(() => {});
-        if (!loadVinculoQueue().length && !loadCloudDataQueue().length) return;
-        ensureCloudReady_(2000)
-          .then((ok) =>
-            ok
-              ? Promise.all([flushVinculoQueue(), flushCloudDataQueue()])
-              : null
-          )
-          .catch(() => {});
+        if (
+          !loadDriveQueue().length &&
+          !loadVinculoQueue().length &&
+          !loadCloudDataQueue().length
+        ) {
+          return;
+        }
+        flushPendingUploadsOnReconnect();
       }, 8000);
 
       // Failsafe por ruta: nunca mezclar pantallas de apartados distintos.

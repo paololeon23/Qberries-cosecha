@@ -21,11 +21,15 @@
  *
  * HOJA DATA-GUIAS (cada guardado = UNA FILA NUEVA, se acumula):
  * NOMBRE SUPERVISOR | DNI SUPERVISOR | FECHA | GRUPO LIC | TOTAL JARRAS | TOTAL JABAS |
- * JARRAS DESCARTE | JABAS DESCARTE | FUNDO | LOTES | N° GUIAS | CANTIDAD GUIAS | REGISTRO MANUAL | HORA SUBIDA
+ * JARRAS DESCARTE | JABAS DESCARTE | FUNDO | LOTES | LOTES DESCARTE | JABAS DESCARTE DISTRIBUCION |
+ * N° GUIAS | CANTIDAD GUIAS | REGISTRO MANUAL | HORA SUBIDA
  * - Cada subida agrega fila (12:00 y 18:00 = 2 filas). No pisa la anterior.
  * - Anti-duplicado solo por sendId (reintento de red del mismo envío).
  * - TOTAL JARRAS / TOTAL JABAS / CANTIDAD GUIAS / REGISTRO MANUAL: números (para sumar fácil)
- * - JARRAS DESCARTE / JABAS DESCARTE: inputs DESCARTE / DESHIDRATADO de la app. 0 = vacío
+ * - JARRAS DESCARTE: siempre 0 (la app solo registra jabas de descarte)
+ * - JABAS DESCARTE: suma total de jabas DESCARTE / DESHIDRATADO. 0 = vacío
+ * - LOTES DESCARTE: lotes del descarte en formato LT30-M1-T7, LT29-M1-T7
+ * - JABAS DESCARTE DISTRIBUCION: jabas por cada lote (mismo orden), ej. 000012, 000008
  * - CANTIDAD GUIAS = conteo de N° en la lista (exacto)
  * - REGISTRO MANUAL: cantidad manual (aumento o descuento). 0 = vacío / no aplica
  * - FUNDO va junto a LOTES: "Licapa I" | "Licapa I - Licapa II" | "Licapa I - Licapa II - Licapa III"
@@ -45,6 +49,8 @@ var HEADERS = [
   'JABAS DESCARTE',
   'FUNDO',
   'LOTES',
+  'LOTES DESCARTE',
+  'JABAS DESCARTE DISTRIBUCION',
   'N° GUIAS',
   'CANTIDAD GUIAS',
   'REGISTRO MANUAL',
@@ -253,6 +259,72 @@ function formatGuiaLoteCompact_(g) {
   return parts.join('-');
 }
 
+/** Jabás con 6 dígitos (mismo estilo que N° GUIAS): 12 → 000012 */
+function padJabasDistrib_(n) {
+  var v = Math.max(0, Math.floor(number_(n)));
+  var s = String(v);
+  while (s.length < 6) s = '0' + s;
+  return s;
+}
+
+/**
+ * LOTES DESCARTE + JABAS DESCARTE DISTRIBUCION (mismo orden).
+ * Preferir descarteItems de la app; si no, textos ya armados.
+ */
+function buildDescarteLotesPack_(d, session, totals) {
+  d = d || {};
+  session = session || {};
+  totals = totals || {};
+  var items = Array.isArray(d.descarteItems)
+    ? d.descarteItems
+    : Array.isArray(session.descarteItems)
+      ? session.descarteItems
+      : [];
+  var lotesList = [];
+  var jabasList = [];
+  var totalJabas = 0;
+
+  for (var i = 0; i < items.length; i++) {
+    var it = items[i] || {};
+    var loteTxt = formatGuiaLoteCompact_(it);
+    var jb = number_(it.jabas);
+    if (!loteTxt && !(jb > 0)) continue;
+    lotesList.push(loteTxt || '—');
+    jabasList.push(padJabasDistrib_(jb));
+    totalJabas += jb > 0 ? jb : 0;
+  }
+
+  if (!lotesList.length) {
+    var lotesTxt =
+      clean_(d.descarteLotes) ||
+      clean_(totals.descarteLotes) ||
+      clean_(session.descarteLotes) ||
+      '';
+    var jabasTxt =
+      clean_(d.descarteJabasDistribucion) ||
+      clean_(totals.descarteJabasDistribucion) ||
+      clean_(session.descarteJabasDistribucion) ||
+      '';
+    return {
+      lotesTxt: lotesTxt,
+      jabasTxt: jabasTxt,
+      totalJabas: number_(
+        d.descarteJabas != null
+          ? d.descarteJabas
+          : totals.descarteJabas != null
+            ? totals.descarteJabas
+            : session.descarteJabas
+      )
+    };
+  }
+
+  return {
+    lotesTxt: lotesList.join(', '),
+    jabasTxt: jabasList.join(', '),
+    totalJabas: totalJabas
+  };
+}
+
 function addUniqueLote_(list, value) {
   var lote = clean_(value).toUpperCase();
   if (lote && list.indexOf(lote) < 0) list.push(lote);
@@ -388,6 +460,11 @@ function saveGuiasSummary_(d, session, guias, totals, supervisorNombre, supervis
   );
   if (!(descarteJabas > 0)) descarteJabas = 0;
 
+  var descartePack = buildDescarteLotesPack_(d, session, totals);
+  if (!(descarteJabas > 0) && descartePack.totalJabas > 0) {
+    descarteJabas = descartePack.totalJabas;
+  }
+
   var row = [
     supervisorNombre,
     supervisorDni,
@@ -399,6 +476,8 @@ function saveGuiasSummary_(d, session, guias, totals, supervisorNombre, supervis
     descarteJabas,
     fundoTxt,
     lotes.join(', '),
+    descartePack.lotesTxt,
+    descartePack.jabasTxt,
     numerosTxt,
     cantidadGuias,
     ajuste, // REGISTRO MANUAL (aumento o descuento)
@@ -487,10 +566,12 @@ function listarGuias_(params) {
       descarteJabas: number_(row[7]),
       fundo: clean_(row[8]),
       lotes: clean_(row[9]),
-      numerosGuias: clean_(row[10]),
-      cantidadGuias: number_(row[11]),
-      registroManual: number_(row[12]),
-      horaSubida: clean_(row[13]),
+      lotesDescarte: clean_(row[10]),
+      jabasDescarteDistribucion: clean_(row[11]),
+      numerosGuias: clean_(row[12]),
+      cantidadGuias: number_(row[13]),
+      registroManual: number_(row[14]),
+      horaSubida: clean_(row[15]),
       rowNum: i + 2,
       subido: true
     });
@@ -596,6 +677,10 @@ function migrateSheetLayout_(sh) {
       descJabas,
       fundoTxt,
       colOf('LOTES') >= 0 ? row[colOf('LOTES')] : '',
+      colOf('LOTES DESCARTE') >= 0 ? row[colOf('LOTES DESCARTE')] : '',
+      colOf('JABAS DESCARTE DISTRIBUCION') >= 0
+        ? row[colOf('JABAS DESCARTE DISTRIBUCION')]
+        : '',
       nTxt,
       cantidad,
       colOf('REGISTRO MANUAL') >= 0
@@ -781,14 +866,18 @@ function testRegistrarGuias() {
               jabas: 2
             }
           ],
-          descarteJarras: 24,
+          descarteJarras: 0,
           descarteJabas: 2,
+          descarteItems: [
+            { lote: '30', modulo: 'M1', turno: '7', jabas: 1 },
+            { lote: '29', modulo: 'M1', turno: '7', jabas: 1 }
+          ],
           totals: {
             guias: 2,
             cantidadGuias: 2,
             jarras: 36,
             jabas: 3,
-            descarteJarras: 24,
+            descarteJarras: 0,
             descarteJabas: 2
           }
         }

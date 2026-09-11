@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
@@ -221,16 +221,23 @@
             <span data-icon="plus"></span> Agregar guía
           </button>
 
-          <div class="guides-descarte-field guides-descarte-field--auto">
-            <small class="guides-descarte-title">DESCARTE / DESHIDRATADO</small>
-            <div class="guides-descarte-auto">
-              <div>
-                <span>Del conteo · Total general</span>
-                <small id="guidesDescarteAutoLots">Sin conteo aún</small>
-              </div>
-              <strong id="guidesDescarteAutoTotal">0 jarras</strong>
+          <div class="guides-descarte-field">
+            <div class="guides-descarte-head">
+              <small class="guides-descarte-title">DESCARTE / DESHIDRATADO</small>
+              <button
+                type="button"
+                class="guides-descarte-add"
+                id="btnGuidesDescarteAdd"
+                aria-label="Agregar lote de descarte"
+              >
+                <span data-icon="plus"></span>
+              </button>
             </div>
-            <p class="guides-descarte-hint">Se suma solo del conteo Descarte (todos los lotes).</p>
+            <div class="guides-descarte-total">
+              <span>TOTAL</span>
+              <strong id="guidesDescarteTotal">0 jabas</strong>
+            </div>
+            <div class="guides-descarte-list" id="guidesDescarteList"></div>
           </div>
 
           <div class="guides-bottom-panel">

@@ -3481,10 +3481,7 @@ body[data-page="scan"] .lock-screen {
 }
 #conteoPanel.is-type-locked .harvest-field-card,
 #conteoPanel.is-type-locked .harvest-add-card,
-#conteoPanel.is-type-locked .harvest-register-card,
-#harvestScreen.is-type-locked .harvest-field-card,
-#harvestScreen.is-type-locked .harvest-add-card,
-#harvestScreen.is-type-locked .harvest-register-card {
+#conteoPanel.is-type-locked .harvest-register-card {
   opacity: 0.55;
   pointer-events: none;
 }
@@ -6730,6 +6727,12 @@ html.is-android body.kb-open .export-preview {
   border-radius: 16px;
   background: #f3faf3;
 }
+.guides-descarte-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
 .guides-descarte-title {
   display: block;
   font-size: 0.62rem;
@@ -6737,16 +6740,67 @@ html.is-android body.kb-open .export-preview {
   letter-spacing: 0.06em;
   color: #1b6b3a;
 }
-.guides-descarte-row {
+.guides-descarte-add {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #d11f3a 0%, #b00921 100%);
+  color: #fff;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  place-items: center;
+  cursor: pointer;
+  box-shadow: 0 6px 14px rgba(176, 9, 33, 0.28);
+}
+.guides-descarte-add:active {
+  transform: scale(0.96);
+}
+.guides-descarte-add .ico {
+  width: 18px;
+  height: 18px;
+}
+.guides-descarte-total {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #fff;
+  border: 1.5px solid #c8e0c8;
+}
+.guides-descarte-total span {
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  color: #1b6b3a;
+}
+.guides-descarte-total strong {
+  font-size: 0.95rem;
+  font-weight: 900;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.guides-descarte-list {
+  display: flex;
+  flex-direction: column;
   gap: 8px;
   margin-top: 8px;
+}
+.guides-descarte-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 0.85fr) 36px;
+  gap: 8px;
+  align-items: end;
 }
 .guides-descarte-row label {
   display: flex;
   flex-direction: column;
   gap: 5px;
+  min-width: 0;
 }
 .guides-descarte-row small {
   font-size: 0.58rem;
@@ -6776,6 +6830,37 @@ html.is-android body.kb-open .export-preview {
   border-color: #c8e0c8;
   box-shadow: none;
 }
+.guides-descarte-lote-btn {
+  width: 100%;
+  min-height: 44px;
+  border: 1.5px solid #c8e0c8;
+  border-radius: 12px;
+  background: #fff;
+  padding: 10px 8px;
+}
+.guides-descarte-lote-btn .ph {
+  color: #c4b5a8;
+  font-weight: 700;
+}
+.guides-descarte-del {
+  width: 36px;
+  height: 44px;
+  border: 0;
+  border-radius: 12px;
+  background: #fde8ec;
+  color: var(--qb-red-dark, #b00921);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.guides-descarte-del .ico {
+  width: 16px;
+  height: 16px;
+}
+.guides-descarte-del:disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
 .guides-descarte-hint {
   margin: 8px 0 0;
   padding: 0 2px;
@@ -6783,41 +6868,6 @@ html.is-android body.kb-open .export-preview {
   font-weight: 600;
   line-height: 1.35;
   color: #5a7a5f;
-}
-.guides-descarte-auto {
-  margin-top: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 12px 12px;
-  border-radius: 12px;
-  background: #fff;
-  border: 1.5px solid #c8e0c8;
-}
-.guides-descarte-auto > div {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-.guides-descarte-auto span {
-  font-size: 0.72rem;
-  font-weight: 800;
-  color: #1b6b3a;
-  letter-spacing: 0.02em;
-}
-.guides-descarte-auto small {
-  font-size: 0.68rem;
-  font-weight: 600;
-  color: #5a7a5f;
-}
-.guides-descarte-auto strong {
-  flex-shrink: 0;
-  font-size: 1.05rem;
-  font-weight: 900;
-  color: var(--ink);
-  font-variant-numeric: tabular-nums;
 }
 
 /* Panel totales · formal */
@@ -7216,9 +7266,10 @@ html.is-android body.kb-open .export-preview {
 }
 .gs-paper-descarte {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px 10px;
   margin-top: 8px;
   padding: 12px 14px;
   border: 1.5px dashed #9ccc9c;
@@ -7238,6 +7289,13 @@ html.is-android body.kb-open .export-preview {
   font-variant-numeric: tabular-nums;
   text-align: right;
   overflow-wrap: anywhere;
+}
+.gs-paper-descarte small {
+  flex: 1 0 100%;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: #5a7a5f;
+  line-height: 1.35;
 }
 @media (max-width: 400px) {
   .gs-paper-meta {
