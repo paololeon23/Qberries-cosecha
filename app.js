@@ -40,7 +40,7 @@
   const FUNDO_OPTIONS = ["Licapa I", "Licapa II", "Licapa III"];
 /** Ficha de vínculo en pausa: en Vincular se muestra historial de guías. */
   const VINCULO_FORM_PAUSED = true;
-  const APP_VERSION = "v486";
+  const APP_VERSION = "v487";
 
   function normalizeFundo(value) {
     const raw = String(value || "").trim();
@@ -1982,6 +1982,8 @@
     readyFilesItems: [],
     historyPage: 0,
     guiasHistoryPage: 0,
+    /** DNIs marcados en “Elegir trabajadores” (se conservan al buscar). */
+    workerPickSelected: /** @type {Set<string>} */ (new Set()),
     vinGuiasDniFilter: "",
     vinGuiasFeedLoading: false,
     vinGuiasFeedCache: /** @type {{fecha:string,items:object[]}|null} */ (null),
@@ -10245,6 +10247,7 @@
       return;
     }
     hideHarvestCopyEmptyTip();
+    state.workerPickSelected = new Set();
     if ($("#workerPickAll")) $("#workerPickAll").checked = false;
     if ($("#workerPickQuery")) $("#workerPickQuery").value = "";
     renderWorkerPickList(pool);
@@ -10254,9 +10257,21 @@
     setTimeout(() => $("#workerPickQuery")?.focus(), 80);
   }
 
+  function syncWorkerPickAllCheckbox(visibleDnis) {
+    const allBox = $("#workerPickAll");
+    if (!allBox) return;
+    const selected = state.workerPickSelected || new Set();
+    allBox.checked =
+      visibleDnis.length > 0 && visibleDnis.every((dni) => selected.has(dni));
+  }
+
   function renderWorkerPickList(pool, query = "") {
     const list = $("#workerPickList");
     if (!list) return;
+    if (!(state.workerPickSelected instanceof Set)) {
+      state.workerPickSelected = new Set();
+    }
+    const selected = state.workerPickSelected;
     const q = String(query || "")
       .trim()
       .toUpperCase()
@@ -10275,23 +10290,24 @@
     if (!filtered.length) {
       list.innerHTML =
         '<div class="check-pick-empty">No hay coincidencias con esa búsqueda.</div>';
-      if ($("#workerPickAll")) $("#workerPickAll").checked = false;
+      syncWorkerPickAllCheckbox([]);
       return;
     }
     list.innerHTML = filtered
-      .map(
-        (worker) => `<label class="check-pick-item">
-          <input type="checkbox" data-pick-dni="${escapeHtml(worker.dni)}" />
+      .map((worker) => {
+        const checked = selected.has(worker.dni) ? " checked" : "";
+        return `<label class="check-pick-item">
+          <input type="checkbox" data-pick-dni="${escapeHtml(worker.dni)}"${checked} />
           <span>
             <strong>${escapeHtml(worker.nombre)}</strong>
             <small>DNI ${escapeHtml(worker.dni)}${
           worker.source ? ` · ${escapeHtml(worker.source)}` : ""
         }</small>
           </span>
-        </label>`
-      )
+        </label>`;
+      })
       .join("");
-    if ($("#workerPickAll")) $("#workerPickAll").checked = false;
+    syncWorkerPickAllCheckbox(filtered.map((w) => w.dni));
   }
 
   function filterWorkerPickList() {
@@ -10303,6 +10319,7 @@
 
   function closeWorkerPick() {
     hideHarvestCopyEmptyTip();
+    state.workerPickSelected = new Set();
     const sheet = $("#workerPick");
     if (!sheet) return;
     sheet.hidden = true;
@@ -10311,8 +10328,14 @@
   }
 
   function applyWorkerPick() {
-    const selected = $$("#workerPickList [data-pick-dni]:checked");
-    if (!selected.length) {
+    const selected = state.workerPickSelected;
+    const dnis =
+      selected instanceof Set && selected.size
+        ? [...selected]
+        : $$("#workerPickList [data-pick-dni]:checked").map(
+            (input) => input.dataset.pickDni
+          );
+    if (!dnis.length) {
       toast("Seleccione al menos un trabajador");
       return;
     }
@@ -10320,8 +10343,8 @@
       localSavedWorkersPool().map((worker) => [worker.dni, worker])
     );
     let added = 0;
-    selected.forEach((input) => {
-      const worker = pool.get(input.dataset.pickDni);
+    dnis.forEach((dni) => {
+      const worker = pool.get(String(dni || "").replace(/\D/g, ""));
       if (!worker) return;
       if (pushHarvestWorker(worker.dni, worker.nombre)) added += 1;
     });
@@ -11716,9 +11739,32 @@
       if (e.target?.id === "workerPick") closeWorkerPick();
     });
     on("#workerPickAll", "change", (e) => {
+      if (!(state.workerPickSelected instanceof Set)) {
+        state.workerPickSelected = new Set();
+      }
+      const checked = !!e.target.checked;
       $$("#workerPickList [data-pick-dni]").forEach((input) => {
-        input.checked = !!e.target.checked;
+        input.checked = checked;
+        const dni = String(input.dataset.pickDni || "").replace(/\D/g, "");
+        if (!dni) return;
+        if (checked) state.workerPickSelected.add(dni);
+        else state.workerPickSelected.delete(dni);
       });
+    });
+    on("#workerPickList", "change", (e) => {
+      const input = e.target?.closest?.("[data-pick-dni]");
+      if (!input) return;
+      if (!(state.workerPickSelected instanceof Set)) {
+        state.workerPickSelected = new Set();
+      }
+      const dni = String(input.dataset.pickDni || "").replace(/\D/g, "");
+      if (!dni) return;
+      if (input.checked) state.workerPickSelected.add(dni);
+      else state.workerPickSelected.delete(dni);
+      const visible = $$("#workerPickList [data-pick-dni]").map((el) =>
+        String(el.dataset.pickDni || "").replace(/\D/g, "")
+      );
+      syncWorkerPickAllCheckbox(visible.filter(Boolean));
     });
     on("#workerPickQuery", "input", filterWorkerPickList);
     on("#btnWorkerPickAdd", "click", applyWorkerPick);
